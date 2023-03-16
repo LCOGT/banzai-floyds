@@ -133,7 +133,7 @@ class FLOYDSFrameFactory(LCOFrameFactory):
             domains = [(row['domainmin'], row['domainmax']) for row in image['ORDER_COEFFS'].data]
             models = [np.polynomial.legendre.Legendre(coeff_set, domain=domain)
                       for coeff_set, domain in zip(coeffs, domains)]
-            image.orders = Orders(models, image.data.shape, image['ORDER_COEFFS'].meta['HEIGHT'])
+            image.orders = Orders(models, image.data.shape, [image['ORDER_COEFFS'].meta['ORDHGHT'] for _ in models])
         if 'WAVELENGTHS' in image:
             image.wavelengths = WavelengthSolution.from_header(image['WAVELENGTHS'].meta, image.orders)
         return image

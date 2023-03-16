@@ -46,8 +46,7 @@ class Orders:
         -------
         Dictionary of order:coefficients for each model
         """
-        return dict([(i + 1, model.coef)
-                     for i, model in enumerate(self._models)])
+        return [model.coef for model in self._models]
 
     @property
     def domains(self):
@@ -56,7 +55,7 @@ class Orders:
         -------
         Dictionary of order:tuples with the min/max of fit domain
         """
-        return dict([(i + 1, model.domain) for i, model in enumerate(self._models)])
+        return [model.domain for model in self._models]
 
     def center(self, x):
         return [model(x) for i, model in enumerate(self._models)]
@@ -141,14 +140,14 @@ def smooth_order_weights(params, x, height, domain, k=2):
     return weights
 
 
-def order_tweak_weights(params, X, coeffs, height, domain, k=2):
+def order_tweak_weights(params, X, coeffs, height, domain, chip_center, k=2):
     x_shift, y_shift, rotation = params
     x, y = X
     rotation = np.deg2rad(rotation)
-    new_x = np.cos(rotation) * x - np.sin(rotation) * y
-    new_y = np.sin(rotation) * x + np.cos(rotation) * y
-    new_x -= x_shift
-    new_y -= y_shift
+    new_x = np.cos(rotation) * (x - chip_center[0]) - np.sin(rotation) * (y - chip_center[1])
+    new_y = np.sin(rotation) * (x - chip_center[0]) + np.cos(rotation) * (y - chip_center[1])
+    new_x -= x_shift - chip_center[0]
+    new_y -= y_shift - chip_center[1]
     return smooth_order_weights(coeffs, (new_x, new_y), height, domain, k=k)
 
 
@@ -307,7 +306,7 @@ def fit_order_curve(data, error, order_height, initial_coeffs, x, domain):
     return Legendre(best_fit_coeffs, domain=domain)
 
 
-def fit_order_tweak(data, error, order_height, coeffs, x, domain):
+def fit_order_tweak(data, error, order_height, coeffs, x, domain, chip_center):
     """
     Maximize the matched filter metric to find the best fit order curvature and location
 
@@ -326,7 +325,7 @@ def fit_order_tweak(data, error, order_height, coeffs, x, domain):
     # a window of pixels around the initial guess to do the fit to optimize not fitting a bunch of zeros
     best_fit_offsets = maximize_match_filter([0.0, 0.0, 0.0], data, error,
                                              order_tweak_weights, x,
-                                             args=(coeffs, order_height, domain,))
+                                             args=(coeffs, order_height, domain, chip_center))
     return best_fit_offsets
 
 
@@ -355,15 +354,18 @@ class OrderTweaker(Stage):
     def do_stage(self, image):
         # Only fit the red order for now
         order_height = image.orders.order_heights[0]
-        domain = image.orders.domains[1]
-        coeffs = image.orders.coeffs[1]
+        domain = image.orders.domains[0]
+        coeffs = image.orders.coeffs[0]
         x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
         region = np.logical_and(x2d <= domain[1], x2d >= domain[0])
         center_model = Legendre(coeffs, domain=domain)
-        # Only keep pixels +- half the height above the initial guess
-        region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= (order_height / 2.0))
-        x_shift, y_shift, rotation = fit_order_tweak(image.data[region], image.uncertainty[region], 
-                                                     order_height, coeffs, (x2d[region], y2d[region]), domain)
+        # Only keep pixels +- half the height above the initial guess order region
+        # Because we start at the center, the region is +- 1 instead of +- 0.5
+        region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= order_height)
+        chip_center = image.data.shape[1] / 2. - 0.5, image.data.shape[0] / 2. - 0.5
+        x_shift, y_shift, rotation = fit_order_tweak(image.data[region], image.uncertainty[region],
+                                                     order_height, coeffs, (x2d[region], y2d[region]),
+                                                     domain, chip_center)
         image.meta['ORDXSHFT'] = x_shift
         image.meta['ORDYSHFT'] = y_shift
         image.meta['ORDROT'] = rotation
@@ -410,7 +412,7 @@ class OrderSolver(Stage):
             # Load from previous solve
             order_estimates = [(coeff, height, domain)
                                for coeff, height, domain in
-                               zip(image.orders.coeffs, image.orders.height, image.orders.domains)]
+                               zip(image.orders.coeffs, image.orders.order_heights, image.orders.domains)]
         # Do a fit to get the curvature of the slit
         order_curves = []
         for i, (coeff, height, domain) in enumerate(order_estimates):
@@ -422,14 +424,14 @@ class OrderSolver(Stage):
             order_curve = fit_order_curve(image.data[region], image.uncertainty[region],
                                           height, coeff, (x2d[region], y2d[region]), domain)
             order_curves.append(order_curve)
-        order_heights = [self.ORDER_HEIGHT for _ in order_estimates]
+        order_heights = [height for _ in order_estimates]
         image.orders = Orders(order_curves, image.data.shape, order_heights)
         image.add_or_update(ArrayData(image.orders.data, name='ORDERS'))
-        coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(image.orders.coeffs[order])}
-                       for order in image.orders.coeffs]
+        coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(coeffs)}
+                       for coeffs in image.orders.coeffs]
         for i, row in enumerate(coeff_table):
             row['order'] = i + 1
-            row['domainmin'], row['domainmax'] = image.orders.domains[i + 1]
+            row['domainmin'], row['domainmax'] = image.orders.domains[i]
             row['height'] = order_heights[i]
         coeff_table = Table(coeff_table)
         coeff_table['order'].description = 'ID of order'
@@ -441,7 +443,7 @@ class OrderSolver(Stage):
 
         image.add_or_update(
             DataTable(coeff_table, name='ORDER_COEFFS',
-                      meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER}))
+                      meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': self.ORDER_HEIGHT}))
         )
         image.is_master = True
 
