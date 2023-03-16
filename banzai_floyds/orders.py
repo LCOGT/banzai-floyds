@@ -415,7 +415,6 @@ class OrderSolver(Stage):
             order_estimates = [(coeff, height, domain)
                                for coeff, height, domain in
                                zip(image.orders.coeffs, image.orders.order_heights, list(image.orders.domains.values()))]
-            print(len(order_estimates))
         # Do a fit to get the curvature of the slit
         order_curves = []
         for i, (coeff, height, domain) in enumerate(order_estimates):
@@ -432,7 +431,6 @@ class OrderSolver(Stage):
         image.add_or_update(ArrayData(image.orders.data, name='ORDERS'))
         coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(image.orders.coeffs[order])}
                        for order in image.orders.coeffs]
-        print(coeff_table)
         for i, row in enumerate(coeff_table):
             row['order'] = i + 1
             row['domainmin'], row['domainmax'] = image.orders.domains[i + 1]

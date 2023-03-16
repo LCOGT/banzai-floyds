@@ -341,7 +341,7 @@ def maximize_match_filter(initial_guess, data, error, weights_function, x, weigh
     if weights_hessian_function is None and weights_jacobian_function is None:
         best_fit = minimize(lambda *params: -matched_filter_metric(*params), initial_guess,
                             args=(data, error, weights_function, weights_jacobian_function, weights_hessian_function, x,
-                                  *args), method='Powell')
+                                  *args), method='Powell', bounds = ((-10,10), (-10,10), (0, None)))
     elif weights_hessian_function is None:
         best_fit = minimize(lambda *params: -matched_filter_metric(*params), initial_guess,
                             args=(data, error, weights_function, weights_jacobian_function, weights_hessian_function, x,
