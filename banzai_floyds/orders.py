@@ -440,8 +440,8 @@ class OrderSolver(Stage):
         coeff_table['domainmin'].description = 'Domain minimum for the order curve'
         coeff_table['domainmax'].description = 'Domain maximum for the order curve'
         coeff_table['height'].description = 'Order height'
-        # for i in range(self.POLYNOMIAL_ORDER + 1):
-        #     coeff_table[f'c{i}'].description = f'Coefficient for P_{i}'
+        for i in range(self.POLYNOMIAL_ORDER + 1):
+            coeff_table[f'c{i}'].description = f'Coefficient for P_{i}'
 
         image.add_or_update(
             DataTable(coeff_table, name='ORDER_COEFFS',
