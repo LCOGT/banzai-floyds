@@ -1,9 +1,12 @@
 from banzai_floyds.orders import estimate_order_centers, order_region, fit_order_curve, OrderSolver, trace_order
+from banzai_floyds.orders import OrderTweaker, Orders
 import numpy as np
 from numpy.polynomial.legendre import Legendre
 from banzai.tests.utils import FakeContext
+from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
+from banzai import context
 from astropy.io import fits
 
 
@@ -95,3 +98,20 @@ def test_order_tracing():
         x, order_locations = trace_order(data, error, order_height, order_centers[i], data.shape[1] // 2)
         input_model = Legendre(input_params, domain=(0, data.shape[1] - 1))
         assert (np.abs(order_locations - input_model(np.array(x))) < 1.0).all()
+
+
+def test_order_tweaker():
+    np.random.seed(1212364)
+    frame = generate_fake_science_frame(include_background=True)
+    new_orders = []
+    for new_coeffs, domain in zip(frame.orders.coeffs, frame.orders.domains):
+        new_coeffs[0] += 3
+        new_orders.append(Legendre(new_coeffs, domain=domain))
+    orders = Orders(new_orders, frame.data.shape, frame.orders.order_heights)
+    frame.orders = orders
+    input_context = context.Context({})
+    stage = OrderTweaker(input_context)
+    frame = stage.do_stage(frame)
+    np.testing.assert_allclose(frame.meta['ORDYSHFT'], -3.0, atol=0.1)
+    np.testing.assert_allclose(frame.meta['ORDXSHFT'], 0.0, atol=0.5)
+    np.testing.assert_allclose(frame.meta['ORDROT'], 0.0, atol=0.01)
