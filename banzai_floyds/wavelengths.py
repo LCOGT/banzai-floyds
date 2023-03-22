@@ -269,7 +269,7 @@ class CalibrateWavelengths(Stage):
         # copy order centers and get mask for height of a few extract median along axis=0
         extraction_orders = copy(image.orders)
         extraction_orders.order_heights = self.EXTRACTION_HEIGHT * np.ones_like(orders)
-        for order in orders:
+        for i, order in enumerate(orders):
             order_region = get_order_2d_region(extraction_orders.data == order)
             # Note that his flux has an x origin at the x = 0 instead of the domain of the order
             # I don't think it matters though
@@ -282,15 +282,15 @@ class CalibrateWavelengths(Stage):
                                                          self.INITIAL_DISPERSIONS[order],
                                                          self.INITIAL_LINE_WIDTHS[order],
                                                          self.OFFSET_RANGES[order],
-                                                         domain=image.orders.domains[order])
+                                                         domain=image.orders.domains[i])
             # from 1D estimate linear solution
             # Estimate 1D distortion with higher order polynomials
             peaks = identify_peaks(flux_1d, flux_1d_error,
                                    self.INITIAL_LINE_WIDTHS[order] / self.INITIAL_DISPERSIONS[order],
-                                   self.MIN_LINE_SEPARATIONS[order], domain=image.orders.domains[order])
+                                   self.MIN_LINE_SEPARATIONS[order], domain=image.orders.domains[i])
             peaks = refine_peak_centers(flux_1d, flux_1d_error, peaks,
                                         self.INITIAL_LINE_WIDTHS[order] / self.INITIAL_DISPERSIONS[order],
-                                        domain=image.orders.domains[order])
+                                        domain=image.orders.domains[i])
             corresponding_lines = np.array(correlate_peaks(peaks, linear_solution, self.LINES[self.LINES['used']],
                                                            self.MATCH_THRESHOLDS[order])).astype(float)
             successful_matches = np.isfinite(corresponding_lines)
@@ -301,7 +301,7 @@ class CalibrateWavelengths(Stage):
                 return image
             initial_wavelength_solutions.append(estimate_distortion(peaks[successful_matches],
                                                                     corresponding_lines[successful_matches],
-                                                                    image.orders.domains[order],
+                                                                    image.orders.domains[i],
                                                                     order=self.FIT_ORDERS[order]))
         image.wavelengths = WavelengthSolution(initial_wavelength_solutions,
                                                [self.INITIAL_LINE_WIDTHS[order] for order in orders],

@@ -10,10 +10,10 @@ from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
 
 def test_wavelength_bins():
     fakeWavelengths = namedtuple('fakeWavelengths', 'line_tilts bin_edges orders')
-    fakeOrders = namedtuple('fakeOrders', 'order_height')
+    fakeOrders = namedtuple('fakeOrders', 'order_heights')
     input_wavelengths = fakeWavelengths(line_tilts=np.array([0.0, 0.0]),
                                         bin_edges=[np.arange(0.0, 100.5, step=1), np.arange(100.0, 200.5, step=1)],
-                                        orders=fakeOrders(order_height=0.0))
+                                        orders=fakeOrders(order_heights=np.zeros(2)))
     wavelength_bins = get_wavelength_bins(input_wavelengths)
     for i, bins in enumerate(wavelength_bins):
         expected = np.arange(0.5 + (i * 100.0), 100.0 * (i + 1), step=1)
@@ -22,7 +22,7 @@ def test_wavelength_bins():
 
     input_wavelengths = fakeWavelengths(line_tilts=np.array([45.0, 45.0]),
                                         bin_edges=[np.arange(0.0, 100.5, step=1), np.arange(100.0, 200.5, step=1)],
-                                        orders=fakeOrders(order_height=10.0 * np.sqrt(2.0)))
+                                        orders=fakeOrders(order_heights=np.ones(2) * 10.0 * np.sqrt(2.0)))
     wavelength_bins = get_wavelength_bins(input_wavelengths)
     for i, bins in enumerate(wavelength_bins):
         expected = np.arange(0.5 + (i * 100.0), 100.0 * (i + 1), step=1)[5:-5]

@@ -344,7 +344,6 @@ class OrderLoader(CalibrationUser):
     def apply_master_calibration(self, image, master_calibration_image):
         image.orders = master_calibration_image.orders
         image.add_or_update(master_calibration_image['ORDER_COEFFS'])
-        print(image.orders.coeffs, image.orders.order_heights, image.orders.domains)
         return image
 
 
@@ -403,8 +402,6 @@ class OrderSolver(Stage):
                                                      self.ORDER_REGIONS[i][1]))
                 order_estimates.append((initial_model.coef, self.ORDER_HEIGHT, initial_model.domain))
         else:
-            print('Using previous estimate')
-            print(image.orders.coeffs, image.orders.order_heights, image.orders.domains)
             # Load from previous solve
             order_estimates = [(coeff, height, domain)
                                for coeff, height, domain in
@@ -440,7 +437,7 @@ class OrderSolver(Stage):
         image.add_or_update(
             DataTable(coeff_table, name='ORDER_COEFFS',
                       meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': self.ORDER_HEIGHT}))
-            )
+        )
         image.is_master = True
 
         return image
