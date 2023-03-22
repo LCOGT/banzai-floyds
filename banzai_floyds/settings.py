@@ -19,7 +19,7 @@ LAST_STAGE = {
     'SPECTRUM': None,
     'LAMPFLAT': 'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'ARC': 'banzai_floyds.orders.OrderTweaker',
-    'SKYFLAT': 'banzai_floyds.orders.OrderTweaker'
+    'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }
 
 EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': None,

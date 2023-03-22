@@ -140,15 +140,10 @@ def smooth_order_weights(params, x, height, domain, k=2):
     return weights
 
 
-def order_tweak_weights(params, X, coeffs, height, domain, chip_center, k=2):
-    x_shift, y_shift, rotation = params
+def order_tweak_weights(params, X, coeffs, height, domain, k=2):
+    y_shift = params
     x, y = X
-    rotation = np.deg2rad(rotation)
-    new_x = np.cos(rotation) * (x - chip_center[0]) - np.sin(rotation) * (y - chip_center[1])
-    new_y = np.sin(rotation) * (x - chip_center[0]) + np.cos(rotation) * (y - chip_center[1])
-    new_x -= x_shift - chip_center[0]
-    new_y -= y_shift - chip_center[1]
-    return smooth_order_weights(coeffs, (new_x, new_y), height, domain, k=k)
+    return smooth_order_weights(coeffs, (x, y - y_shift), height, domain, k=k)
 
 
 def order_region(order_height, center, image_size):
@@ -306,7 +301,7 @@ def fit_order_curve(data, error, order_height, initial_coeffs, x, domain):
     return Legendre(best_fit_coeffs, domain=domain)
 
 
-def fit_order_tweak(data, error, order_height, coeffs, x, domain, chip_center):
+def fit_order_tweak(data, error, order_height, coeffs, x, domain):
     """
     Maximize the matched filter metric to find the best fit order curvature and location
 
@@ -323,9 +318,9 @@ def fit_order_tweak(data, error, order_height, coeffs, x, domain, chip_center):
 
     # For this to work efficiently, you probably need a good initial guess. If we have that, we should define
     # a window of pixels around the initial guess to do the fit to optimize not fitting a bunch of zeros
-    best_fit_offsets = maximize_match_filter([0.0, 0.0, 0.0], data, error,
+    best_fit_offsets = maximize_match_filter([0.0], data, error,
                                              order_tweak_weights, x,
-                                             args=(coeffs, order_height, domain, chip_center))
+                                             args=(coeffs, order_height, domain))
     return best_fit_offsets
 
 
@@ -362,13 +357,9 @@ class OrderTweaker(Stage):
         # Only keep pixels +- half the height above the initial guess order region
         # Because we start at the center, the region is +- 1 instead of +- 0.5
         region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= order_height)
-        chip_center = image.data.shape[1] / 2. - 0.5, image.data.shape[0] / 2. - 0.5
-        x_shift, y_shift, rotation = fit_order_tweak(image.data[region], image.uncertainty[region],
-                                                     order_height, coeffs, (x2d[region], y2d[region]),
-                                                     domain, chip_center)
-        image.meta['ORDXSHFT'] = x_shift
+        y_shift, = fit_order_tweak(image.data[region], image.uncertainty[region],
+                                   order_height, coeffs, (x2d[region], y2d[region]), domain)
         image.meta['ORDYSHFT'] = y_shift
-        image.meta['ORDROT'] = rotation
         return image
 
 

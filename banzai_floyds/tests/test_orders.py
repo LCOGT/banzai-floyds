@@ -113,5 +113,3 @@ def test_order_tweaker():
     stage = OrderTweaker(input_context)
     frame = stage.do_stage(frame)
     np.testing.assert_allclose(frame.meta['ORDYSHFT'], -3.0, atol=0.1)
-    np.testing.assert_allclose(frame.meta['ORDXSHFT'], 0.0, atol=0.5)
-    np.testing.assert_allclose(frame.meta['ORDROT'], 0.0, atol=0.01)
