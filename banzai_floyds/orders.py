@@ -145,7 +145,7 @@ def smooth_order_weights(params, x, height, domain, k=2):
 def order_tweak_weights(params, X, coeffs, height, domain, k=2):
     y_shift = params
     x, y = X
-    return smooth_order_weights(coeffs, (x, y - y_shift), height, domain, k=k)
+    return smooth_order_weights(coeffs, (x, y-y_shift), height, domain, k=k)
 
 
 def order_region(order_height, center, image_size):
@@ -376,7 +376,6 @@ class OrderSolver(Stage):
     CENTER_CUT_WIDTH = 31
     POLYNOMIAL_ORDER = 3
     ORDER_REGIONS = [(0, 1700), (630, 1975)]
-
     def do_stage(self, image):
         if image.orders is None:
             # Try a blind solve if orders doesn't exist
@@ -413,7 +412,7 @@ class OrderSolver(Stage):
             region = np.logical_and(x2d <= domain[1], x2d >= domain[0])
             center_model = Legendre(coeff, domain=domain)
             # Only keep pixels +- half the height above the initial guess
-            region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= (height / 2.0))
+            region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= (height))
             order_curve = fit_order_curve(image.data[region], image.uncertainty[region],
                                           height, coeff, (x2d[region], y2d[region]), domain)
             order_curves.append(order_curve)
