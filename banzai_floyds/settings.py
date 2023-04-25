@@ -8,6 +8,7 @@ ORDERED_STAGES = [
     'banzai_floyds.orders.OrderLoader',
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
+    'banzai_floyds.orders.FringeCorrector',
     'banzai_floyds.extract.Extractor'
 ]
 
@@ -17,7 +18,7 @@ SUPPORTED_FRAME_TYPES = ['SPECTRUM', 'LAMPFLAT', 'ARC', 'SKYFLAT']
 
 LAST_STAGE = {
     'SPECTRUM': None,
-    'LAMPFLAT': 'banzai_floyds.wavelengths.WavelengthSolutionLoader',
+    'LAMPFLAT': None,
     'ARC': 'banzai_floyds.orders.OrderTweaker',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }

@@ -1,6 +1,5 @@
 import pytest
 import time
-import logging
 from banzai.celery import app
 from banzai.tests.utils import FakeResponse
 import banzai.dbs
@@ -15,9 +14,10 @@ from banzai.utils.fits_utils import download_from_s3
 import banzai.main
 from banzai_floyds import settings
 from banzai.utils import file_utils
+from banzai.logs import get_logger
 
 
-logger = logging.getLogger('banzai')
+logger = get_logger()
 
 app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 
@@ -127,6 +127,23 @@ class TestWavelengthSolutionCreation:
         logger.info('Finished reducing individual frames')
 
     def test_if_arc_frames_were_created(self):
+        test_data = ascii.read(DATA_FILELIST)
+        for expected_file in expected_filenames(test_data):
+            if 'a91.fits' in expected_file:
+                assert os.path.exists(expected_file)
+
+
+@pytest.mark.e2e
+@pytest.mark.fringe
+class TestFringeCreation:
+    @pytest.fixture(autouse=True)
+    @mock.patch('banzai.utils.observation_utils.requests.get', side_effect=observation_portal_side_effect)
+    def make_fringe_frames(self, mock_lake):
+        run_reduce_individual_frames('*a00.fits*')
+        mark_frames_as_good('*a92.fits*')
+        stack_calibrations('double')
+
+    def test_if_fringe_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for expected_file in expected_filenames(test_data):
             if 'a91.fits' in expected_file:

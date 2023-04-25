@@ -1,4 +1,4 @@
-from banzai.calibrations import CalibrationUser
+from banzai.calibrations import CalibrationUser, CalibrationMaker
 from banzai.stages import Stage
 import numpy as np
 from scipy.ndimage.filters import maximum_filter1d
@@ -7,12 +7,16 @@ from banzai.data import ArrayData, DataTable
 from astropy.table import Table
 from astropy.io import fits
 from scipy.special import expit
+from banzai.utils.file_utils import make_calibration_filename_function
 
 from banzai_floyds.matched_filter import maximize_match_filter
+from scipy.interpolate import RectBivariateSpline
+from datetime import datetime
+from banzai.utils import import_utils
 
 
 class Orders:
-    def __init__(self, models, image_shape, order_heights):
+    def __init__(self, models, image_shape, order_heights, order_shift=0):
         """
         A set of order curves to use to get the pixels with light in them.
 
@@ -23,10 +27,11 @@ class Orders:
         order_height: integer height of the order in pixels
         """
         self._models = models
+        for model in self._models:
+            # TODO: Check the sign of this shift
+            model.coef[0] += order_shift
         self._image_shape = image_shape
-        dummy_heights = np.ones(len(self._models))
-        dummy_heights *= order_heights
-        self._order_heights = dummy_heights
+        self._order_heights = order_heights
 
     @property
     def data(self):
@@ -176,7 +181,7 @@ def order_region(order_height, center, image_size):
     return order_mask
 
 
-def estimate_order_centers(data, error, order_height, peak_separation=10, min_signal_to_noise=500.0):
+def estimate_order_centers(data, error, order_height, peak_separation=10, min_signal_to_noise=200.0):
     """
     Estimate the order centers by finding peaks using a simple cross correlation style sliding window metric
 
@@ -256,7 +261,11 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
         section = y_section, x_section
 
         cut_center = estimate_order_centers(data[section], error[section],
-                                            order_height)[0]
+                                            order_height)
+        if len(cut_center) == 0:
+            continue
+        else:
+            cut_center = cut_center[0]
         centers.append(cut_center + previous_center - search_height -
                        order_height // 2)
         xs.append(x)
@@ -271,7 +280,11 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
         x_section = slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
         section = y_section, x_section
         cut_center = estimate_order_centers(data[section], error[section],
-                                            order_height)[0]
+                                            order_height)
+        if len(cut_center) == 0:
+            continue
+        else:
+            cut_center = cut_center[0]
         centers.insert(0, cut_center + previous_center - search_height - order_height // 2)
         xs.insert(0, x)
     return np.array(xs), np.array(centers)
@@ -376,6 +389,7 @@ class OrderSolver(Stage):
     CENTER_CUT_WIDTH = 31
     POLYNOMIAL_ORDER = 3
     ORDER_REGIONS = [(0, 1700), (630, 1975)]
+
     def do_stage(self, image):
         if image.orders is None:
             # Try a blind solve if orders doesn't exist
@@ -439,4 +453,92 @@ class OrderSolver(Stage):
         )
         image.is_master = True
 
+        return image
+
+
+def fringe_weights(theta, x, spline):
+    y_offset = theta
+    x, y = x
+    return spline(x, y - y_offset)
+
+
+def find_fringe_offset(image, fringe_spline):
+    x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
+    red_order = image.order.data == 1
+    # Maximize the match filter with weight function using the fringe spline
+    return maximize_match_filter(image.data[red_order], image.uncertainty[red_order], fringe_weights, 
+                                 (x2d[red_order], y2d[red_order]), args=fringe_spline)
+
+
+def fit_smooth_fringe_spline(image):
+    in_order = image.order.data == 1
+    smoothing_factor = in_order.sum()
+    weights = 1 / image.error[in_order]
+    x, y = np.meshgrid
+    return RectBivariateSpline(x[in_order], y[in_order], image.data[in_order], w=weights[in_order], s=smoothing_factor)
+
+
+class FringeMaker(CalibrationMaker):
+    @property
+    def calibration_type(self):
+        return 'LAMPFLAT'
+
+    def make_master_calibration_frame(self, images):
+        reference_fringe = images[0].fringe
+        super_fringe = np.zeros_like(reference_fringe)
+        super_fringe_weights = np.zeros_like(reference_fringe)
+        for image in images:
+            # Fit a smoothing B-spline to data in the red order
+            fringe_spline = fit_smooth_fringe_spline(image)
+            # find the offset to the rest of the splines:
+            if reference_fringe is None:
+                reference_fringe = fringe_spline(x, y)
+            
+            fringe_offset = find_fringe_offset()
+            x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
+            in_order = image.orders.data == 1
+            # Interpolate onto the a normal pixel grid using the order offset
+            super_fringe[in_order] += fringe_spline(x[in_order], y[in_order] + fringe_offset)
+            super_fringe_weights[in_order] += 1.0
+        # write out the calibration frame
+        super_fringe /= super_fringe_weights
+        make_calibration_name = make_calibration_filename_function(self.calibration_type,
+                                                                   self.runtime_context)
+        master_calibration_filename = make_calibration_name(max(images, key=lambda x: datetime.strptime(x.epoch, '%Y%m%d') ))
+
+        grouping = self.runtime_context.CALIBRATION_SET_CRITERIA.get(images[0].obstype, [])
+        master_frame_class = import_utils.import_attribute(self.runtime_context.CALIBRATION_FRAME_CLASS)
+        hdu_order = self.runtime_context.MASTER_CALIBRATION_EXTENSION_ORDER.get(self.calibration_type)
+
+        super_frame = master_frame_class.init_master_frame(images, master_calibration_filename,
+                                                           grouping_criteria=grouping, hdu_order=hdu_order)
+        
+        super_frame.primary_hdu.copy_in(super_fringe)
+        return super_frame
+
+
+class FringeCorrector(Stage):
+    def do_stage(self, image):
+        fringe_offset = find_fringe_offset()
+        fringe_correction = image.fringes.data(fringe_offset)
+        # TODO: Make sure the division propagates the uncertainty correctly
+        image.data /= fringe_correction
+        return image
+    
+
+def FringeLoader(CalibrationLoader):
+    def on_missing_master_calibration(self, image):
+        if image.obstype == 'LAMPFLAT':
+            return image
+        else:
+            return super(FringeLoader, self).on_missing_master_calibration(image)
+
+    @property
+    def calibration_type(self):
+        return 'FRINGE'
+
+    def apply_master_calibration(self, image, master_calibration_image):
+        image.fringe = master_calibration_image.fringe
+        image.meta['L1IDFRNG'] = (master_calibration_image.filename, 'ID of Fringe frame')
+        image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
         return image

@@ -4,6 +4,7 @@ from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai_floyds.orders import Orders
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
+from copy import deepcopy
 
 import numpy as np
 from astropy.io import fits
@@ -31,7 +32,7 @@ def plot_array(data, overlays=None):
     plt.show()
 
 
-def generate_fake_science_frame(include_background=False, flat_spectrum=True):
+def generate_fake_science_frame(include_background=False, flat_spectrum=True, fringe=False, fringe_offset=0):
     nx = 2048
     ny = 512
     INITIAL_LINE_WIDTHS = {1: 15.6, 2: 8.6}
@@ -42,6 +43,7 @@ def generate_fake_science_frame(include_background=False, flat_spectrum=True):
     order_height = 93
     read_noise = 6.5
     line_widths = [15.6, 8.6]
+    input_fringe_shift = fringe_offset
 
     sky_continuum = 800.0
 
@@ -60,12 +62,14 @@ def generate_fake_science_frame(include_background=False, flat_spectrum=True):
                       domain=(wavelength_model2(475), wavelength_model2(1975)))
     profile_centers = [trace1, trace2]
 
-    wavelengths = WavelengthSolution(
-        [wavelength_model1, wavelength_model2],
-        [INITIAL_LINE_WIDTHS[i + 1]
-         for i in range(2)], [INITIAL_LINE_TILTS[i + 1] for i in range(2)],
-        orders=orders)
-
+    # Work out the wavelength solution for larger than the typical order size so that we
+    # can shift the fringe pattern up and down
+    orders.order_heights = np.ones(2) * (order_height + 5)
+    wavelengths = WavelengthSolution([wavelength_model1, wavelength_model2],
+                                     [INITIAL_LINE_WIDTHS[i + 1] for i in range(2)],
+                                     [INITIAL_LINE_TILTS[i + 1] for i in range(2)],
+                                     orders=orders)
+    orders.order_heights = np.ones(2) * order_height
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
     profile_sigma = fwhm_to_sigma(profile_width)
     flux_normalization = 10000.0
@@ -106,26 +110,42 @@ def generate_fake_science_frame(include_background=False, flat_spectrum=True):
             for line in SKYLINE_LIST:
                 line_spread = gauss(sky_wavelengths, line['wavelength'],
                                     fwhm_to_sigma(line_widths[i]))
-                sky_spectrum += line[
-                    'line_strength'] * line_spread * sky_normalization
+                sky_spectrum += line['line_strength'] * line_spread * sky_normalization
             # Make a slow illumination gradient to make sure things work even if the sky is not flat
             illumination = 100 * gauss(slit_coordinates[in_order], 0.0, 48)
             input_sky[in_order] = np.interp(wavelengths.data[in_order],
                                             sky_wavelengths,
                                             sky_spectrum) * illumination
             data[in_order] += input_sky[in_order]
+    if fringe:
+        red_order = orders.data == 1
+        shifted_orders = deepcopy(orders)
+        shifted_orders._models[0].coef[0] += input_fringe_shift
+        fringe_wave_number = 2.0 * np.pi / 30.0
+        offset_wavelengths = wavelengths.data[shifted_orders.data == 1]
+        input_fringe = 1.0 + 0.5 * (x2d / np.max(x2d)) * np.sin(fringe_wave_number * offset_wavelengths)
+        data[red_order] *= input_fringe
+        expanded_orders = deepcopy(orders)
+        expanded_orders.order_heights = np.array(orders.order_heights) + 20
+        super_fringe_frame = 1.0 + 0.5 * (x2d / np.max(x2d)) * np.sin(fringe_wave_number * wavelengths.data)
+        super_fringe_frame[expanded_orders.data != 1] = 0.0
     data = np.random.poisson(data.astype(int)).astype(float)
     data += np.random.normal(0.0, read_noise, size=data.shape)
     errors = np.sqrt(read_noise**2 + np.abs(data))
 
-    frame = FLOYDSObservationFrame(
-        [CCDData(data, fits.Header({}), uncertainty=errors)], 'foo.fits')
+    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({}), uncertainty=errors)],
+                                   'foo.fits')
     frame.input_profile_centers = profile_centers
     frame.input_profile_width = profile_width
     frame.wavelengths = wavelengths
     frame.orders = orders
     if include_background:
         frame.input_sky = input_sky
+    if fringe:
+        frame.fringe_wave_number = fringe_wave_number
+        frame.input_fringe_shift = input_fringe_shift
+        frame.input_fringe = input_fringe
+        frame.fringe = super_fringe_frame
     if not flat_spectrum:
         frame.input_spectrum_wavelengths = np.arange(3000.0, 12000.0, 0.1)
         frame.input_spectrum = flux_normalization * continuum_polynomial(
@@ -134,6 +154,6 @@ def generate_fake_science_frame(include_background=False, flat_spectrum=True):
                                                input_line_strengths,
                                                input_line_widths):
             # add some random emission lines
-            frame.input_spectrum += strength * gauss(
-                frame.input_spectrum_wavelengths, input_line, width)
+            frame.input_spectrum += strength * gauss(frame.input_spectrum_wavelengths,
+                                                     input_line, width)
     return frame
