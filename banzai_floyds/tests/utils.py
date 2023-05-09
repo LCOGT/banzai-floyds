@@ -12,6 +12,7 @@ from banzai.data import CCDData
 from numpy.polynomial.legendre import Legendre
 from astropy.io import ascii
 import pkg_resources
+from types import SimpleNamespace
 
 
 SKYLINE_LIST = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/skylines.dat'))
@@ -122,9 +123,14 @@ def generate_fake_science_frame(include_background=False, flat_spectrum=True, fr
         shifted_orders = deepcopy(orders)
         shifted_orders._models[0].coef[0] += input_fringe_shift
         fringe_wave_number = 2.0 * np.pi / 30.0
+        in_red_order = orders.data == 1
         offset_wavelengths = wavelengths.data[shifted_orders.data == 1]
-        input_fringe = 1.0 + 0.5 * (x2d / np.max(x2d)) * np.sin(fringe_wave_number * offset_wavelengths)
+        input_fringe = 0.5 * (x2d[in_red_order] / np.max(x2d[in_red_order]))
+        input_fringe *= np.sin(fringe_wave_number * offset_wavelengths)
+        input_fringe += 1.0
         data[red_order] *= input_fringe
+        input_fringe_frame = np.ones_like(data)
+        input_fringe_frame[red_order] = input_fringe
         expanded_orders = deepcopy(orders)
         expanded_orders.order_heights = np.array(orders.order_heights) + 20
         super_fringe_frame = 1.0 + 0.5 * (x2d / np.max(x2d)) * np.sin(fringe_wave_number * wavelengths.data)
@@ -133,18 +139,21 @@ def generate_fake_science_frame(include_background=False, flat_spectrum=True, fr
     data += np.random.normal(0.0, read_noise, size=data.shape)
     errors = np.sqrt(read_noise**2 + np.abs(data))
 
-    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({}), uncertainty=errors)],
+    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({'DAY-OBS': '20230101',
+                                                               'DATE-OBS': '2023-01-01 12:41:56.11'}), 
+                                            uncertainty=errors)],
                                    'foo.fits')
     frame.input_profile_centers = profile_centers
     frame.input_profile_width = profile_width
     frame.wavelengths = wavelengths
     frame.orders = orders
+    frame.instrument = SimpleNamespace(site='ogg', camera='en02')
     if include_background:
         frame.input_sky = input_sky
     if fringe:
         frame.fringe_wave_number = fringe_wave_number
         frame.input_fringe_shift = input_fringe_shift
-        frame.input_fringe = input_fringe
+        frame.input_fringe = input_fringe_frame
         frame.fringe = super_fringe_frame
     if not flat_spectrum:
         frame.input_spectrum_wavelengths = np.arange(3000.0, 12000.0, 0.1)

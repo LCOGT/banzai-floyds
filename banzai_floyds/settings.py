@@ -8,7 +8,7 @@ ORDERED_STAGES = [
     'banzai_floyds.orders.OrderLoader',
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
-    'banzai_floyds.orders.FringeCorrector',
+    'banzai_floyds.finge.FringeCorrector',
     'banzai_floyds.extract.Extractor'
 ]
 

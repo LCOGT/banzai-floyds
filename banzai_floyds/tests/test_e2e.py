@@ -1,6 +1,6 @@
 import pytest
 import time
-from banzai.celery import app
+from banzai.celery import app, stack_calibrations
 from banzai.tests.utils import FakeResponse
 import banzai.dbs
 import os
@@ -15,6 +15,8 @@ import banzai.main
 from banzai_floyds import settings
 from banzai.utils import file_utils
 from banzai.logs import get_logger
+from types import ModuleType
+from banzai import dbs
 
 
 logger = get_logger()
@@ -137,17 +139,55 @@ class TestWavelengthSolutionCreation:
 @pytest.mark.fringe
 class TestFringeCreation:
     @pytest.fixture(autouse=True)
-    @mock.patch('banzai.utils.observation_utils.requests.get', side_effect=observation_portal_side_effect)
-    def make_fringe_frames(self, mock_lake):
-        run_reduce_individual_frames('*a00.fits*')
-        mark_frames_as_good('*a92.fits*')
-        stack_calibrations('double')
+    def process_lampflat_frames(self):
+        logger.info('Reducing individual frames')
+
+        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'),
+                            type='fanout')
+        test_data = ascii.read(DATA_FILELIST)
+        with Connection(os.getenv('FITS_BROKER')) as conn:
+            producer = conn.Producer(exchange=exchange)
+            for row in test_data:
+                if 'w00.fits' in row['filename']:
+                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
+                    archive_record['frameid'] = archive_record['id']
+                    producer.publish(archive_record)
+            producer.release()
+
+        celery_join()
+        logger.info('Finished reducing individual frames')
+
+    @pytest.fixture(autouse=True)
+    def stack_flat_frames(self):
+        logger.info('Stacking Lamp Flats')
+        for site in ['ogg', 'cpt']:
+            runtime_context = dict(processed_path='/archive/engineering', log_level='debug', post_to_archive=False,
+                                   post_to_opensearch=False, fpack=True, reduction_level=91,
+                                   db_address=os.environ['DB_ADDRESS'], opensearch_qc_index='banzai_qc',
+                                   opensearch_url='https://opensearch.lco.global',
+                                   no_bpm=False, ignore_schedulability=True, use_only_older_calibrations=False,
+                                   preview_mode=False, max_tries=5, broker_url=os.getenv('FITS_BROKER'),
+                                   no_file_cache=False)
+            for setting in dir(settings):
+                if '__' != setting[:2] and not isinstance(getattr(settings, setting), ModuleType):
+                    runtime_context[setting] = getattr(settings, setting)
+            
+            observations = {'request': {'configuration': {'LAMPFLAT': {'instrument_configs': {'exposure_count': 1}}}}}
+            instruments = dbs.get_instruments_at_site(site, runtime_context['db_address'])
+            for instrument in instruments:
+                if 'FLOYDS' in instrument.type:
+                    instrument_id = instrument.id
+                    break
+            stack_calibrations('2000-01-01', '2100-01-01', instrument_id, 'LAMPFLAT',
+                               runtime_context, observations)
+        celery_join()
+        logger.info('Finished stacking LAMPFLATs')
 
     def test_if_fringe_frames_were_created(self):
-        test_data = ascii.read(DATA_FILELIST)
-        for expected_file in expected_filenames(test_data):
-            if 'a91.fits' in expected_file:
-                assert os.path.exists(expected_file)
+        with dbs.get_session(os.environ['DB_ADDRESS']) as db_session:
+            calibrations_in_db = db_session.query(dbs.CalibrationImage).filter(dbs.CalibrationImage.type == 'FRINGE')
+            calibrations_in_db = calibrations_in_db.filter(dbs.CalibrationImage.is_master).all()
+        assert len(calibrations_in_db) == 2
 
 
 @pytest.mark.e2e
