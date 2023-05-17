@@ -45,7 +45,7 @@ def test_tracing():
 
 def test_profile_width_fitting():
     np.random.seed(1242315)
-    fake_frame = generate_fake_science_frame(include_background=True)
+    fake_frame = generate_fake_science_frame(include_sky=True)
     wavelength_bins = get_wavelength_bins(fake_frame.wavelengths)
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders, wavelength_bins)
@@ -57,7 +57,7 @@ def test_profile_width_fitting():
 
 def test_background_fitting():
     np.random.seed(9813245)
-    fake_frame = generate_fake_science_frame(include_background=True)
+    fake_frame = generate_fake_science_frame(include_sky=True)
     wavelength_bins = get_wavelength_bins(fake_frame.wavelengths)
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders, wavelength_bins)
@@ -76,7 +76,7 @@ def test_background_fitting():
 
 def test_extraction():
     np.random.seed(723422)
-    fake_frame = generate_fake_science_frame(include_background=False)
+    fake_frame = generate_fake_science_frame(include_sky=False)
     fake_frame.wavelength_bins = get_wavelength_bins(fake_frame.wavelengths)
     fake_frame.binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                                       fake_frame.orders, fake_frame.wavelength_bins)
@@ -92,7 +92,7 @@ def test_extraction():
 def test_full_extraction_stage():
     np.random.seed(192347)
     input_context = context.Context({})
-    frame = generate_fake_science_frame(flat_spectrum=False, include_background=True)
+    frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True)
     fake_profile_width_funcs = [lambda _: fwhm_to_sigma(frame.input_profile_width) for _ in frame.input_profile_centers]
     frame.profile = frame.input_profile_centers, fake_profile_width_funcs
     stage = Extractor(input_context)

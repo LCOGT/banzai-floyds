@@ -102,7 +102,7 @@ def test_order_tracing():
 
 def test_order_tweaker():
     np.random.seed(1212364)
-    frame = generate_fake_science_frame(include_background=True)
+    frame = generate_fake_science_frame(include_sky=True)
     new_orders = []
     for new_coeffs, domain in zip(frame.orders.coeffs, frame.orders.domains):
         new_coeffs[0] += 3
@@ -113,3 +113,12 @@ def test_order_tweaker():
     stage = OrderTweaker(input_context)
     frame = stage.do_stage(frame)
     np.testing.assert_allclose(frame.meta['ORDYSHFT'], -3.0, atol=0.1)
+
+
+def test_shifted_order():
+    order_shift = 2
+    frame = generate_fake_science_frame(include_sky=True)
+    expected_orders = np.zeros_like(frame.orders.data, dtype=int)
+    expected_orders[order_shift:, :] = frame.orders.data[:-order_shift, :]
+    shifted_orders = frame.orders.shifted(order_shift)
+    np.testing.assert_allclose(shifted_orders.data, expected_orders)

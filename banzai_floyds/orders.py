@@ -9,6 +9,7 @@ from astropy.io import fits
 from scipy.special import expit
 
 from banzai_floyds.matched_filter import maximize_match_filter
+from copy import deepcopy
 
 
 class Orders:
@@ -27,7 +28,7 @@ class Orders:
             # TODO: Check the sign of this shift
             model.coef[0] += order_shift
         self._image_shape = image_shape
-        self._order_heights = order_heights
+        self._order_heights = order_heights * np.ones(len(models))
 
     @property
     def data(self):
@@ -78,6 +79,13 @@ class Orders:
     @order_heights.setter
     def order_heights(self, value):
         self._order_heights = np.array(value)
+
+    def new(self, order_width):
+        return Orders(deepcopy(self._models), deepcopy(self._image_shape), order_width)
+
+    def shifted(self, shift):
+        return Orders(deepcopy(self._models), deepcopy(self._image_shape), deepcopy(self._order_heights), 
+                      order_shift=shift)
 
 
 def tophat_filter_metric(data, error, region):
