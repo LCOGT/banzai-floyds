@@ -1,4 +1,4 @@
-from banzai_floyds.wavelengths import gauss, linear_wavelength_solution, identify_peaks, correlate_peaks,\
+from banzai_floyds.wavelengths import linear_wavelength_solution, identify_peaks, correlate_peaks,\
     refine_peak_centers, full_wavelength_solution, CalibrateWavelengths
 import numpy as np
 from astropy.table import Table
@@ -10,7 +10,8 @@ from banzai_floyds import arc_lines
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai.data import CCDData
 from astropy.io import fits
-from banzai_floyds.utils.wavelength_utils import tilt_coordinates, fwhm_to_sigma
+from banzai_floyds.utils.wavelength_utils import tilt_coordinates
+from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 
 
 def build_random_spectrum(seed=None, min_wavelength=3200, line_sigma=3, dispersion=2.5, nlines=10, nx=1001):

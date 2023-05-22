@@ -55,7 +55,7 @@ pipeline {
                         sh(script: "rm -f cleanup.txt", returnStatus: true)
                         echo output
                         sh('helm --namespace build upgrade --install banzai-floyds-e2e helm-chart/banzai-floyds-e2e ' +
-                            '--set image.tag="${GIT_DESCRIPTION}" --force --wait --timeout=3600')
+                            '--set image.tag="${GIT_DESCRIPTION}" --force --wait --timeout=3600s')
 
                         podName = sh(script: 'kubectl get po -l app.kubernetes.io/instance=banzai-floyds-e2e ' +
                                         '--sort-by=.status.startTime -o jsonpath="{.items[-1].metadata.name}"',
@@ -94,6 +94,43 @@ pipeline {
 						    sh("kubectl cp -c banzai-floyds-e2e-listener ${podName}:/home/archive/pytest-order-detection.xml " +
 						            "pytest-order-detection.xml")
 						    junit "pytest-order-detection.xml"
+						}
+					}
+				}
+			}
+		}
+		stage('Test-Arc-Frame-Creation') {
+			agent {
+				label 'helm'
+			}
+			environment {
+				// store stage start time in the environment so it has stage scope
+				START_TIME = sh(script: 'date +%s', returnStdout: true).trim()
+			}
+			when {
+				anyOf {
+					branch 'PR-*'
+					expression { return params.forceEndToEnd }
+				}
+			}
+			steps {
+				script {
+                    withKubeConfig([credentialsId: "build-kube-config"]) {
+						sh("kubectl exec ${podName} -c banzai-floyds-e2e-listener -- " +
+						        "pytest -s --durations=0 --junitxml=/home/archive/pytest-arc-frames.xml " +
+						        "-m arc_frames /lco/banzai-floyds/")
+					}
+				}
+			}
+			post {
+				always {
+					script {
+					    withKubeConfig([credentialsId: "build-kube-config"]) {
+					    	env.LOGS_SINCE = sh(script: 'expr `date +%s` - ${START_TIME}', returnStdout: true).trim()
+    					    sh("kubectl logs ${podName} --since=${LOGS_SINCE}s --all-containers")
+						    sh("kubectl cp -c banzai-floyds-e2e-listener ${podName}:/home/archive/pytest-arc-frames.xml " +
+						            "pytest-arc-frames.xml")
+						    junit "pytest-arc-frames.xml"
 						}
 					}
 				}

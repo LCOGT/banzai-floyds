@@ -4,21 +4,23 @@ import numpy as np
 
 
 class WavelengthSolution:
-    def __init__(self, polymomials, line_widths, line_tilts):
+    def __init__(self, polymomials, line_widths, line_tilts, orders):
         self._line_widths = line_widths
         self._polynomials = polymomials
         self._line_tilts = line_tilts
+        self._orders = orders
 
-    def data(self, orders):
-        model_wavelengths = np.zeros_like(orders).astype(float)
+    @property
+    def data(self):
+        model_wavelengths = np.zeros(self._orders.shape, dtype=float)
         # Recall that numpy arrays are indexed y,x
-        x2d, y2d = np.meshgrid(np.arange(orders.shape[1]), np.arange(orders.shape[0]))
-
-        order_ids = np.unique(orders)
-        order_ids = order_ids[order_ids != 0]
-        for i, order in enumerate(order_ids):
-            tilted_x = x2d + np.tan(np.deg2rad(self._line_tilts[i])) * y2d
-            model_wavelengths[orders == order] += self._polynomials[i](tilted_x[orders == order])
+        x2d, y2d = np.meshgrid(np.arange(self._orders.shape[1]), np.arange(self._orders.shape[0]))
+        order_ids = self._orders.order_ids
+        order_data = self._orders.data
+        order_iter = zip(order_ids, self._orders.center(x2d), self._line_tilts, self._polynomials)
+        for order, order_center, line_tilt, polynomial in order_iter:
+            tilted_x = x2d + np.tan(np.deg2rad(line_tilt)) * (y2d - order_center)
+            model_wavelengths[order_data == order] = polynomial(tilted_x[order_data == order])
         return model_wavelengths
 
     def to_header(self):
@@ -45,18 +47,26 @@ class WavelengthSolution:
         return self._line_tilts
 
     @classmethod
-    def from_header(cls, header):
-        orders = np.arange(1, len([x for x in header.keys() if 'POLYORD' in x]) + 1)
+    def from_header(cls, header, orders):
+        order_ids = np.arange(1, len([x for x in header.keys() if 'POLYORD' in x]) + 1)
         line_widths = []
         line_tilts = []
         polynomials = []
-        for order in orders:
-            line_tilts.append(header[f'LINTILT{order}'])
-            line_widths.append(header[f'LINWIDE{order}'])
-            polynomials.append(Legendre((float(header[f'COEF{order}_{i}'])
-                                         for i in range(int(header[f'POLYORD{order}']) + 1)),
-                               domain=eval(header[f'POLYDOM{order}'])))
-        return cls(polynomials, line_widths, line_tilts)
+        for order_id in order_ids:
+            line_tilts.append(header[f'LINTILT{order_id}'])
+            line_widths.append(header[f'LINWIDE{order_id}'])
+            polynomials.append(Legendre([float(header[f'COEF{order_id}_{i}'])
+                                         for i in range(int(header[f'POLYORD{order_id}']) + 1)],
+                               domain=eval(header[f'POLYDOM{order_id}'])))
+        return cls(polynomials, line_widths, line_tilts, orders)
+
+    @property
+    def orders(self):
+        return self._orders
+
+    @property
+    def bin_edges(self):
+        return [model(np.arange(min(model.domain)-0.5, max(model.domain)+1)) for model in self._polynomials]
 
 
 def tilt_coordinates(tilt_angle, x, y):
@@ -96,7 +106,3 @@ def tilt_coordinates(tilt_angle, x, y):
     """
 
     return x + y * np.tan(np.deg2rad(tilt_angle))
-
-
-def fwhm_to_sigma(fwhm):
-    return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))

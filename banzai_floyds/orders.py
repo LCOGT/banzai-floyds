@@ -18,7 +18,7 @@ class Orders:
 
         Parameters
         ----------
-        models: list of Polynomalial objects
+        models: list of Polynomial objects
         image_shape: tuple of integers (y, x) size
         order_height: integer height of the order in pixels
         """
@@ -55,6 +55,21 @@ class Orders:
         Dictionary of order:tuples with the min/max of fit domain
         """
         return dict([(i+1, model.domain) for i, model in enumerate(self._models)])
+
+    def center(self, x):
+        return [model(x) for i, model in enumerate(self._models)]
+
+    @property
+    def shape(self):
+        return self._image_shape
+
+    @property
+    def order_ids(self):
+        return [i + 1 for i, _ in enumerate(self._models)]
+
+    @property
+    def order_height(self):
+        return self._order_height
 
 
 def tophat_filter_metric(data, error, region):
@@ -121,7 +136,7 @@ def smooth_order_weights(params, x, height, k=2):
 
 def smooth_order_jacobian(theta, x, i, height, k=2):
     """
-    Calculate the the ith partial derivatives of the smooth top-hat weights
+    Calculate the ith partial derivatives of the smooth top-hat weights
 
     Parameters
     ----------
@@ -249,7 +264,7 @@ def estimate_order_centers(data, error, order_height, peak_separation=10, min_si
     peak_separation: float
         Minimum distance between real peaks
     min_signal_to_noise: float
-        Minimium value of the signal/noise metric to return in the list of peaks
+        Minimum value of the signal/noise metric to return in the list of peaks
 
     Returns
     -------
@@ -367,6 +382,7 @@ class OrderLoader(CalibrationUser):
 
     def apply_master_calibration(self, image, master_calibration_image):
         image.orders = master_calibration_image.orders
+        image.add_or_update(master_calibration_image['ORDER_COEFFS'])
         return image
 
 
@@ -375,12 +391,12 @@ class OrderSolver(Stage):
     A stage to map out the orders on sky flats. This would in principle work on lamp filters that do not have the
     dichroic as well but needs good signal to noise to get the curvature to converge well.
     """
-    # Currently we hard code the order height to 93. If we wanted to measure it I recommend using a Canny filter and
+    # Currently, we hard code the order height to 93. If we wanted to measure it I recommend using a Canny filter and
     # taking the edge closest to the previous guess of the edge.
     ORDER_HEIGHT = 93
     CENTER_CUT_WIDTH = 31
     POLYNOMIAL_ORDER = 3
-    ORDER_REGIONS = [(0, 1700), (475, 1975)]
+    ORDER_REGIONS = [(0, 1700), (630, 1975)]
 
     def do_stage(self, image):
         if image.orders is None:

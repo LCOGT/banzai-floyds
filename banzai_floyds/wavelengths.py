@@ -7,27 +7,11 @@ from scipy.signal import find_peaks
 from banzai_floyds.matched_filter import maximize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import ArrayData
-from banzai_floyds.utils.wavelength_utils import WavelengthSolution, fwhm_to_sigma, tilt_coordinates
+from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.arc_lines import arc_lines_table
+from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 from copy import copy
-
-
-def gauss(x, mu, sigma):
-    """
-    return a normal distribution
-
-    Parameters
-    ----------
-    x: array of x values
-    mu: center/mean/median of normal distribution
-    sigma: standard deviation of normal distribution
-
-    Returns
-    -------
-    array of y values corresponding to x values in given normal distribution
-    """
-    return 1 / np.sqrt(2.0 * np.pi) / sigma * np.exp(-0.5 * (x - mu) * (x - mu) / sigma / sigma)
 
 
 def wavelength_model_weights(theta, x, lines, line_width):
@@ -36,6 +20,7 @@ def wavelength_model_weights(theta, x, lines, line_width):
     weights = np.zeros(x.shape)
     for line in lines:
         if line['used']:
+            # TODO: Make sure this line width is in sigma, not fwhm
             weights += line['strength'] * gauss(wavelengths, line['wavelength'], line_width)
     return weights
 
@@ -315,7 +300,7 @@ class CalibrateWavelengths(Stage):
                                                                     order=self.FIT_ORDERS[order]))
         image.wavelengths = WavelengthSolution(initial_wavelength_solutions,
                                                [self.INITIAL_LINE_WIDTHS[order] for order in orders],
-                                               [self.INITIAL_LINE_TILTS[order] for order in orders])
+                                               [self.INITIAL_LINE_TILTS[order] for order in orders], orders)
 
         best_fit_polynomials = []
         best_fit_tilts = []
@@ -343,7 +328,8 @@ class CalibrateWavelengths(Stage):
             best_fit_tilts.append(tilt)
             best_fit_widths.append(width)
 
-        image.wavelengths = WavelengthSolution(best_fit_polynomials, best_fit_widths, best_fit_tilts)
-        image.add_or_update(ArrayData(image.wavelengths.data(image.orders.data), name='WAVELENGTHS',
+        image.wavelengths = WavelengthSolution(best_fit_polynomials, best_fit_widths, best_fit_tilts, image.orders)
+        image.add_or_update(ArrayData(image.wavelengths.data, name='WAVELENGTHS',
                                       meta=image.wavelengths.to_header()))
+        image.is_master = True
         return image

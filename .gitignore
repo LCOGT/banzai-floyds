@@ -135,3 +135,6 @@ dmypy.json
 
 # Directory to store test data
 test_data/
+
+# VS Code
+.vscode
