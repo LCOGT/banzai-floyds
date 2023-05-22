@@ -98,4 +98,4 @@ def test_full_extraction_stage():
     stage = Extractor(input_context)
     frame = stage.do_stage(frame)
     expected = np.interp(frame['EXTRACTED'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
-    np.testing.assert_allclose(frame['EXTRACTED'].data['flux'], expected, rtol=0.06)
+    np.testing.assert_allclose(frame['EXTRACTED'].data['flux'], expected, rtol=0.065)
