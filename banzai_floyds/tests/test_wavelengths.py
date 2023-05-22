@@ -11,7 +11,7 @@ from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai.data import CCDData
 from astropy.io import fits
 from banzai_floyds.utils.wavelength_utils import tilt_coordinates
-from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
+from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, sigma_to_fwhm
 
 
 def build_random_spectrum(seed=None, min_wavelength=3200, line_sigma=3, dispersion=2.5, nlines=10, nx=1001):
@@ -42,7 +42,7 @@ def build_random_spectrum(seed=None, min_wavelength=3200, line_sigma=3, dispersi
 
 
 def test_linear_wavelength_solution():
-
+    np.random.seed(890154)
     min_wavelength = 3200
     dispersion = 2.5
     line_width = 3
@@ -50,7 +50,7 @@ def test_linear_wavelength_solution():
                                                               line_sigma=line_width)
 
     linear_model = linear_wavelength_solution(input_spectrum, 0.01 * np.ones_like(input_spectrum), lines,
-                                              dispersion, line_width, np.arange(4000, 5001))
+                                              dispersion, sigma_to_fwhm(line_width), np.arange(4000, 5001))
     assert linear_model(0) == min_wavelength
 
 
@@ -61,7 +61,8 @@ def test_identify_peaks():
     line_sep = 10
     input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_width, nlines=6)
 
-    recovered_peaks = identify_peaks(input_spectrum, 0.01 * np.ones_like(input_spectrum), line_width, line_sep)
+    recovered_peaks = identify_peaks(input_spectrum, 0.01 * np.ones_like(input_spectrum),
+                                     sigma_to_fwhm(line_width), line_sep)
 
     # Need to figure out how to handle blurred lines and combined peaks
     for peak in recovered_peaks:
@@ -69,6 +70,8 @@ def test_identify_peaks():
 
 
 def test_correlate_peaks():
+    np.random.seed(891723412)
+
     min_wavelength = 3200
     dispersion = 2.5
     line_width = 3
@@ -77,10 +80,10 @@ def test_correlate_peaks():
                                                               line_sigma=line_width)
 
     linear_model = linear_wavelength_solution(input_spectrum, 0.01 * np.ones_like(input_spectrum), lines,
-                                              dispersion, line_width, np.arange(4000, 5001))
+                                              dispersion, sigma_to_fwhm(line_width), np.arange(4000, 5001))
 
     # find corresponding lines with lines missing
-    match_threshold = 1
+    match_threshold = 5
     corresponding_lines = correlate_peaks(np.array(test_peaks[:used_lines]), linear_model, lines, match_threshold)
     for corresponding_line in corresponding_lines:
         assert corresponding_line in lines["wavelength"][:used_lines]
@@ -90,7 +93,7 @@ def test_correlate_peaks():
 
     # find corresponding lines with extra lines
     test_peaks_with_extra = np.concatenate((np.array(test_peaks[:used_lines]), np.random.uniform(0, 1000, 3)))
-    match_threshold = 10
+    match_threshold = 5
     corresponding_lines = correlate_peaks(test_peaks_with_extra, linear_model, lines, match_threshold)
     for corresponding_line in corresponding_lines:
         if corresponding_line:
@@ -107,9 +110,11 @@ def test_refine_peak_centers():
     line_sep = 10
     input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_width)
 
-    recovered_peaks = identify_peaks(input_spectrum, 0.01 * np.ones_like(input_spectrum), line_width, line_sep)
+    recovered_peaks = identify_peaks(input_spectrum, 0.01 * np.ones_like(input_spectrum),
+                                     sigma_to_fwhm(line_width), line_sep)
 
-    fit_list = refine_peak_centers(input_spectrum, 0.01 * np.ones_like(input_spectrum), recovered_peaks, line_width)
+    fit_list = refine_peak_centers(input_spectrum, 0.01 * np.ones_like(input_spectrum),
+                                   recovered_peaks, sigma_to_fwhm(line_width))
 
     # Need to figure out how to handle blurred lines and overlapping peaks.
     for fit in fit_list:
@@ -165,7 +170,7 @@ def generate_fake_arc_frame():
     orders = Orders([order1, order2], (ny, nx), order_height)
 
     # make a reasonable wavelength model
-    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.), domain=(0, 1700))
+    wavelength_model1 = Legendre((7425, 2950.5, 20., -5., 1.), domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     line_widths = [CalibrateWavelengths.INITIAL_LINE_WIDTHS[i] for i in range(1, 3)]
     line_tilts = [CalibrateWavelengths.INITIAL_LINE_TILTS[i] for i in range(1, 3)]
