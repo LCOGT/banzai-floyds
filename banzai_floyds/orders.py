@@ -35,8 +35,7 @@ class Orders:
         """
         order_data = np.zeros(self._image_shape, dtype=np.uint8)
         for i, model in enumerate(self._models):
-            order_data[order_region(self._order_height, model,
-                                    self._image_shape)] = i + 1
+            order_data[order_region(self._order_height, model, self._image_shape)] = i + 1
         return order_data
 
     @property
@@ -46,8 +45,7 @@ class Orders:
         -------
         Dictionary of order:coefficients for each model
         """
-        return dict([(i + 1, model.coef)
-                     for i, model in enumerate(self._models)])
+        return dict([(i+1, model.coef) for i, model in enumerate(self._models)])
 
     @property
     def domains(self):
@@ -56,8 +54,7 @@ class Orders:
         -------
         Dictionary of order:tuples with the min/max of fit domain
         """
-        return dict([(i + 1, model.domain)
-                     for i, model in enumerate(self._models)])
+        return dict([(i+1, model.domain) for i, model in enumerate(self._models)])
 
     def center(self, x):
         return [model(x) for i, model in enumerate(self._models)]
@@ -97,7 +94,7 @@ def tophat_filter_metric(data, error, region):
     float: Metric of the likelihood for the matched top-hat filter
     """
     metric = (data[region] / error[region] / error[region]).sum()
-    metric /= ((1.0 / error[region] / error[region]).sum())**0.5
+    metric /= ((1.0 / error[region] / error[region]).sum()) ** 0.5
     return metric
 
 
@@ -177,8 +174,7 @@ def smooth_order_jacobian(theta, x, i, height, k=2):
     polynomial_i = model.basis(i, domain=(np.min(x2d), np.max(x2d)))(x2d)
     sigma_plus = expit(k * (y2d - y_centers + half_height))
     sigma_minus = expit(k * (-y2d + y_centers + half_height))
-    return k * polynomial_i * sigma_minus * sigma_plus * (sigma_plus -
-                                                          sigma_minus)
+    return k * polynomial_i * sigma_minus * sigma_plus * (sigma_plus - sigma_minus)
 
 
 def smooth_order_hessian(theta, x, i, j, height, k=2):
@@ -249,17 +245,11 @@ def order_region(order_height, center, image_size):
     order_mask = np.logical_and(centered_coordinates >= -1 - order_height // 2,
                                 centered_coordinates <= order_height // 2 + 1)
     # Note we leave in the ability to filter out columns by using the domain attribute of the model
-    order_mask = np.logical_and(
-        order_mask,
-        np.logical_and(x2d >= center.domain[0], x2d <= center.domain[1]))
+    order_mask = np.logical_and(order_mask, np.logical_and(x2d >= center.domain[0], x2d <= center.domain[1]))
     return order_mask
 
 
-def estimate_order_centers(data,
-                           error,
-                           order_height,
-                           peak_separation=10,
-                           min_signal_to_noise=100.0):
+def estimate_order_centers(data, error, order_height, peak_separation=10, min_signal_to_noise=100.0):
     """
     Estimate the order centers by finding peaks using a simple cross correlation style sliding window metric
 
@@ -287,10 +277,7 @@ def estimate_order_centers(data,
 
         filter_region = order_region(order_height, filter_model, data.shape)
         matched_filtered[i] = tophat_filter_metric(data, error, filter_region)
-    peaks = matched_filtered == maximum_filter1d(matched_filtered,
-                                                 size=peak_separation,
-                                                 mode='constant',
-                                                 cval=0.0)
+    peaks = matched_filtered == maximum_filter1d(matched_filtered, size=peak_separation, mode='constant', cval=0.0)
     peaks = np.logical_and(peaks, matched_filtered > min_signal_to_noise)
     # Why we have to use flatnonzero here instead of argwhere behaving the way I want is a mystery
     return np.flatnonzero(peaks)
@@ -314,30 +301,16 @@ def fit_order_curve(data, error, order_height, initial_guess):
     -------
     Polynomial model function of the best fit
     """
-
-    # For this to work efficiently, you probably need a good initial guess. If we have that, we should define
-    # a window of pixels around the initial guess to do the fit to optimize fitting a bunch of zeros
     x = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
-    best_fit_params = maximize_match_filter(
-        initial_guess,
-        data,
-        error,
-        smooth_order_weights,
-        x,
-        # weights_jacobian_function=smooth_order_jacobian,
-        # weights_hessian_function=smooth_order_hessian,
-        args=(order_height, ))
+    best_fit_params = maximize_match_filter(initial_guess, data, error, smooth_order_weights, x,
+                                            weights_jacobian_function=smooth_order_jacobian,
+                                            weights_hessian_function=smooth_order_hessian,
+                                            args=(order_height,))
     return Legendre(best_fit_params, domain=(0, data.shape[1] - 1))
 
 
-def trace_order(data,
-                error,
-                order_height,
-                initial_center,
-                initial_center_x,
-                step_size=11,
-                filter_width=21,
-                search_height=7):
+def trace_order(data, error, order_height, initial_center, initial_center_x,
+                step_size=11, filter_width=21, search_height=7):
     """
     Trace an order by stepping a window function along from the center of the chip
 
@@ -366,38 +339,29 @@ def trace_order(data,
     centers = []
     xs = []
     # keep stepping until you get to the edge of the chip
-    for x in range(initial_center_x, data.shape[1] - filter_width // 2,
-                   step_size):
+    for x in range(initial_center_x, data.shape[1] - filter_width // 2, step_size):
         if len(centers) == 0:
             previous_center = initial_center
         else:
             previous_center = centers[-1]
         x_section = slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
-        y_section = slice(
-            previous_center - search_height - order_height // 2,
-            previous_center + search_height + order_height // 2 + 1, 1)
+        y_section = slice(previous_center - search_height - order_height // 2,
+                          previous_center + search_height + order_height // 2 + 1, 1)
         section = y_section, x_section
 
-        cut_center = estimate_order_centers(data[section], error[section],
-                                            order_height)[0]
-        centers.append(cut_center + previous_center - search_height -
-                       order_height // 2)
+        cut_center = estimate_order_centers(data[section], error[section], order_height)[0]
+        centers.append(cut_center + previous_center - search_height - order_height // 2)
         xs.append(x)
 
     # Go back to the center and start stepping the opposite direction
-    for x in range(initial_center_x - step_size, filter_width // 2,
-                   -step_size):
+    for x in range(initial_center_x - step_size, filter_width // 2, -step_size):
         previous_center = centers[0]
-        y_section = slice(
-            previous_center - search_height - order_height // 2,
-            previous_center + search_height + order_height // 2 + 1, 1)
+        y_section = slice(previous_center - search_height - order_height // 2,
+                          previous_center + search_height + order_height // 2 + 1, 1)
         x_section = slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
         section = y_section, x_section
-        cut_center = estimate_order_centers(data[section], error[section],
-                                            order_height)[0]
-        centers.insert(
-            0,
-            cut_center + previous_center - search_height - order_height // 2)
+        cut_center = estimate_order_centers(data[section], error[section], order_height)[0]
+        centers.insert(0, cut_center + previous_center - search_height - order_height // 2)
         xs.insert(0, x)
     return np.array(xs), np.array(centers)
 
@@ -410,8 +374,7 @@ class OrderLoader(CalibrationUser):
         if image.obstype == 'SKYFLAT':
             return image
         else:
-            return super(OrderLoader,
-                         self).on_missing_master_calibration(image)
+            return super(OrderLoader, self).on_missing_master_calibration(image)
 
     @property
     def calibration_type(self):
@@ -441,67 +404,73 @@ class OrderSolver(Stage):
             # Take a vertical slice down about the middle of the chip
             # Find the two biggest peaks in summing the signal to noise
             # This is effectively a match filter with a top hat kernel
-            center_section = slice(None), slice(
-                image.data.shape[1] // 2 - self.CENTER_CUT_WIDTH // 2,
-                image.data.shape[1] // 2 + self.CENTER_CUT_WIDTH // 2 + 1, 1)
-            order_centers = estimate_order_centers(
-                image.data[center_section],
-                image.uncertainty[center_section],
-                order_height=self.ORDER_HEIGHT)
+            center_section = slice(None), slice(image.data.shape[1] // 2 - self.CENTER_CUT_WIDTH // 2,
+                                                image.data.shape[1] // 2 + self.CENTER_CUT_WIDTH // 2 + 1, 1)
+            order_centers = estimate_order_centers(image.data[center_section], image.uncertainty[center_section],
+                                                   order_height=self.ORDER_HEIGHT)
             initial_guesses = []
             for i, order_center in enumerate(order_centers):
-                x, order_locations = trace_order(image.data, image.uncertainty,
-                                                 self.ORDER_HEIGHT,
-                                                 order_center,
-                                                 image.data.shape[1] // 2)
-                good_region = np.logical_and(x >= self.ORDER_REGIONS[i][0],
-                                             x <= self.ORDER_REGIONS[i][1])
-                initial_model = Legendre.fit(deg=self.POLYNOMIAL_ORDER,
-                                             x=x[good_region],
+                x, order_locations = trace_order(image.data, image.uncertainty, self.ORDER_HEIGHT,
+                                                 order_center, image.data.shape[1] // 2)
+                good_region = np.logical_and(x >= self.ORDER_REGIONS[i][0], x <= self.ORDER_REGIONS[i][1])
+                initial_model = Legendre.fit(deg=self.POLYNOMIAL_ORDER, x=x[good_region],
                                              y=order_locations[good_region],
-                                             domain=(self.ORDER_REGIONS[i][0],
-                                                     self.ORDER_REGIONS[i][1]))
-                initial_guesses.append(
-                    (initial_model.coef, initial_model.domain))
+                                             domain=(self.ORDER_REGIONS[i][0], self.ORDER_REGIONS[i][1]))
+                initial_guesses.append((initial_model.coef, initial_model.domain))
         else:
             # Load from previous solve
-            initial_guesses = [(coeff, domain) for coeff, domain in zip(
-                image.orders.coeffs, image.orders.domains)]
+            initial_guesses = [(coeff, domain) for coeff, domain in zip(image.orders.coeffs, image.orders.domains)]
         # Do a fit to get the curvature of the slit
         order_curves = []
         for i, (coeff, domain) in enumerate(initial_guesses):
             domain_slice = slice(int(domain[0]), int(domain[1] + 1))
-            order_curve = fit_order_curve(image.data[:, domain_slice],
-                                          image.uncertainty[:, domain_slice],
+            order_curve = fit_order_curve(image.data[:, domain_slice], image.uncertainty[:, domain_slice],
                                           self.ORDER_HEIGHT, coeff)
             order_curve.domain = domain
             order_curves.append(order_curve)
-        image.orders = Orders(order_curves, image.data.shape,
-                              self.ORDER_HEIGHT)
+        image.orders = Orders(order_curves, image.data.shape, self.ORDER_HEIGHT)
         image.add_or_update(ArrayData(image.orders.data, name='ORDERS'))
-        coeff_table = [{
-            f'c{i}': coeff
-            for i, coeff in enumerate(image.orders.coeffs[order])
-        } for order in image.orders.coeffs]
+        coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(image.orders.coeffs[order])}
+                       for order in image.orders.coeffs]
         for i, row in enumerate(coeff_table):
             row['order'] = i + 1
             row['domainmin'], row['domainmax'] = image.orders.domains[i + 1]
         coeff_table = Table(coeff_table)
         coeff_table['order'].description = 'ID of order'
-        coeff_table[
-            'domainmin'].description = 'Domain minimum for the order curve'
-        coeff_table[
-            'domainmax'].description = 'Domain maximum for the order curve'
+        coeff_table['domainmin'].description = 'Domain minimum for the order curve'
+        coeff_table['domainmax'].description = 'Domain maximum for the order curve'
         for i in range(self.POLYNOMIAL_ORDER + 1):
             coeff_table[f'c{i}'].description = f'Coefficient for P_{i}'
 
-        image.add_or_update(
-            DataTable(coeff_table,
-                      name='ORDER_COEFFS',
-                      meta=fits.Header({
-                          'HEIGHT': self.ORDER_HEIGHT,
-                          'POLYORD': self.POLYNOMIAL_ORDER
-                      })))
+        image.add_or_update(DataTable(coeff_table, name='ORDER_COEFFS',
+                                      meta=fits.Header({'HEIGHT': self.ORDER_HEIGHT,
+                                                        'POLYORD': self.POLYNOMIAL_ORDER})))
         image.is_master = True
 
         return image
+
+
+# TODO: Add Get Trace Region
+def extract_order_center(orders, order_num, trace_width=1):
+    """
+    Extract mask of region around order center
+    :param orders: orders object containing data, domains, and _models for fit orders
+    :param order_num: int: the order to extract center from
+    :param trace_width: int: the thickness of the trace mask
+    :return:
+    center_mask: array: Mask of values around order center.
+    """
+    domain_range = np.arange(orders.domains[order_num][0], orders.domains[order_num][1])
+    centers = orders._models[order_num](domain_range)
+    center_mask = np.full(orders.data.shape, False)
+
+    over_pixels = np.arange(0, trace_width // 2 + 1)
+    pixel_height = np.dstack((over_pixels, -1 * over_pixels)).flatten()[1:trace_width+1]
+
+    for offset in pixel_height:
+        y_coords = np.int_(np.rint(centers + offset))
+        x_coords = np.int_(domain_range)
+        y_cut = np.where((0 < y_coords) & (y_coords < center_mask.shape[0]))
+        center_coords = (y_coords[y_cut], x_coords[y_cut])
+        center_mask[center_coords] = True
+    return center_mask
