@@ -51,7 +51,7 @@ def linear_wavelength_solution(data, error, lines, dispersion, line_width, offse
     # Step the model spectrum metric through each of the offsets and find the peak
     slope = dispersion * (len(data) // 2)
     metrics = [matched_filter_metric((offset, slope), data, error, wavelength_model_weights, None, None,
-                                     np.arange(data.size), lines, line_width) for offset in offset_range]
+                                     np.arange(data.size), lines, fwhm_to_sigma(line_width)) for offset in offset_range]
     best_fit_offset = offset_range[np.argmax(metrics)]
 
     return Legendre((best_fit_offset, slope), domain=domain)
@@ -79,22 +79,21 @@ def identify_peaks(data, error, line_width, line_sep, domain=None):
         domain = (0, len(data) - 1)
     # extract peak locations
     # Assume +- 3 sigma for the kernel width
-    kernel_half_width = int(3 * line_width / 2.355)
+    kernel_half_width = int(3 * fwhm_to_sigma(line_width))
     kernel_x = np.arange(-kernel_half_width, kernel_half_width + 1, 1)[::-1]
-    kernel = gauss(kernel_x, 0.0, line_width)
+    kernel = gauss(kernel_x, 0.0, fwhm_to_sigma(line_width))
 
     signal = np.convolve(kernel, data / error / error, mode='same')
-    normalization = np.convolve(kernel * kernel, 1.0 / error / error, mode='same')
+    normalization = np.convolve(kernel * kernel, 1.0 / error / error, mode='same') ** 0.5
 
     metric = signal / normalization
-    peaks, peak_properties = find_peaks(metric, height=100.0, distance=line_sep)
+    peaks, peak_properties = find_peaks(metric, height=30.0, distance=line_sep)
     peaks += int(min(domain))
     return peaks
 
 
 def centroiding_weights(theta, x):
-    center, line_width = theta
-    sigma = fwhm_to_sigma(line_width)
+    center, sigma = theta
     return gauss(x, center, sigma)
 
 
@@ -124,7 +123,7 @@ def refine_peak_centers(data, error, peaks, line_width, domain=None):
         data_window = data[window]
         error_window = error[window]
         x = np.arange(-half_fit_window, half_fit_window + 1, dtype=float)
-        best_fit_center, best_fit_line_width = maximize_match_filter((0, line_width), data_window, error_window,
+        best_fit_center, best_fit_line_width = maximize_match_filter((0, line_sigma), data_window, error_window,
                                                                      centroiding_weights, x)
         centers.append(best_fit_center + peak)
     centers = np.array(centers) + min(domain)
@@ -184,12 +183,16 @@ def full_wavelength_solution_weights(theta, coordinates, lines):
     model array: 2d array with the match filter weights given the wavelength solution model
     """
     tilt, line_width, *polynomial_coefficients = theta
+    # We could cache only where the model is expected to be nonzero so we don't add a bunch of zeros each iteration
     x, y = coordinates
     tilted_x = tilt_coordinates(tilt, x, y)
+    # We could cache the domain of the function
     wavelength_polynomial = Legendre(polynomial_coefficients, domain=(np.min(x), np.max(x)))
     model_wavelengths = wavelength_polynomial(tilted_x)
     model = np.zeros_like(model_wavelengths)
     line_sigma = fwhm_to_sigma(line_width)
+    # Some possible optimizations are to truncate around each line (caching which indicies are for each line)
+    # say +- 5 sigma around each line
     for line in lines:
         # in principle we should set the resolution to be a constant, i.e. delta lambda / lambda, not the overall width
         model += line['strength'] * gauss(model_wavelengths, line['wavelength'], line_sigma)
@@ -246,14 +249,14 @@ class CalibrateWavelengths(Stage):
     # All in angstroms, measured by Curtis McCully
     # FWHM is , 5 pixels
     INITIAL_LINE_WIDTHS = {1: 15.6, 2: 8.6}
-    INITIAL_DISPERSIONS = {1: 3.13, 2: 1.72}
+    INITIAL_DISPERSIONS = {1: 3.51, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    OFFSET_RANGES = {1: np.arange(7300.0, 7700.0, 0.5), 2: np.arange(4300, 4600, 0.5)}
-    MATCH_THRESHOLDS = {1: 10.0, 2: 20.0}
+    OFFSET_RANGES = {1: np.arange(7200.0, 7700.0, 0.5), 2: np.arange(4300, 4600, 0.5)}
+    MATCH_THRESHOLDS = {1: 20.0, 2: 10.0}
     # In pixels
     MIN_LINE_SEPARATIONS = {1: 5.0, 2: 5.0}
-    FIT_ORDERS = {1: 4, 2: 2}
+    FIT_ORDERS = {1: 3, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
     """
@@ -271,8 +274,10 @@ class CalibrateWavelengths(Stage):
             # Note that his flux has an x origin at the x = 0 instead of the domain of the order
             # I don't think it matters though
             flux_1d = np.median(image.data[order_region], axis=0)
-            flux_1d_error = np.sqrt(np.sum((np.sqrt(image.uncertainty[order_region]) /
-                                            float(extraction_orders._order_height)) ** 2, axis=0))
+            # This 1.2533 is from Rider 1960 DOI: 10.1080/01621459.1960.10482056 and converts the standard error
+            # to error on the median
+            flux_1d_error = 1.2533 * np.median(image.uncertainty[order_region], axis=0)
+            flux_1d_error /= np.sqrt(extraction_orders._order_height)
             linear_solution = linear_wavelength_solution(flux_1d, flux_1d_error, self.LINES[self.LINES['used']],
                                                          self.INITIAL_DISPERSIONS[order],
                                                          self.INITIAL_LINE_WIDTHS[order],
