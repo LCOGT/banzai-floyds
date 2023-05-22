@@ -5,7 +5,7 @@ ORDERED_STAGES = ['banzai.bias.OverscanSubtractor',
                   'banzai.gain.GainNormalizer',
                   'banzai.uncertainty.PoissonInitializer',
                   'banzai_floyds.orders.OrderLoader',
-                  'banzai_floyds.wavelengths.WavelengthSolutionLoader', 
+                  'banzai_floyds.wavelengths.WavelengthSolutionLoader',
                   'banzai_floyds.extract.Extractor']
 
 FRAME_SELECTION_CRITERIA = [('type', 'contains', 'FLOYDS')]
