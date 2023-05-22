@@ -171,7 +171,7 @@ class TestFringeCreation:
             for setting in dir(settings):
                 if '__' != setting[:2] and not isinstance(getattr(settings, setting), ModuleType):
                     runtime_context[setting] = getattr(settings, setting)
-            
+
             observations = {'request': {'configuration': {'LAMPFLAT': {'instrument_configs': {'exposure_count': 1}}}}}
             instruments = dbs.get_instruments_at_site(site, runtime_context['db_address'])
             for instrument in instruments:

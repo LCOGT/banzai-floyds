@@ -3,7 +3,6 @@ from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai_floyds.orders import Orders
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
-from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.fringe import fit_smooth_fringe_spline
 

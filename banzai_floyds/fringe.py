@@ -68,7 +68,8 @@ class FringeMaker(CalibrationMaker):
         super_fringe[super_fringe_weights > 0] /= super_fringe_weights[super_fringe_weights > 0]
         make_calibration_name = make_calibration_filename_function(self.calibration_type,
                                                                    self.runtime_context)
-        master_calibration_filename = make_calibration_name(max(images, key=lambda x: datetime.strptime(x.epoch, '%Y%m%d') ))
+        master_calibration_filename = make_calibration_name(max(images,
+                                                                key=lambda x: datetime.strptime(x.epoch, '%Y%m%d')))
 
         grouping = self.runtime_context.CALIBRATION_SET_CRITERIA.get(images[0].obstype, [])
         master_frame_class = import_utils.import_attribute(self.runtime_context.CALIBRATION_FRAME_CLASS)
