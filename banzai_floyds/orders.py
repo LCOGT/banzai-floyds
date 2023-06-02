@@ -141,8 +141,7 @@ def smooth_order_weights(params, x, height, domain, k=2):
     numerically behaved that simple implementations we can do ourselves (fewer overflow warnings).
     """
     x2d, y2d = x
-    coeffients = params
-    model = Legendre(coeffients, domain=domain)
+    model = Legendre(params, domain=domain)
     y_centers = model(x2d)
 
     half_height = height / 2 + 0.5
