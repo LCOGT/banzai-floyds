@@ -21,7 +21,7 @@ class Orders:
         ----------
         models: list of Polynomial objects
         image_shape: tuple of integers (y, x) size
-        order_height: integer height of the order in pixels
+        order_heights: list of integer heights of the orders in pixels
         """
         self._models = models
         for model in self._models:
@@ -126,6 +126,8 @@ def smooth_order_weights(params, x, height, domain, k=2):
         Arrays should be the same shape as the input data
     height: int
         Number of pixels in the top of the hat
+    domain: length 2 tuple of floats
+        Domain to be used for the polynomial see numpy.polynomial.legendre.Legendre
     k: float
         Sharpness parameter of the edges of the top-hat
 
@@ -304,7 +306,7 @@ def fit_order_curve(data, error, order_height, initial_coeffs, x, domain):
         Same shapes as the input data array
     order_height: int
         Number of pixels in the top of the hat
-    initial_guess: array
+    initial_coeffs: array
         Initial guesses for the Legendre polynomial coefficients of the center of the order
 
     Returns

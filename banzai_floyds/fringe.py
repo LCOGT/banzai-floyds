@@ -35,6 +35,10 @@ def fit_smooth_fringe_spline(image, data_region):
 
 
 class FringeMaker(CalibrationMaker):
+    """
+    Stage that makes a super fringe frame by stacking flat field frames after shifting them to align the
+    fringe pattern.
+    """
     @property
     def calibration_type(self):
         return 'LAMPFLAT'
