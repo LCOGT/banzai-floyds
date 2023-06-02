@@ -84,7 +84,7 @@ class Orders:
         return Orders(deepcopy(self._models), deepcopy(self._image_shape), order_width)
 
     def shifted(self, shift):
-        return Orders(deepcopy(self._models), deepcopy(self._image_shape), deepcopy(self._order_heights), 
+        return Orders(deepcopy(self._models), deepcopy(self._image_shape), deepcopy(self._order_heights),
                       order_shift=shift)
 
 
