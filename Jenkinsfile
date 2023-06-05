@@ -54,7 +54,7 @@ pipeline {
                         final output = readFile('cleanup.txt').trim()
                         sh(script: "rm -f cleanup.txt", returnStatus: true)
                         echo output
-                        sh('helm3 --namespace build upgrade --install banzai-floyds-e2e helm-chart/banzai-floyds-e2e ' +
+                        sh('helm --namespace build upgrade --install banzai-floyds-e2e helm-chart/banzai-floyds-e2e ' +
                             '--set image.tag="${GIT_DESCRIPTION}" --force --wait --timeout=3600s')
 
                         podName = sh(script: 'kubectl get po -l app.kubernetes.io/instance=banzai-floyds-e2e ' +
@@ -174,7 +174,7 @@ pipeline {
 				success {
 					script {
 					    withKubeConfig([credentialsId: "build-kube-config"]) {
-                            sh("helm3 --namespace build delete banzai-floyds-e2e || true")
+                            sh("helm --namespace build delete banzai-floyds-e2e || true")
 					    }
 					}
 				}
