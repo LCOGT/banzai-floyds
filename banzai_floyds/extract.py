@@ -171,7 +171,7 @@ def get_wavelength_bins(wavelengths):
     # TODO: in the long run we probably shouldn't bin at all and just do a full 2d sky fit
     #   (including all flux in the order, yikes)
     # Throw out the edge bins of the order as the lines are tilt and our orders are vertical
-    pixels_to_cut = np.round(0.5 * np.sin(np.deg2rad(wavelengths.line_tilts)) * wavelengths.orders.order_height)
+    pixels_to_cut = np.round(0.5 * np.sin(np.deg2rad(wavelengths.line_tilts)) * wavelengths.orders.order_heights)
     pixels_to_cut = pixels_to_cut.astype(int)
     bin_edges = wavelengths.bin_edges
     cuts = []

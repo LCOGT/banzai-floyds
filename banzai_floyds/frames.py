@@ -19,6 +19,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.wavelength_bins = None
         self.binned_data = None
         self._extracted = None
+        self.fringe = None
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
 
     def get_1d_and_2d_spectra_products(self, runtime_context):
@@ -133,7 +134,9 @@ class FLOYDSFrameFactory(LCOFrameFactory):
             domains = [(row['domainmin'], row['domainmax']) for row in image['ORDER_COEFFS'].data]
             models = [np.polynomial.legendre.Legendre(coeff_set, domain=domain)
                       for coeff_set, domain in zip(coeffs, domains)]
-            image.orders = Orders(models, image.data.shape, image['ORDER_COEFFS'].meta['HEIGHT'])
+            image.orders = Orders(models, image.data.shape, [image['ORDER_COEFFS'].meta['ORDHGHT'] for _ in models])
         if 'WAVELENGTHS' in image:
             image.wavelengths = WavelengthSolution.from_header(image['WAVELENGTHS'].meta, image.orders)
+        if 'FRINGE' in image:
+            image.fringe = image['FRINGE'].data
         return image

@@ -1,11 +1,12 @@
 from banzai_floyds.orders import estimate_order_centers, order_region, fit_order_curve, OrderSolver, trace_order
-from banzai_floyds.orders import smooth_order_weights, smooth_order_jacobian, smooth_order_hessian
-from banzai_floyds.matched_filter import matched_filter_metric, matched_filter_jacobian, matched_filter_hessian
+from banzai_floyds.orders import OrderTweaker, Orders
 import numpy as np
 from numpy.polynomial.legendre import Legendre
 from banzai.tests.utils import FakeContext
+from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
+from banzai import context
 from astropy.io import fits
 
 
@@ -36,9 +37,10 @@ def test_fit_orders():
                                       data.shape)
     data[input_order_region] = 1000.0
     error[input_order_region] = 100.0
-
+    x2d, y2d = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
     # Give an initial guess of the center, but zero curvature to make sure we converge
-    fitted_order_model = fit_order_curve(data, error, order_height, [order_center, 5, 15])
+    fitted_order_model = fit_order_curve(data, error, order_height, [order_center, 5, 15],
+                                         (x2d, y2d), (np.min(x2d), np.max(x2d)))
     fitted_order_region = order_region(order_height, fitted_order_model, data.shape)
     assert (input_order_region != fitted_order_region).sum() < 150
 
@@ -83,9 +85,9 @@ def test_order_tracing():
     data += np.random.normal(0.0, scale=read_noise, size=data.shape)
     input_order_regions = [order_region(order_height, Legendre(params, domain=(0, data.shape[1] - 1)),
                                         data.shape) for params in input_center_params]
-
+    data += np.random.poisson(30.0, size=data.shape)
     for region in input_order_regions:
-        data[region] += np.random.poisson(500.0, size=data.shape)[region]
+        data[region] += np.random.poisson(1500.0, size=data.shape)[region]
     error = np.sqrt(read_noise ** 2.0 + np.abs(data))
 
     center_section = slice(None), slice(data.shape[1] // 2 - center_width // 2,
@@ -98,105 +100,25 @@ def test_order_tracing():
         assert (np.abs(order_locations - input_model(np.array(x))) < 1.0).all()
 
 
-def test_smooth_order_jacobian():
-    initial_params = np.array([145, 12, 17])
-    order_height = 85
-    nx, ny = 531, 497
-    x = np.meshgrid(np.arange(nx), np.arange(ny))
-    h = 1e-5
-
-    # Check the gradient compared to numerical approximations
-    # f'~= (f(x + h) - f(x - h))/(2 h)
-    for i in range(len(initial_params)):
-        actual_jacobian = smooth_order_jacobian(initial_params, x, i, order_height)
-        step = np.zeros(len(initial_params))
-        step[i] = h
-        numerical_jacobian = smooth_order_weights(initial_params + step, x, order_height)
-        numerical_jacobian -= smooth_order_weights(initial_params - step, x, order_height)
-        numerical_jacobian /= 2.0 * h
-        np.testing.assert_allclose(actual_jacobian, numerical_jacobian, atol=1e-9)
+def test_order_tweaker():
+    np.random.seed(1212364)
+    frame = generate_fake_science_frame(include_sky=True)
+    new_orders = []
+    for new_coeffs, domain in zip(frame.orders.coeffs, frame.orders.domains):
+        new_coeffs[0] += 3
+        new_orders.append(Legendre(new_coeffs, domain=domain))
+    orders = Orders(new_orders, frame.data.shape, frame.orders.order_heights)
+    frame.orders = orders
+    input_context = context.Context({})
+    stage = OrderTweaker(input_context)
+    frame = stage.do_stage(frame)
+    np.testing.assert_allclose(frame.meta['ORDYSHFT'], -3.0, atol=0.1)
 
 
-def test_smooth_order_hessian():
-    initial_params = np.array([152, 10, 15])
-    order_height = 87
-    nx, ny = 521, 495
-    x = np.meshgrid(np.arange(nx), np.arange(ny))
-    h = 1e-5
-    for i in range(len(initial_params)):
-        # Check the gradient compared to numerical approximations
-        # f'~= (f(x + h) - f(x - h))/(2 h)
-        for j in range(len(initial_params)):
-            actual_hessian = smooth_order_hessian(initial_params, x, i, j, order_height)
-            step = np.zeros(len(initial_params))
-            step[j] = h
-            numerical_hessian = smooth_order_jacobian(initial_params + step, x, i, order_height)
-            numerical_hessian -= smooth_order_jacobian(initial_params - step, x, i, order_height)
-            numerical_hessian /= 2.0 * h
-            np.testing.assert_allclose(actual_hessian, numerical_hessian, atol=1e-9)
-
-
-def test_matched_filter_jacobian():
-    input_params = np.array([145, 12, 17])
-    order_height = 85
-    nx, ny = 531, 497
-    x = np.meshgrid(np.arange(nx), np.arange(ny))
-    h = 1e-5
-    np.random.seed(21937415)
-    data = np.zeros((ny, nx))
-    read_noise = 5  # everything is gain = 1
-    data += np.random.normal(0.0, scale=read_noise, size=data.shape)
-    input_order_region = order_region(order_height, Legendre(input_params, domain=(0, data.shape[1] - 1)), data.shape)
-
-    data[input_order_region] += np.random.poisson(500.0, size=data.shape)[input_order_region]
-    error = np.sqrt(read_noise ** 2.0 + np.abs(data))
-
-    args = data, error, smooth_order_weights, smooth_order_jacobian, smooth_order_hessian, x, order_height
-
-    for i in range(len(input_params)):
-        for param_step in np.arange(input_params[i] - 5, input_params[i] + 5, 0.1):
-            params = input_params.copy()
-            params[i] = param_step
-            actual_jacobian = matched_filter_jacobian(params, *args)
-            derivative_step = np.zeros(len(input_params))
-            derivative_step[i] = h
-            numerical_jacobian = matched_filter_metric(params + derivative_step, *args)
-            numerical_jacobian -= matched_filter_metric(params - derivative_step, *args)
-            numerical_jacobian /= 2.0 * h
-            np.testing.assert_allclose(actual_jacobian[i], numerical_jacobian, atol=2e-7)
-
-
-def test_matched_filter_hessian():
-    input_params = np.array([145, 12, 17])
-    order_height = 85
-    nx, ny = 531, 497
-    x = np.meshgrid(np.arange(nx), np.arange(ny))
-    np.random.seed(9712347)
-    data = np.zeros((ny, nx))
-    read_noise = 5  # everything is gain = 1
-    data += np.random.normal(0.0, scale=read_noise, size=data.shape)
-    input_order_region = order_region(order_height, Legendre(input_params, domain=(0, data.shape[1] - 1)), data.shape)
-
-    data[input_order_region] += np.random.poisson(500.0, size=data.shape)[input_order_region]
-    error = np.sqrt(read_noise ** 2.0 + np.abs(data))
-
-    args = data, error, smooth_order_weights, smooth_order_jacobian, smooth_order_hessian, x, order_height
-    h = 1e-5
-    for i in range(len(input_params)):
-        # Check the gradient compared to numerical approximations
-        # f'~= (f(x + h) - f(x - h))/(2 h)
-        for j in range(i + 1):
-            numerical_hessians = []
-            actual_hessians = []
-            for param_step in np.arange(input_params[j] - 5, input_params[j] + 5, 1):
-                params = input_params.copy()
-                params[i] = param_step
-                actual_hessian = matched_filter_hessian(params, *args)
-                actual_hessians.append(actual_hessian[i, j])
-                derivative_step = np.zeros(len(input_params))
-                derivative_step[j] = h
-                numerical_hessian = matched_filter_jacobian(params + derivative_step, *args)[i]
-                numerical_hessian -= matched_filter_jacobian(params - derivative_step, *args)[i]
-                numerical_hessian /= 2.0 * h
-                numerical_hessians.append(numerical_hessian)
-            np.testing.assert_allclose(actual_hessians, numerical_hessians, atol=1e-9)
+def test_shifted_order():
+    order_shift = 2
+    frame = generate_fake_science_frame(include_sky=True)
+    expected_orders = np.zeros_like(frame.orders.data, dtype=int)
+    expected_orders[order_shift:, :] = frame.orders.data[:-order_shift, :]
+    shifted_orders = frame.orders.shifted(order_shift)
+    np.testing.assert_allclose(shifted_orders.data, expected_orders)
