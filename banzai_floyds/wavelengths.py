@@ -266,7 +266,7 @@ class CalibrateWavelengths(Stage):
         orders = np.unique(image.orders.data)
         orders = orders[orders != 0]
         initial_wavelength_solutions = []
-        # copy order centers and get mask for height of a few extract median along axis=0
+        # Do a quick extraction by medianing the central region of the order
         extraction_orders = copy(image.orders)
         extraction_orders.order_heights = self.EXTRACTION_HEIGHT * np.ones_like(orders)
         for i, order in enumerate(orders):

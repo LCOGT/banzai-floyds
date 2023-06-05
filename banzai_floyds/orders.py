@@ -308,6 +308,10 @@ def fit_order_curve(data, error, order_height, initial_coeffs, x, domain):
         Number of pixels in the top of the hat
     initial_coeffs: array
         Initial guesses for the Legendre polynomial coefficients of the center of the order
+    x: tuple of arrays independent coordinates x, y
+        Arrays should be the same shape as the input data
+    domain: length 2 tuple of floats
+        Domain to be used for the polynomial see numpy.polynomial.legendre.Legendre
 
     Returns
     -------
@@ -331,6 +335,13 @@ def fit_order_tweak(data, error, order_height, coeffs, x, domain):
     error: array of uncertainties
         Same shapes as the input data array
     order_height: float
+    coeffs: array
+        Initial guesses for the Legendre polynomial coefficients of the center of the order
+    x: tuple of arrays independent coordinates x, y
+        Arrays should be the same shape as the input data
+    domain: length 2 tuple of floats
+        Domain to be used for the polynomial see numpy.polynomial.legendre.Legendre
+
     Returns
     -------
     x_shift, y_shift, rotation
@@ -431,7 +442,7 @@ class OrderSolver(Stage):
             region = np.logical_and(x2d <= domain[1], x2d >= domain[0])
             center_model = Legendre(coeff, domain=domain)
             # Only keep pixels +- half the height above the initial guess
-            region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= (height))
+            region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= height)
             order_curve = fit_order_curve(image.data[region], image.uncertainty[region],
                                           height, coeff, (x2d[region], y2d[region]), domain)
             order_curves.append(order_curve)

@@ -35,6 +35,30 @@ def plot_array(data, overlays=None):
 
 def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=False, fringe_offset=0,
                                 include_trace=True, background=0.0, include_super_fringe=False):
+    """
+    Generate a fake science frame to run tests on.
+
+    Parameters
+    ----------
+    include_sky: bool
+        Include sky lines in the frame
+    flat_spectrum: bool
+        Should the object spectrum be constant?
+    fringe: bool
+        Include fringing?
+    fringe_offset: float
+        Offset for the fringe pattern in pixels
+    include_trace: bool
+        Include the object trace in the frame?
+    background: float
+        Background level to add to the frame
+    include_super_fringe: bool
+        Include the super fringe pattern in the frame attributes?
+
+    Returns
+    -------
+    FLOYDSObservationFrame
+    """
     nx = 2048
     ny = 512
     INITIAL_LINE_WIDTHS = {1: 15.6, 2: 8.6}
@@ -156,7 +180,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         frame.fringe_wave_number = fringe_wave_number
         frame.input_fringe_shift = input_fringe_shift
         frame.input_fringe = input_fringe_frame
-    if include_super_fringe:
+    if include_super_fringe and fringe:
         frame.fringe = super_fringe_frame
     if not flat_spectrum:
         frame.input_spectrum_wavelengths = np.arange(3000.0, 12000.0, 0.1)
