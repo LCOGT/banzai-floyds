@@ -8,7 +8,7 @@ from astropy.table import Table
 from astropy.io import fits
 from scipy.special import expit
 
-from banzai_floyds.matched_filter import maximize_match_filter
+from banzai_floyds.matched_filter import optimize_match_filter
 from copy import deepcopy
 
 
@@ -320,7 +320,7 @@ def fit_order_curve(data, error, order_height, initial_coeffs, x, domain):
 
     # For this to work efficiently, you probably need a good initial guess. If we have that, we should define
     # a window of pixels around the initial guess to do the fit to optimize not fitting a bunch of zeros
-    best_fit_coeffs = maximize_match_filter(initial_coeffs, data, error, smooth_order_weights,
+    best_fit_coeffs = optimize_match_filter(initial_coeffs, data, error, smooth_order_weights,
                                             x, args=(order_height, domain,))
     return Legendre(best_fit_coeffs, domain=domain)
 
@@ -349,7 +349,7 @@ def fit_order_tweak(data, error, order_height, coeffs, x, domain):
 
     # For this to work efficiently, you probably need a good initial guess. If we have that, we should define
     # a window of pixels around the initial guess to do the fit to optimize not fitting a bunch of zeros
-    best_fit_offsets = maximize_match_filter([0.0], data, error,
+    best_fit_offsets = optimize_match_filter([0.0], data, error,
                                              order_tweak_weights, x,
                                              args=(coeffs, order_height, domain))
     return best_fit_offsets

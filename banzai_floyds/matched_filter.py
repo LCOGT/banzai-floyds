@@ -302,8 +302,8 @@ def matched_filter_hessian(theta, data, error, weights_function, weights_jacobia
     return filter_hessian
 
 
-def maximize_match_filter(initial_guess, data, error, weights_function, x, weights_jacobian_function=None,
-                          weights_hessian_function=None, args=None):
+def optimize_match_filter(initial_guess, data, error, weights_function, x, weights_jacobian_function=None,
+                          weights_hessian_function=None, args=None, minimize=False):
     """
     Find the best fit parameters for a match filter model
 
@@ -326,6 +326,8 @@ def maximize_match_filter(initial_guess, data, error, weights_function, x, weigh
         Should return an array that is the same shape as data
     args: tuple
         Any other static arguments that should be passed to the weights function.
+    minimize: Boolean
+        Minimize instead of maximize match filter signal?
 
     Returns
     -------
@@ -338,19 +340,27 @@ def maximize_match_filter(initial_guess, data, error, weights_function, x, weigh
     """
     if args is None:
         args = ()
-    if weights_hessian_function is None and weights_jacobian_function is None:
-        best_fit = minimize(lambda *params: -matched_filter_metric(*params), initial_guess,
-                            args=(data, error, weights_function, weights_jacobian_function, weights_hessian_function, x,
-                                  *args), method='Powell')
-    elif weights_hessian_function is None:
-        best_fit = minimize(lambda *params: -matched_filter_metric(*params), initial_guess,
-                            args=(data, error, weights_function, weights_jacobian_function, weights_hessian_function, x,
-                                  *args),
-                            method='BFGS', jac=lambda *params: -matched_filter_jacobian(*params))
+    if not minimize:
+        sign = -1.0
     else:
-        best_fit = minimize(lambda *params: -matched_filter_metric(*params), initial_guess,
-                            args=(data, error, weights_function, weights_jacobian_function, weights_hessian_function,
-                                  x, *args),
-                            method='Newton-CG', hess=lambda *params: -matched_filter_hessian(*params),
-                            jac=lambda *params: -matched_filter_jacobian(*params), options={'eps': 1e-5})
+        sign = 1.0
+    if weights_hessian_function is None and weights_jacobian_function is None:
+        best_fit = minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
+                            args=(data, error, weights_function,
+                                  weights_jacobian_function,
+                                  weights_hessian_function, x, *args),
+                            method='Powell')
+    elif weights_hessian_function is None:
+        best_fit = minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
+                            args=(data, error, weights_function, weights_jacobian_function,
+                                  weights_hessian_function, x, *args),
+                            method='BFGS', jac=lambda *params: sign * matched_filter_jacobian(*params))
+    else:
+        best_fit = minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
+                            args=(data, error, weights_function, weights_jacobian_function,
+                                  weights_hessian_function, x, *args),
+                            method='Newton-CG',
+                            hess=lambda *params: sign * matched_filter_hessian(*params),
+                            jac=lambda *params: sign * matched_filter_jacobian(*params),
+                            options={'eps': 1e-5})
     return best_fit.x

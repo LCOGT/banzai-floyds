@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from astropy.visualization import ZScaleInterval
-from banzai_floyds.frames import FLOYDSObservationFrame
+from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
@@ -193,3 +193,32 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
             frame.input_spectrum += strength * gauss(frame.input_spectrum_wavelengths,
                                                      input_line, width)
     return frame
+
+
+def generate_fake_extracted_frame(telluric=True, sensitivity=True):
+    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
+                                 domain=(0, 1700))
+    wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
+
+    data = Table
+
+    sensitivity = line
+
+    telluric = np.ones(data[['flux']])
+    # Add the A and B bands
+    telluric /= gauss()
+    telluric /= gauss()
+
+    data['flux'] /= sensitivity
+    data['flux'] *= telluric
+    frame = FLOYDSObservationFrame([ArrayData(data)])
+    frame.telluric = telluric
+    frame.sensitivity = sensitivity
+    frame.input_telluric = telluric
+    frame.input_sensitivity = sensitivity
+
+
+class TestCalibrationFrame(FLOYDSCalibrationFrame):
+    def write(self, context):
+        # Short circuit the write method so we don't actually write anything during testing
+        return

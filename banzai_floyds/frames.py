@@ -20,6 +20,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.binned_data = None
         self._extracted = None
         self.fringe = None
+        self.sensitivity = None
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
 
     def get_1d_and_2d_spectra_products(self, runtime_context):
