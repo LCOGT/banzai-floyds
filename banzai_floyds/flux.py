@@ -5,7 +5,7 @@ from banzai_floyds.dbs import get_standard
 from banzai_floyds.utils import telluric_utils
 import numpy as np
 from numpy.polynomial.legendre import Legendre
-from scipy.filter1d import SavGol
+from scipy.signal import savgol_filter
 from banzai_floyds.utils.flux_utils import FluxStandard
 
 
@@ -61,7 +61,7 @@ class FluxSensitivity(Stage):
             sensitivity[in_order][data_to_fit['wavelength'] > 5000] = sensitivity_polynomial(polynomial_wavelengths)
             blue_wavelengths = data_to_fit['wavelength'] <= 5000
             # SavGol filter the ratio in the blue
-            sensitivity[in_order][blue_wavelengths] = SavGol(data_to_fit['flux'][blue_wavelengths] / flux_standard.flux[flux_standard.order_id==order_id][blue_wavelengths])
+            sensitivity[in_order][blue_wavelengths] = savgol_filter(data_to_fit['flux'][blue_wavelengths] / flux_standard.flux[flux_standard.order_id==order_id][blue_wavelengths])
 
         # Scale the flux standard to airmass = 1
         sensitivity = rescale_by_airmass(image.extracted['wavelength'][in_order], sensitivity, image.site.elevation, image.airmass)
