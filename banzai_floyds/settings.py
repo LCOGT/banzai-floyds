@@ -31,4 +31,4 @@ FRAME_FACTORY = 'banzai_floyds.frames.FLOYDSFrameFactory'
 
 CALIBRATION_FRAME_CLASS = 'banzai_floyds.frames.FLOYDSCalibrationFrame'
 
-CALIBRATION_IMAGE_TYPES = ['BIAS', 'DARK', 'SKYFLAT', 'BPM', 'LAMPFLAT', 'ARC']
+CALIBRATION_IMAGE_TYPES = ['BIAS', 'DARK', 'SKYFLAT', 'BPM', 'LAMPFLAT', 'ARC', 'STANDARD']

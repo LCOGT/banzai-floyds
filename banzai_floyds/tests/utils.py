@@ -14,8 +14,9 @@ from astropy.io import ascii
 import pkg_resources
 from types import SimpleNamespace
 from astropy.table import Table
-from banzai.data import DataTable
+from banzai.data import HeaderOnly
 from astropy.modeling.models import Polynomial1D
+from astropy.io import fits
 
 
 SKYLINE_LIST = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/skylines.dat'))
@@ -198,7 +199,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     return frame
 
 
-def generate_fake_extracted_frame(telluric=True, sensitivity=True):
+def generate_fake_extracted_frame(do_telluric=False):
     wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
                                  domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
@@ -216,7 +217,7 @@ def generate_fake_extracted_frame(telluric=True, sensitivity=True):
     sensitivity_model = Polynomial1D(1, domain=sensitivity_domain, c0=1.0, c1=0.24)
     sensitivity = sensitivity_model(wavelengths)
     sensitivity_data = Table({'sensitivity': sensitivity_model(sensitivity_wavelengths),
-                              'wavelengths': sensitivity_wavelengths})
+                              'wavelength': sensitivity_wavelengths})
 
     telluric = np.ones_like(wavelengths)
     # Add the A and B bands
@@ -227,22 +228,25 @@ def generate_fake_extracted_frame(telluric=True, sensitivity=True):
     telluric_model -= 40 * gauss(sensitivity_wavelengths, 6940.0, 35)
     telluric_model -= 55 * gauss(sensitivity_wavelengths, 7650.0, 30)
 
-    telluric_data = Table({'telluric': telluric_model, 'wavelengths': sensitivity_wavelengths})
+    telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
 
-    flux = input_flux / sensitivity * telluric
+    flux = input_flux / sensitivity
+    if do_telluric:
+        flux *= telluric
 
     flux = np.random.poisson(flux.astype(int)).astype(float)
     flux += np.random.normal(read_noise, size=flux.shape)
     flux_error = np.sqrt(read_noise**2 + np.abs(flux))
-    data = Table({'wavelengths': wavelengths, 'flux': input_flux, 'fluxerror': flux_error, 'order_id': orders})
+    data = Table({'wavelength': wavelengths, 'flux': flux, 'fluxerror': flux_error, 'order_id': orders})
 
-    frame = FLOYDSObservationFrame([DataTable(data, name='EXTRACTED')], file_path='foo.fits')
+    frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}))], file_path='foo.fits')
     frame.telluric = telluric_data
     frame.sensitivity = sensitivity_data
     frame.input_telluric = telluric
     frame.input_sensitivity = sensitivity
     frame.input_flux = input_flux
-    frame.extracted = data
+    frame.extracted = data   # Use the elevation of CTIO which is what the telluric correction is scaled to
+    frame.elevation = 2198.0
     return frame
 
 

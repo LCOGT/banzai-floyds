@@ -8,6 +8,8 @@ import numpy as np
 from banzai_floyds.utils.fitting_utils import gauss
 import os
 from astropy.io import fits
+from banzai_floyds.utils.flux_utils import rescale_by_airmass
+from banzai.dbs import get_session, Site
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
@@ -21,6 +23,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self._extracted = None
         self.fringe = None
         self.sensitivity = None
+        self.telluric = None
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
 
     def get_1d_and_2d_spectra_products(self, runtime_context):
@@ -29,6 +32,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                                        os.path.join(self.get_output_directory(runtime_context), filename_1d))
         fits_1d = frame_1d.to_fits(runtime_context)
         fits_1d['SPECTRUM1D'].name = 'SPECTRUM'
+        # TODO: Save telluric and sensitivity corrections that were applied
+
         filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')
 
         fits_1d[0].header['L1ID2D'] = filename_2d
@@ -73,6 +78,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.binned_data['weights'] = profile_data[y, x]
 
     @property
+    def airmass(self):
+        return self.meta['AIRMASS']
+
+    @property
     def background(self):
         return self['BACKGROUND'].data
 
@@ -93,6 +102,13 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def extracted(self, value):
         self._extracted = value
         self.add_or_update(DataTable(value, name='EXTRACTED', meta=fits.Header({})))
+
+    def apply_sensitivity(self):
+        for order_id in [1, 2]:
+            in_order = self.extracted['order_id'] == order_id
+            # Divide the spectrum by the sensitivity function, correcting for airmass
+            sensitivity = np.interp(self.extracted['wavelength'][in_order], self.sensitivity['wavelength'], self.sensitivity['sensitivity'])
+            self.extracted['flux'][in_order] *= sensitivity
 
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
@@ -122,6 +138,10 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     def open(self, path, runtime_context) -> Optional[ObservationFrame]:
         image = super().open(path, runtime_context)
 
+        # Get the elevation from the db of the site
+        with get_session(runtime_context.db_address) as db_session:
+            site = db_session.query(Site).filter(Site.name == self.site).first()
+            self.elevation = site.elevation
         # Set a default BIASSEC and TRIMSEC if they are unknown
         if image.meta.get('BIASSEC', 'UNKNOWN').lower() in ['unknown', 'n/a']:
             image.meta['BIASSEC'] = '[2049:2079,1:512]'
@@ -140,4 +160,8 @@ class FLOYDSFrameFactory(LCOFrameFactory):
             image.wavelengths = WavelengthSolution.from_header(image['WAVELENGTHS'].meta, image.orders)
         if 'FRINGE' in image:
             image.fringe = image['FRINGE'].data
+        if 'TELLURIC' in image:
+            image.telluric = image['TELLURIC'].data
+        if 'SENSITIVITY' in image:
+            image.sensitivity = image['SENSITIVITY'].data
         return image

@@ -1,28 +1,9 @@
 from banzai.stages import Stage
 from banzai.calibrations import CalibrationUser
 from banzai_floyds.dbs import get_standard
-from banzai_floyds.utils.flux_utils import FluxStandard
-from banzai_floyds.frames import FLOYDSCalibrationFrame
 import numpy as np
 from banzai_floyds.utils import telluric_utils
 from banzai_floyds.matched_filter import optimize_match_filter
-from banzai.data import ArrayData
-from astropy.table import Table
-
-
-class TelluricFrame(FLOYDSCalibrationFrame):
-    def calibration_type(self):
-        return 'TELLURIC'
-
-    @classmethod
-    def new(cls, wavelenghts, correction, meta):
-        make_calibration_name = file_utils.make_calibration_filename_function(self.calibration_type,
-                                                                              self.runtime_context)
-
-        # use the most recent image in the stack to create the master filename
-        master_calibration_filename = make_calibration_name(max(images, key=lambda x: datetime.strptime(x.epoch, '%Y%m%d') ))
-        return super(cls).__init__([ArrayData(data=data, file_path=master_calibration_filename,
-                                              meta=meta, name='TELLURIC')])
 
 
 class TelluricMaker(Stage):

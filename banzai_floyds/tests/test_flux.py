@@ -5,15 +5,14 @@ from banzai_floyds.tests.utils import generate_fake_extracted_frame
 
 
 def test_flux_stage():
-    frame = generate_fake_extracted_frame(sensitivity=True)
-    fake_sensitivity_frame = frame.input_sensitivity
+    frame = generate_fake_extracted_frame()
     stage = FluxCalibrator(context.Context({}))
-    frame = stage.apply_master_calibration(frame, fake_sensitivity_frame)
-    np.testing.assert_allclose(frame.extracted['flux'], frame.input_flux)
+    frame = stage.do_stage(frame)
+    np.testing.assert_allclose(frame.extracted['flux'], frame.input_flux, rtol=0.05)
 
 
 def test_sensitvity_stage():
-    frame, fake_sensitivity_frame = generate_fake_extracted_frame(sensitivity=True)
+    frame, fake_sensitivity_frame = generate_fake_extracted_frame()
     stage = FluxSensitivity(context.Context({'CALIBRATION_FRAME_CLASS': 'banzai_floyds.tests.utils.TestCalibrationFrame'}))
     frame = stage.do_stage([frame])
     found_sensitivity = frame.sensitivity
