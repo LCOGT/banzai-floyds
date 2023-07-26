@@ -242,7 +242,7 @@ def generate_fake_extracted_frame(do_telluric=False):
     frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}))], file_path='foo.fits')
     frame.telluric = telluric_data
     frame.sensitivity = sensitivity_data
-    frame.input_telluric = telluric
+    frame.input_telluric = telluric[orders == 1]
     frame.input_sensitivity = sensitivity
     frame.input_flux = input_flux
     frame.extracted = data   # Use the elevation of CTIO which is what the telluric correction is scaled to

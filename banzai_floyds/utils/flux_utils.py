@@ -2,7 +2,7 @@ import numpy as np
 
 
 def rescale_by_airmass(wavelength, flux, elevation, airmass):
-    # IRAF has extinction curves for KPNO and CTIO. There are some features in the measured values but it is difficult 
+    # IRAF has extinction curves for KPNO and CTIO. There are some features in the measured values but it is difficult
     # to tell if they are real or noise. As such I just fit the data with a smooth function of the form
     #  a * ((x - x0)/x1) ** -alpha
     # My best fit model for CTIO is a=4.18403051, x0=2433.97752773, x1=274.60088089, alpha=1.39522308
@@ -17,5 +17,6 @@ def rescale_by_airmass(wavelength, flux, elevation, airmass):
     # Note the elevation of ctio is 2198m
     airmass_ratio = (1.0 - np.exp(-elevation / 10400.0)) / (1.0 - np.exp(-2198.0 / 10400.0))
     extinction_curve **= airmass_ratio
-    extinction_curve **= airmass
-    return flux / (1 - extinction_curve)
+    transmission = 1 - extinction_curve
+    transmission **= airmass - 1
+    return flux / transmission

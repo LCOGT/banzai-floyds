@@ -109,6 +109,17 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             # Divide the spectrum by the sensitivity function, correcting for airmass
             sensitivity = np.interp(self.extracted['wavelength'][in_order], self.sensitivity['wavelength'], self.sensitivity['sensitivity'])
             self.extracted['flux'][in_order] *= sensitivity
+            self.extracted['fluxerror'][in_order] *= sensitivity
+        self.extracted['fluxe'] = rescale_by_airmass(self.extracted['wavelength'], self.extracted['flux'], self.elevation, self.airmass)
+        self.extracted['fluxerror'] = rescale_by_airmass(self.extracted['wavelength'], self.extracted['fluxerror'], self.elevation, self.airmass)
+
+    @property
+    def elevation(self):
+        return self.meta['ELEVATIO']
+
+    @elevation.setter
+    def elevation(self, value):
+        self.meta['ELEVATIO'] = value
 
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):

@@ -3,7 +3,7 @@ This whole framework is adapted from Zackay et al. 2017, ApJ, 836, 187
 https://ui.adsabs.harvard.edu/abs/2017ApJ...836..187Z/abstract
 """
 import numpy as np
-from scipy.optimize import minimize
+from scipy import optimize
 
 
 def matched_filter_signal(data, error, weights):
@@ -345,22 +345,22 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x, weigh
     else:
         sign = 1.0
     if weights_hessian_function is None and weights_jacobian_function is None:
-        best_fit = minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
-                            args=(data, error, weights_function,
-                                  weights_jacobian_function,
-                                  weights_hessian_function, x, *args),
-                            method='Powell')
+        best_fit = optimize.minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
+                                     args=(data, error, weights_function,
+                                           weights_jacobian_function,
+                                           weights_hessian_function, x, *args),
+                                     method='Powell')
     elif weights_hessian_function is None:
-        best_fit = minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
-                            args=(data, error, weights_function, weights_jacobian_function,
-                                  weights_hessian_function, x, *args),
-                            method='BFGS', jac=lambda *params: sign * matched_filter_jacobian(*params))
+        best_fit = optimize.minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
+                                     args=(data, error, weights_function, weights_jacobian_function,
+                                           weights_hessian_function, x, *args),
+                                     method='BFGS', jac=lambda *params: sign * matched_filter_jacobian(*params))
     else:
-        best_fit = minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
-                            args=(data, error, weights_function, weights_jacobian_function,
-                                  weights_hessian_function, x, *args),
-                            method='Newton-CG',
-                            hess=lambda *params: sign * matched_filter_hessian(*params),
-                            jac=lambda *params: sign * matched_filter_jacobian(*params),
-                            options={'eps': 1e-5})
+        best_fit = optimize.minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
+                                     args=(data, error, weights_function, weights_jacobian_function,
+                                           weights_hessian_function, x, *args),
+                                     method='Newton-CG',
+                                     hess=lambda *params: sign * matched_filter_hessian(*params),
+                                     jac=lambda *params: sign * matched_filter_jacobian(*params),
+                                     options={'eps': 1e-5})
     return best_fit.x
