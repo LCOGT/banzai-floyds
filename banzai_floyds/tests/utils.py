@@ -199,7 +199,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     return frame
 
 
-def generate_fake_extracted_frame(do_telluric=False):
+def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
                                  domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
@@ -229,8 +229,9 @@ def generate_fake_extracted_frame(do_telluric=False):
     telluric_model -= 55 * gauss(sensitivity_wavelengths, 7650.0, 30)
 
     telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
-
-    flux = input_flux / sensitivity
+    flux = input_flux.copy()
+    if do_sensitivity:
+        flux  /= sensitivity
     if do_telluric:
         flux *= telluric
 

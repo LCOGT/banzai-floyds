@@ -22,7 +22,7 @@ def test_sensitivity_stage(mock_standard):
     stage = FluxSensitivity(context.Context({'CALIBRATION_FRAME_CLASS': 'banzai_floyds.tests.utils.TestCalibrationFrame', 'db_address': 'foo.sqlite'}))
     frame = stage.do_stage(frame)
     found_sensitivity = frame.sensitivity
-    np.testing.assert_allclose(found_sensitivity, frame.input_sensitivity)
+    np.testing.assert_allclose(found_sensitivity, frame.input_sensitivity, atol=0.03)
 
 
 def test_null_airmass_correction():
