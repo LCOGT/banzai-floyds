@@ -107,11 +107,19 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         for order_id in [1, 2]:
             in_order = self.extracted['order_id'] == order_id
             # Divide the spectrum by the sensitivity function, correcting for airmass
-            sensitivity = np.interp(self.extracted['wavelength'][in_order], self.sensitivity['wavelength'], self.sensitivity['sensitivity'])
+            sensitivity = np.interp(self.extracted['wavelength'][in_order],
+                                    self.sensitivity['wavelength'],
+                                    self.sensitivity['sensitivity'])
             self.extracted['flux'][in_order] *= sensitivity
             self.extracted['fluxerror'][in_order] *= sensitivity
-        self.extracted['fluxe'] = rescale_by_airmass(self.extracted['wavelength'], self.extracted['flux'], self.elevation, self.airmass)
-        self.extracted['fluxerror'] = rescale_by_airmass(self.extracted['wavelength'], self.extracted['fluxerror'], self.elevation, self.airmass)
+        self.extracted['fluxe'] = rescale_by_airmass(self.extracted['wavelength'],
+                                                     self.extracted['flux'],
+                                                     self.elevation,
+                                                     self.airmass)
+        self.extracted['fluxerror'] = rescale_by_airmass(self.extracted['wavelength'],
+                                                         self.extracted['fluxerror'],
+                                                         self.elevation,
+                                                         self.airmass)
 
     @property
     def elevation(self):

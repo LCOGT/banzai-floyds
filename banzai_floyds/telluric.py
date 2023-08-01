@@ -65,21 +65,23 @@ class TelluricCorrector(Stage):
     def do_stage(self, image):
         image.telluric.sort('wavelength')
         # Cross correlate the telluric correction with the spectrum to find the windspeed doppler shift
-        shift = optimize_match_filter([0.0], image.extracted['flux'], image.extracted['fluxerror'], telluric_shift_weights,
-                                      image.extracted['wavelength'], args=(image.telluric['telluric'], image.telluric['wavelength']))
+        shift = optimize_match_filter([0.0], image.extracted['flux'], image.extracted['fluxerror'],
+                                      telluric_shift_weights, image.extracted['wavelength'],
+                                      args=(image.telluric['telluric'], image.telluric['wavelength']))
         # Scale the ozone and O2 bands based on the airmass
 
         o2_scale, h20_scale = minimize(spectrum_telluric_second_deriv, [1.0, 1.0], args=(image.extracted['wavelength'],
-                                                                                         image.extracted['flux'], 
+                                                                                         image.extracted['flux'],
                                                                                          shift,
-                                                                                         image.telluric['telluric'], 
-                                                                                         image.telluric['wavelength']), 
+                                                                                         image.telluric['telluric'],
+                                                                                         image.telluric['wavelength']),
                                        method='Nelder-Mead').x
         # TODO: Minimize the second derivative of the spectrum after the telluric correction is applied
         o2_scale, h20_scale = 1.0, 1.0
         # Scale the water bands by minimizing the match filter statistic between the telluric corrected spectrum
         # and the telluric correction
-        image.extracted['flux'] /= telluric_model((o2_scale, h20_scale), image.extracted['wavelength'], shift, image.telluric['telluric'], image.telluric['wavelength'])
+        image.extracted['flux'] /= telluric_model((o2_scale, h20_scale), image.extracted['wavelength'], shift,
+                                                  image.telluric['telluric'], image.telluric['wavelength'])
         image.meta['TELSHIFT'] = shift[0]
         image.meta['TELO2SCL'] = o2_scale
         image.meta['TELH20SC'] = h20_scale

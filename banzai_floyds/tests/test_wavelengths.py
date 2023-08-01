@@ -1,4 +1,4 @@
-from banzai_floyds.wavelengths import linear_wavelength_solution, identify_peaks, correlate_peaks,\
+from banzai_floyds.wavelengths import linear_wavelength_solution, identify_peaks, correlate_peaks,
     refine_peak_centers, full_wavelength_solution, CalibrateWavelengths
 import numpy as np
 from astropy.table import Table

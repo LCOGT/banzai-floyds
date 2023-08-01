@@ -16,7 +16,6 @@ from types import SimpleNamespace
 from astropy.table import Table
 from banzai.data import HeaderOnly
 from astropy.modeling.models import Polynomial1D
-from astropy.io import fits
 
 
 SKYLINE_LIST = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/skylines.dat'))
@@ -231,7 +230,7 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
     flux = input_flux.copy()
     if do_sensitivity:
-        flux  /= sensitivity
+        flux /= sensitivity
     if do_telluric:
         flux *= telluric
 
