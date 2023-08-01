@@ -20,7 +20,7 @@ def test_sensitivity_stage(mock_standard):
     frame = generate_fake_extracted_frame()
     mock_standard.return_value = Table({'flux': frame.input_flux, 'wavelength': frame.extracted['wavelength']})
     stage = FluxSensitivity(context.Context({'CALIBRATION_FRAME_CLASS':
-                                                 'banzai_floyds.tests.utils.TestCalibrationFrame',
+                                             'banzai_floyds.tests.utils.TestCalibrationFrame',
                                              'db_address': 'foo.sqlite'}))
     frame = stage.do_stage(frame)
     found_sensitivity = frame.sensitivity

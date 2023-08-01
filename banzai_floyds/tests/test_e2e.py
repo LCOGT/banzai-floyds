@@ -16,7 +16,7 @@ from banzai_floyds import settings
 from banzai.utils import file_utils
 from banzai.logs import get_logger
 from types import ModuleType
-from banzai import dbs
+import banzai_floyds.dbs
 
 
 logger = get_logger()
@@ -174,7 +174,7 @@ class TestFringeCreation:
                     runtime_context[setting] = getattr(settings, setting)
 
             observations = {'request': {'configuration': {'LAMPFLAT': {'instrument_configs': {'exposure_count': 1}}}}}
-            instruments = dbs.get_instruments_at_site(site, runtime_context['db_address'])
+            instruments = banzai.dbs.get_instruments_at_site(site, runtime_context['db_address'])
             for instrument in instruments:
                 if 'FLOYDS' in instrument.type:
                     instrument_id = instrument.id
@@ -185,9 +185,10 @@ class TestFringeCreation:
         logger.info('Finished stacking LAMPFLATs')
 
     def test_if_fringe_frames_were_created(self):
-        with dbs.get_session(os.environ['DB_ADDRESS']) as db_session:
-            calibrations_in_db = db_session.query(dbs.CalibrationImage).filter(dbs.CalibrationImage.type == 'FRINGE')
-            calibrations_in_db = calibrations_in_db.filter(dbs.CalibrationImage.is_master).all()
+        with banzai.dbs.get_session(os.environ['DB_ADDRESS']) as db_session:
+            calibrations_in_db = db_session.query(banzai.dbs.CalibrationImage)
+            calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.type == 'FRINGE')
+            calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.is_master).all()
         assert len(calibrations_in_db) == 2
 
 
