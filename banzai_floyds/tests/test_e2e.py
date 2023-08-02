@@ -14,12 +14,12 @@ from banzai.utils.fits_utils import download_from_s3
 import banzai.main
 from banzai_floyds import settings
 from banzai.utils import file_utils
-from banzai.logs import get_logger
 from types import ModuleType
 import banzai_floyds.dbs
+import logging
 
 
-logger = get_logger()
+logger = logging.getLogger('banzai')
 
 app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 

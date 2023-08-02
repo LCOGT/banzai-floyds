@@ -7,8 +7,10 @@ from banzai.utils import import_utils
 from banzai import logs
 from banzai.data import DataProduct
 from banzai import dbs
+import logging
 
-logger = logs.get_logger()
+
+logger = logging.getLogger('banzai')
 
 
 def floyds_run_realtime_pipeline():
