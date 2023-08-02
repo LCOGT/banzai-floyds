@@ -157,10 +157,6 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     def open(self, path, runtime_context) -> Optional[ObservationFrame]:
         image = super().open(path, runtime_context)
 
-        # Get the elevation from the db of the site
-        with get_session(runtime_context.db_address) as db_session:
-            site = db_session.query(Site).filter(Site.name == self.site).first()
-            self.elevation = site.elevation
         # Set a default BIASSEC and TRIMSEC if they are unknown
         if image.meta.get('BIASSEC', 'UNKNOWN').lower() in ['unknown', 'n/a']:
             image.meta['BIASSEC'] = '[2049:2079,1:512]'

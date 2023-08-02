@@ -5,6 +5,10 @@ from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
 from astropy.table import Table
+import pkg_resources
+from glob import glob
+import os
+from astropy.io import fits
 
 
 def get_standard(ra, dec, db_address, offset_threshold=5):
@@ -43,3 +47,16 @@ class FluxStandard(Base):
     frameid = Column(Integer, nullable=True)
     ra = Column(Float)
     dec = Column(Float)
+
+
+def ingest_standards(db_address):
+    standard_files = glob(pkg_resources.resource_filename('banzai_floyds.tests', 'data/standards/*.fits'))
+    for standard_file in standard_files:
+        standard_hdu = fits.open(standard_file)
+        standard_record = FluxStandard(filename=os.path.basename(standard_file),
+                                       filepath=os.path.dirname(standard_file),
+                                       ra=standard_hdu[0].header['RA'],
+                                       dec=standard_hdu[0].header['DEC'])
+        with get_session(db_address) as db_session:
+            db_session.add(standard_record)
+            db_session.commit()
