@@ -43,6 +43,10 @@ class FringeMaker(CalibrationMaker):
     def calibration_type(self):
         return 'LAMPFLAT'
 
+    @property
+    def process_by_group(self):
+        return True
+
     def make_master_calibration_frame(self, images):
         if images[0].fringe is not None:
             reference_fringe = images[0].fringe

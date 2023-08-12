@@ -8,7 +8,7 @@ ORDERED_STAGES = [
     'banzai_floyds.orders.OrderLoader',
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
-    'banzai_floyds.finge.FringeCorrector',
+    'banzai_floyds.fringe.FringeCorrector',
     'banzai_floyds.extract.Extractor'
 ]
 
@@ -18,10 +18,14 @@ SUPPORTED_FRAME_TYPES = ['SPECTRUM', 'LAMPFLAT', 'ARC', 'SKYFLAT']
 
 LAST_STAGE = {
     'SPECTRUM': None,
-    'LAMPFLAT': None,
+    'LAMPFLAT': 'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'ARC': 'banzai_floyds.orders.OrderTweaker',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }
+
+CALIBRATION_STACKER_STAGES['LAMPFLAT'] = ['banzai_floyds.fringe.FringeMaker']
+CALIBRATION_MIN_FRAMES['LAMPFLAT'] = 2
+CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = ('banzai.utils.file_utils.config_to_filename',)
 
 EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': None,
                 'ARC': ['banzai_floyds.wavelengths.CalibrateWavelengths'],

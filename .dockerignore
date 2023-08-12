@@ -1,3 +1,5 @@
 .tox
 banzai_floyds.egg-info
 build
+tmp
+test_data
