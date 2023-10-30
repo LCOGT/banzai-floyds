@@ -193,6 +193,32 @@ class TestFringeCreation:
 
 
 @pytest.mark.e2e
+@pytest.mark.standards
+class TestStandardFileCreation:
+    @pytest.fixture(autouse=True)
+    def process_standards(self):
+        logger.info('Reducing individual frames')
+
+        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'), type='fanout')
+        test_data = ascii.read(DATA_FILELIST)
+        with Connection(os.getenv('FITS_BROKER')) as conn:
+            producer = conn.Producer(exchange=exchange)
+            for row in test_data:
+                archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
+                archive_record['frameid'] = archive_record['id']
+                producer.publish(archive_record)
+            producer.release()
+
+        celery_join()
+        logger.info('Finished reducing individual frames')
+
+    def test_if_standards_were_created(self):
+        test_data = ascii.read(DATA_FILELIST)
+        for expected_file in expected_filenames(test_data):
+            assert os.path.exists(expected_file)
+
+
+@pytest.mark.e2e
 @pytest.mark.science_frames
 class TestScienceFileCreation:
     @pytest.fixture(autouse=True)

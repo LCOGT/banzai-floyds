@@ -8,8 +8,12 @@ ORDERED_STAGES = [
     'banzai_floyds.orders.OrderLoader',
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
+    'banzai_floyds.fringe.FringeLoader',
     'banzai_floyds.fringe.FringeCorrector',
-    'banzai_floyds.extract.Extractor'
+    'banzai_floyds.extract.Extractor',
+    'banzai_floyds.flux.StandardLoader'
+    'banzai_floyds.flux.FluxSensitivity',
+    'banzai_floyds.flux.FluxCalibrator'
 ]
 
 FRAME_SELECTION_CRITERIA = [('type', 'contains', 'FLOYDS')]
@@ -18,7 +22,7 @@ SUPPORTED_FRAME_TYPES = ['SPECTRUM', 'LAMPFLAT', 'ARC', 'SKYFLAT']
 
 LAST_STAGE = {
     'SPECTRUM': None,
-    'LAMPFLAT': 'banzai_floyds.wavelengths.WavelengthSolutionLoader',
+    'LAMPFLAT': 'banzai_floyds.fringe.FringeLoader',
     'ARC': 'banzai_floyds.orders.OrderTweaker',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }

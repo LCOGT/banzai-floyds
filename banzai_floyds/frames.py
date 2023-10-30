@@ -9,7 +9,6 @@ from banzai_floyds.utils.fitting_utils import gauss
 import os
 from astropy.io import fits
 from banzai_floyds.utils.flux_utils import rescale_by_airmass
-from banzai.dbs import get_session, Site
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
@@ -28,10 +27,11 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     def get_1d_and_2d_spectra_products(self, runtime_context):
         filename_1d = self.get_output_filename(runtime_context).replace('.fits', '-1d.fits')
+        self.meta.pop('EXTNAME')
         frame_1d = LCOObservationFrame([HeaderOnly(self.meta.copy()), self['EXTRACTED']],
                                        os.path.join(self.get_output_directory(runtime_context), filename_1d))
         fits_1d = frame_1d.to_fits(runtime_context)
-        fits_1d['SPECTRUM1D'].name = 'SPECTRUM'
+        fits_1d['EXTRACTED'].name = 'SPECTRUM'
         # TODO: Save telluric and sensitivity corrections that were applied
 
         filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')

@@ -106,7 +106,9 @@ def fit_profile_width(data, profile_fits, poly_order=3, background_poly_order=2,
         # Short circuit if the trace is not significantly brighter than the background in this bin
         if peak_snr < 2.0 * median_snr:
             continue
-
+        
+        # TODO: Only fit the profile width where it is much larger than the background value,
+        # otherwise use a heuristic width
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         initial_coeffs = np.zeros(background_poly_order + 1)
         initial_coeffs[0] = np.median(data_to_fit['data']) / data_to_fit['data'][peak]
@@ -140,6 +142,8 @@ def fit_background(data, profile_centers, profile_widths, x_poly_order=2, y_poly
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         initial_coeffs = np.zeros((x_poly_order + 1) + y_poly_order)
         initial_coeffs[0] = np.median(data_to_fit['data']) / data_to_fit['data'][peak]
+        # TODO: Fit the background with a totally fixed profile, and no need to iterate
+        # since our filter is linear 
         best_fit_coeffs = optimize_match_filter(initial_coeffs, data_to_fit['data'],
                                                 data_to_fit['uncertainty'],
                                                 background_fixed_profile,

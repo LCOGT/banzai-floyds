@@ -72,6 +72,13 @@ class StandardLoader(CalibrationUser):
     def calibration_type(self):
         return 'STANDARD'
 
+    def on_missing_master_calibration(self, image):
+        flux_standard = get_standard(image.ra, image.dec, self.runtime_context.db_address)
+        if flux_standard is not None:
+            return super().on_missing_master_calibration(image)
+        else: 
+            return image
+
 
 class FluxCalibrator(Stage):
     def do_stage(self, image):

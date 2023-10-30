@@ -248,7 +248,7 @@ class CalibrateWavelengths(Stage):
     LINES = arc_lines_table()
     # All in angstroms, measured by Curtis McCully
     # FWHM is , 5 pixels
-    INITIAL_LINE_WIDTHS = {1: 15.6, 2: 8.6}
+    INITIAL_LINE_WIDTHS = {1: 10, 2: 6}
     INITIAL_DISPERSIONS = {1: 3.51, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
