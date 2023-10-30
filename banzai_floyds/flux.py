@@ -76,7 +76,7 @@ class StandardLoader(CalibrationUser):
         flux_standard = get_standard(image.ra, image.dec, self.runtime_context.db_address)
         if flux_standard is not None:
             return super().on_missing_master_calibration(image)
-        else: 
+        else:
             return image
 
 
