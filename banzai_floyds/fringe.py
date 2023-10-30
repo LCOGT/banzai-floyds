@@ -5,7 +5,7 @@ from banzai.utils.file_utils import make_calibration_filename_function
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from datetime import datetime
 from scipy.interpolate import CloughTocher2DInterpolator
-from banzai_floyds.matched_filter import maximize_match_filter
+from banzai_floyds.matched_filter import optimize_match_filter
 
 
 import numpy as np
@@ -24,7 +24,7 @@ def find_fringe_offset(image, fringe_spline):
     red_order = trimmed_orders.data == 1
 
     # Maximize the match filter with weight function using the fringe spline
-    return maximize_match_filter([0], image.data[red_order], image.uncertainty[red_order], fringe_weights,
+    return optimize_match_filter([0], image.data[red_order], image.uncertainty[red_order], fringe_weights,
                                  (x2d[red_order], y2d[red_order]), args=(fringe_spline,))[0]
 
 
@@ -42,6 +42,10 @@ class FringeMaker(CalibrationMaker):
     @property
     def calibration_type(self):
         return 'LAMPFLAT'
+
+    @property
+    def process_by_group(self):
+        return True
 
     def make_master_calibration_frame(self, images):
         if images[0].fringe is not None:
@@ -78,10 +82,10 @@ class FringeMaker(CalibrationMaker):
         grouping = self.runtime_context.CALIBRATION_SET_CRITERIA.get(images[0].obstype, [])
         master_frame_class = import_utils.import_attribute(self.runtime_context.CALIBRATION_FRAME_CLASS)
         hdu_order = self.runtime_context.MASTER_CALIBRATION_EXTENSION_ORDER.get(self.calibration_type)
-
         super_frame = master_frame_class.init_master_frame(images, master_calibration_filename,
                                                            grouping_criteria=grouping, hdu_order=hdu_order)
         super_frame.primary_hdu.data[:, :] = super_fringe[:, :]
+        super_frame.primary_hdu.name = 'FRINGE'
         return super_frame
 
 
@@ -108,7 +112,7 @@ class FringeLoader(CalibrationUser):
 
     @property
     def calibration_type(self):
-        return 'FRINGE'
+        return 'LAMPFLAT'
 
     def apply_master_calibration(self, image, master_calibration_image):
         image.fringe = master_calibration_image.fringe

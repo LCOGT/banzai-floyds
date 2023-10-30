@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from astropy.visualization import ZScaleInterval
-from banzai_floyds.frames import FLOYDSObservationFrame
+from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
@@ -13,6 +13,9 @@ from numpy.polynomial.legendre import Legendre
 from astropy.io import ascii
 import pkg_resources
 from types import SimpleNamespace
+from astropy.table import Table
+from banzai.data import HeaderOnly
+from astropy.modeling.models import Polynomial1D
 
 
 SKYLINE_LIST = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/skylines.dat'))
@@ -193,3 +196,61 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
             frame.input_spectrum += strength * gauss(frame.input_spectrum_wavelengths,
                                                      input_line, width)
     return frame
+
+
+def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
+    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
+                                 domain=(0, 1700))
+    wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
+    read_noise = 4.0
+
+    # Let's use a parabola for the flux and linear sensitivity
+    order_pixels1 = np.arange(wavelength_model1.domain[0], wavelength_model1.domain[1] + 1, 1)
+    order_piexels2 = np.arange(wavelength_model2.domain[0], wavelength_model2.domain[1] + 1, 1)
+    wavelengths = np.hstack([wavelength_model1(order_pixels1), wavelength_model2(order_piexels2)])
+    orders = np.hstack([np.ones_like(order_pixels1), 2 * np.ones_like(order_piexels2)])
+    sensitivity_domain = (3000.0, 12000.0)
+    input_flux = Polynomial1D(2, domain=sensitivity_domain, c0=3, c2=-2)(wavelengths) * 3000.0
+
+    sensitivity_wavelengths = np.arange(sensitivity_domain[0], sensitivity_domain[1] + 1, 1)
+    sensitivity_model = Polynomial1D(1, domain=sensitivity_domain, c0=1.0, c1=0.24)
+    sensitivity = sensitivity_model(wavelengths)
+    sensitivity_data = Table({'sensitivity': sensitivity_model(sensitivity_wavelengths),
+                              'wavelength': sensitivity_wavelengths})
+
+    telluric = np.ones_like(wavelengths)
+    # Add the A and B bands
+    telluric -= 40 * gauss(wavelengths, 6940.0, 35)
+    telluric -= 55 * gauss(wavelengths, 7650.0, 30)
+
+    telluric_model = np.ones_like(sensitivity_wavelengths)
+    telluric_model -= 40 * gauss(sensitivity_wavelengths, 6940.0, 35)
+    telluric_model -= 55 * gauss(sensitivity_wavelengths, 7650.0, 30)
+
+    telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
+    flux = input_flux.copy()
+    if do_sensitivity:
+        flux /= sensitivity
+    if do_telluric:
+        flux *= telluric
+
+    flux = np.random.poisson(flux.astype(int)).astype(float)
+    flux += np.random.normal(read_noise, size=flux.shape)
+    flux_error = np.sqrt(read_noise**2 + np.abs(flux))
+    data = Table({'wavelength': wavelengths, 'flux': flux, 'fluxerror': flux_error, 'order_id': orders})
+
+    frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}))], file_path='foo.fits')
+    frame.telluric = telluric_data
+    frame.sensitivity = sensitivity_data
+    frame.input_telluric = telluric[orders == 1]
+    frame.input_sensitivity = sensitivity
+    frame.input_flux = input_flux
+    frame.extracted = data   # Use the elevation of CTIO which is what the telluric correction is scaled to
+    frame.elevation = 2198.0
+    return frame
+
+
+class TestCalibrationFrame(FLOYDSCalibrationFrame):
+    def write(self, context):
+        # Short circuit the write method so we don't actually write anything during testing
+        return

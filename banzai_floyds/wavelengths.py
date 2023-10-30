@@ -4,7 +4,7 @@ from banzai.stages import Stage
 from banzai.calibrations import CalibrationUser
 from banzai_floyds.matched_filter import matched_filter_metric
 from scipy.signal import find_peaks
-from banzai_floyds.matched_filter import maximize_match_filter
+from banzai_floyds.matched_filter import optimize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import ArrayData
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
@@ -123,7 +123,7 @@ def refine_peak_centers(data, error, peaks, line_width, domain=None):
         data_window = data[window]
         error_window = error[window]
         x = np.arange(-half_fit_window, half_fit_window + 1, dtype=float)
-        best_fit_center, best_fit_line_width = maximize_match_filter((0, line_sigma), data_window, error_window,
+        best_fit_center, best_fit_line_width = optimize_match_filter((0, line_sigma), data_window, error_window,
                                                                      centroiding_weights, x)
         centers.append(best_fit_center + peak)
     centers = np.array(centers) + min(domain)
@@ -218,7 +218,7 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     -------
     best_fit_params: 1-d array: (best_fit_tilt, best_fit_line_width, *best_fit_polynomial_coefficients)
     """
-    best_fit_params = maximize_match_filter((initial_tilt, initial_line_width, *initial_polynomial_coefficients), data,
+    best_fit_params = optimize_match_filter((initial_tilt, initial_line_width, *initial_polynomial_coefficients), data,
                                             error, full_wavelength_solution_weights, (x, y), args=(lines,))
     return best_fit_params
 
@@ -248,7 +248,7 @@ class CalibrateWavelengths(Stage):
     LINES = arc_lines_table()
     # All in angstroms, measured by Curtis McCully
     # FWHM is , 5 pixels
-    INITIAL_LINE_WIDTHS = {1: 15.6, 2: 8.6}
+    INITIAL_LINE_WIDTHS = {1: 10, 2: 6}
     INITIAL_DISPERSIONS = {1: 3.51, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}

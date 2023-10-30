@@ -14,12 +14,12 @@ from banzai.utils.fits_utils import download_from_s3
 import banzai.main
 from banzai_floyds import settings
 from banzai.utils import file_utils
-from banzai.logs import get_logger
 from types import ModuleType
-from banzai import dbs
+import banzai_floyds.dbs
+import logging
 
 
-logger = get_logger()
+logger = logging.getLogger('banzai')
 
 app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 
@@ -68,6 +68,7 @@ def expected_filenames(file_table):
 def init(mock_configdb):
     banzai.dbs.create_db(os.environ["DB_ADDRESS"])
     banzai.dbs.populate_instrument_tables(db_address=os.environ["DB_ADDRESS"], configdb_address='http://fakeconfigdb')
+    banzai_floyds.dbs.ingest_standards(os.environ["DB_ADDRESS"])
 
 
 @pytest.mark.e2e
@@ -173,7 +174,7 @@ class TestFringeCreation:
                     runtime_context[setting] = getattr(settings, setting)
 
             observations = {'request': {'configuration': {'LAMPFLAT': {'instrument_configs': {'exposure_count': 1}}}}}
-            instruments = dbs.get_instruments_at_site(site, runtime_context['db_address'])
+            instruments = banzai.dbs.get_instruments_at_site(site, runtime_context['db_address'])
             for instrument in instruments:
                 if 'FLOYDS' in instrument.type:
                     instrument_id = instrument.id
@@ -184,10 +185,37 @@ class TestFringeCreation:
         logger.info('Finished stacking LAMPFLATs')
 
     def test_if_fringe_frames_were_created(self):
-        with dbs.get_session(os.environ['DB_ADDRESS']) as db_session:
-            calibrations_in_db = db_session.query(dbs.CalibrationImage).filter(dbs.CalibrationImage.type == 'FRINGE')
-            calibrations_in_db = calibrations_in_db.filter(dbs.CalibrationImage.is_master).all()
+        with banzai.dbs.get_session(os.environ['DB_ADDRESS']) as db_session:
+            calibrations_in_db = db_session.query(banzai.dbs.CalibrationImage)
+            calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.type == 'FRINGE')
+            calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.is_master).all()
         assert len(calibrations_in_db) == 2
+
+
+@pytest.mark.e2e
+@pytest.mark.standards
+class TestStandardFileCreation:
+    @pytest.fixture(autouse=True)
+    def process_standards(self):
+        logger.info('Reducing individual frames')
+
+        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'), type='fanout')
+        test_data = ascii.read(DATA_FILELIST)
+        with Connection(os.getenv('FITS_BROKER')) as conn:
+            producer = conn.Producer(exchange=exchange)
+            for row in test_data:
+                archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
+                archive_record['frameid'] = archive_record['id']
+                producer.publish(archive_record)
+            producer.release()
+
+        celery_join()
+        logger.info('Finished reducing individual frames')
+
+    def test_if_standards_were_created(self):
+        test_data = ascii.read(DATA_FILELIST)
+        for expected_file in expected_filenames(test_data):
+            assert os.path.exists(expected_file)
 
 
 @pytest.mark.e2e

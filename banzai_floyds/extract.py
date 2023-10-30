@@ -1,7 +1,7 @@
 from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table, vstack
-from banzai_floyds.matched_filter import maximize_match_filter
+from banzai_floyds.matched_filter import optimize_match_filter
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, Legendre2d
 
@@ -71,7 +71,7 @@ def fit_profile(data, profile_width=4):
     for data_to_fit in data.groups:
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         initial_guess = (data_to_fit['y_order'][np.argmax(data_to_fit['data'])], 0.05)
-        best_fit_center, _ = maximize_match_filter(initial_guess, data_to_fit['data'], data_to_fit['uncertainty'],
+        best_fit_center, _ = optimize_match_filter(initial_guess, data_to_fit['data'], data_to_fit['uncertainty'],
                                                    profile_gauss_fixed_width, data_to_fit['y_order'],
                                                    args=(fwhm_to_sigma(profile_width),))
         # If the peak pixel of the match filter is > 2 times the median (or something like that) keep the point
@@ -107,12 +107,14 @@ def fit_profile_width(data, profile_fits, poly_order=3, background_poly_order=2,
         if peak_snr < 2.0 * median_snr:
             continue
 
+        # TODO: Only fit the profile width where it is much larger than the background value,
+        # otherwise use a heuristic width
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         initial_coeffs = np.zeros(background_poly_order + 1)
         initial_coeffs[0] = np.median(data_to_fit['data']) / data_to_fit['data'][peak]
 
         initial_guess = fwhm_to_sigma(default_width), *initial_coeffs
-        best_fit_sigma, *_ = maximize_match_filter(initial_guess, data_to_fit['data'],
+        best_fit_sigma, *_ = optimize_match_filter(initial_guess, data_to_fit['data'],
                                                    data_to_fit['uncertainty'],
                                                    background_fixed_profile_center,
                                                    data_to_fit['y_order'],
@@ -140,7 +142,9 @@ def fit_background(data, profile_centers, profile_widths, x_poly_order=2, y_poly
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         initial_coeffs = np.zeros((x_poly_order + 1) + y_poly_order)
         initial_coeffs[0] = np.median(data_to_fit['data']) / data_to_fit['data'][peak]
-        best_fit_coeffs = maximize_match_filter(initial_coeffs, data_to_fit['data'],
+        # TODO: Fit the background with a totally fixed profile, and no need to iterate
+        # since our filter is linear
+        best_fit_coeffs = optimize_match_filter(initial_coeffs, data_to_fit['data'],
                                                 data_to_fit['uncertainty'],
                                                 background_fixed_profile,
                                                 (data_to_fit['wavelength'], data_to_fit['y_order']),
