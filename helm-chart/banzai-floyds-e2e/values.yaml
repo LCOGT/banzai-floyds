@@ -5,6 +5,6 @@
 replicaCount: 1
 
 image:
-  repository: docker.lco.global/banzai-floyds
-  tag: stable
+  repository: ghcr.io/lcogt/banzai-floyds
+  tag: latest
   pullPolicy: IfNotPresent

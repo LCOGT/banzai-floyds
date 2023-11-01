@@ -1,8 +1,6 @@
-FROM docker.lco.global/banzai:1.11.0
+FROM ghcr.io/lcogt/banzai:1.13.1
 
 USER root
-
-RUN conda install -y coveralls sphinx docutils=0.15 cython
 
 COPY --chown=10087:10000 . /lco/banzai-floyds
 
