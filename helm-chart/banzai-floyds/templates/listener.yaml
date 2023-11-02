@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "banzai-floyds.fullname" . }} -listener
+  name: {{ include "banzai-floyds.fullname" . -}} -listener
   labels:
 {{ include "banzai-floyds.labels" . | indent 4 }}
 spec:
@@ -44,13 +44,13 @@ spec:
             requests:
               cpu: "0.1"
               memory: "128M"
-              limits:
-                cpu: "1"
-                memory: "1Gi"
-            volumeMounts:
-              - name: listener-tmp
-                mountPath: /tmp
-                readOnly: false
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: listener-tmp
+              mountPath: /tmp
+              readOnly: false
       volumes:
         - name: listener-tmp
           emptyDir:

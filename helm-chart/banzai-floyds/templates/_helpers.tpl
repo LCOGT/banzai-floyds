@@ -78,9 +78,9 @@ Define shared environment variables
 External service URLS
 */ -}}
 - name: CONFIGDB_URL
-  value: {{ .Values.banzai.configdbUrl | quote }}
+  value: {{ .Values.banzaiFloyds.configdbUrl | quote }}
 - name: OBSERVATION_PORTAL_URL
-  value: {{ .Values.banzai.observationPortalUrl | quote }}
+  value: {{ .Values.banzaiFloyds.observationPortalUrl | quote }}
 {{/*
 Ingester environment variables
 */ -}}
@@ -123,9 +123,9 @@ Ingester environment variables
 {{- /*
 Optional raw data source environment variables
 */}}
-{{- if .Values.banzai.useDifferentArchiveSources }}
+{{- if .Values.banzaiFloyds.useDifferentArchiveSources }}
 - name: RAW_DATA_API_ROOT
-  value: {{ required "banzai.rawDataApiRoot is required if banzai.useDifferentArchiveSources is specified." .Values.banzai.rawDataApiRoot | quote }}
+  value: {{ required "banzaiFloyds.rawDataApiRoot is required if banzaiFloyds.useDifferentArchiveSources is specified." .Values.banzai.rawDataApiRoot | quote }}
 - name: RAW_DATA_AUTH_TOKEN
   valueFrom:
     secretKeyRef:
@@ -163,17 +163,17 @@ Celery task queue configuration
 - name: RETRY_DELAY
   value: "600"
 - name: CALIBRATE_PROPOSAL_ID
-  value: {{ .Values.banzai.calibrateProposalId | quote }}
+  value: {{ .Values.banzaiFloyds.calibrateProposalId | quote }}
 - name: FITS_BROKER
-  value: {{ .Values.banzai.fitsBroker | quote }}
+  value: {{ .Values.banzaiFloyds.fitsBroker | quote }}
 - name: FITS_EXCHANGE
-  value: {{ .Values.banzai.fitsExchange | quote }}
+  value: {{ .Values.banzaiFloyds.fitsExchange | quote }}
 - name: QUEUE_NAME
-  value: {{ .Values.banzai.queueName | quote }}
+  value: {{ .Values.banzaiFloyds.queueName | quote }}
 - name: CELERY_TASK_QUEUE_NAME
-  value: {{ .Values.banzai.celeryTaskQueueName | quote }}
+  value: {{ .Values.banzaiFloyds.celeryTaskQueueName | quote }}
 - name: BANZAI_WORKER_LOGLEVEL
-  value: {{ .Values.banzai.banzaiWorkerLogLevel | quote }}
+  value: {{ .Values.banzaiFloyds.banzaiWorkerLogLevel | quote }}
 - name: REFERENCE_CATALOG_URL
-  value: {{ .Values.banzai.PhotometryCatalogURL | quote }}
+  value: {{ .Values.banzaiFloyds.PhotometryCatalogURL | quote }}
 {{- end -}}
