@@ -83,7 +83,7 @@ banzaiFloyds:
   calibrateProposalId: calibrate
   banzaiWorkerLogLevel: info
   rawDataApiRoot: http://archiveapi-internal.prod/
-  fitsBroker: rabbitmq.lco.gtn
+  fitsBroker: rabbitmq-ha.prod.svc.cluster.local.
   fitsExchange: archived_fits
   queueName: banzai_floyds_pipeline
   celeryTaskQueueName: banzai_floyds
@@ -102,5 +102,5 @@ postgresql:
 rabbitmq:
   hostname: rabbitmq-ha.prod.svc.cluster.local.
   rabbitmq:
-    username: banzai-floyds
-  vhost: banzai-floyds
+    username: banzai
+  vhost: banzai

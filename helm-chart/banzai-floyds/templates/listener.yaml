@@ -31,7 +31,7 @@ spec:
           command:
             - "banzai_floyds_run_realtime_pipeline"
             - "--post-to-archive"
-            - "--post-to-elasticsearch"
+            - "--post-to-opensearch"
             - "--fpack"
             - "--rlevel=91"
             - "--db-address=$(DB_ADDRESS)"
