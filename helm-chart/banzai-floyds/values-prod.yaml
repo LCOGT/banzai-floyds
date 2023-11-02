@@ -41,6 +41,7 @@ securityContext:
   runAsUser: 10087
   runAsGroup: 10000
 
+# TODO: resolve: this is a duplicate (see above)
 horizontalPodAutoscaler:
   enabled: true
   minReplicas: 3
@@ -49,9 +50,20 @@ horizontalPodAutoscaler:
 
 nodeSelector: {}
 
-tolerations: []
+tolerations:
+  - key: karpenter.lco.earth/provisioner-name
+    operator: Equal
+    value: prod
 
-affinity: {}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+          - key: karpenter.lco.earth/provisioner-name
+            operator: In
+            values:
+              - prod
 
 ingester:
   apiRoot: http://archiveapi-internal.prod/
