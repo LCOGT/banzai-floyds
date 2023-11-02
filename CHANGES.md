@@ -1,3 +1,7 @@
+0.5.0 (2023-11-03)
+------------------
+- Helm value fixes to get the pipeline scheduled on nodes.
+
 0.4.0 (2023-11-02)
 ------------------
 - Helm chart fixes.
