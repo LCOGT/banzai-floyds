@@ -6,6 +6,7 @@ ORDERED_STAGES = [
     'banzai.gain.GainNormalizer',
     'banzai.uncertainty.PoissonInitializer',
     'banzai_floyds.orders.OrderLoader',
+    # Note that we currently don't apply the order tweak, only calculate it and save it in the header
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'banzai_floyds.fringe.FringeLoader',

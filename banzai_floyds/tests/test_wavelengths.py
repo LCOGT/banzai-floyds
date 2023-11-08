@@ -118,7 +118,7 @@ def test_refine_peak_centers():
 
     # Need to figure out how to handle blurred lines and overlapping peaks.
     for fit in fit_list:
-        assert np.min(abs(test_lines - fit)) < 1
+        assert np.min(abs(test_lines - fit)) < 0.2
 
 
 def test_2d_wavelength_solution():

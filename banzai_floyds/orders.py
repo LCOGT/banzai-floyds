@@ -470,3 +470,13 @@ class OrderSolver(Stage):
         image.is_master = True
 
         return image
+
+
+def orders_from_fits(orders_data, orders_meta, data_shape, y_order_shift=0):
+    polynomial_order = orders_meta['POLYORD']
+    coeffs = [np.array([row[f'c{i}'] for i in range(polynomial_order + 1)])
+              for row in orders_data]
+    domains = [(row['domainmin'], row['domainmax']) for row in orders_data]
+    models = [np.polynomial.legendre.Legendre(coeff_set, domain=domain)
+              for coeff_set, domain in zip(coeffs, domains)]
+    return Orders(models, data_shape, [orders_meta['ORDHGHT'] for _ in models])

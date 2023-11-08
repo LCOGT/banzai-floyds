@@ -11,6 +11,7 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordi
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.arc_lines import arc_lines_table
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
+from scipy.special import erf
 from copy import copy
 
 
@@ -57,7 +58,7 @@ def linear_wavelength_solution(data, error, lines, dispersion, line_width, offse
     return Legendre((best_fit_offset, slope), domain=domain)
 
 
-def identify_peaks(data, error, line_width, line_sep, domain=None):
+def identify_peaks(data, error, line_width, line_sep, domain=None, snr_threshold=25.0):
     """
         Detect peaks in spectrum extraction
 
@@ -87,14 +88,25 @@ def identify_peaks(data, error, line_width, line_sep, domain=None):
     normalization = np.convolve(kernel * kernel, 1.0 / error / error, mode='same') ** 0.5
 
     metric = signal / normalization
-    peaks, peak_properties = find_peaks(metric, height=30.0, distance=line_sep)
+    peaks, peak_properties = find_peaks(metric, height=snr_threshold, distance=line_sep)
     peaks += int(min(domain))
     return peaks
 
 
 def centroiding_weights(theta, x):
     center, sigma = theta
-    return gauss(x, center, sigma)
+    # Originally we just used the gaussian, but we really need the gaussian integrated over pixels
+    # which is what this is. This should be more numerically stable without being too much slower
+    upper_pixel_limits = np.zeros_like(x, dtype=float)
+    upper_pixel_limits[:-1] = (x[:-1] + x[1:]) / 2.0
+    # attach the last limit on the array
+    upper_pixel_limits[-1] = x[-1] + (x[-1] - upper_pixel_limits[-2])
+    lower_pixel_limits = np.zeros_like(x, dtype=float)
+    lower_pixel_limits[1:] = (x[:-1] + x[1:]) / 2.0
+    lower_pixel_limits[0] = x[0] - (lower_pixel_limits[1] - x[0])
+    integrated_gauss = -erf((-upper_pixel_limits + center) / (np.sqrt(2) * sigma)) + erf((center - lower_pixel_limits) / (np.sqrt(2) * sigma))
+    integrated_gauss /= 2.0
+    return integrated_gauss
 
 
 def refine_peak_centers(data, error, peaks, line_width, domain=None):
@@ -118,13 +130,15 @@ def refine_peak_centers(data, error, peaks, line_width, domain=None):
     line_sigma = fwhm_to_sigma(line_width)
     half_fit_window = int(3 * line_sigma)
     centers = []
+    x = np.arange(len(data))
     for peak in peaks - min(domain):
         window = slice(int(peak - half_fit_window), int(peak + half_fit_window + 1), 1)
         data_window = data[window]
         error_window = error[window]
-        x = np.arange(-half_fit_window, half_fit_window + 1, dtype=float)
-        best_fit_center, best_fit_line_width = optimize_match_filter((0, line_sigma), data_window, error_window,
-                                                                     centroiding_weights, x)
+        best_fit_center, _ = optimize_match_filter((0, line_sigma), data_window, error_window,
+                                                   centroiding_weights, x[window] - peak,
+                                                   bounds=[(np.min(x[window] - peak), np.max(x[window] - peak)),
+                                                           (1, 3 * line_sigma)])
         centers.append(best_fit_center + peak)
     centers = np.array(centers) + min(domain)
     return centers
@@ -168,7 +182,7 @@ def estimate_distortion(peaks, corresponding_wavelengths, domain, order=4):
     return Legendre.fit(deg=order, x=peaks, y=corresponding_wavelengths, domain=domain)
 
 
-def full_wavelength_solution_weights(theta, coordinates, lines):
+def full_wavelength_solution_weights(theta, coordinates, lines, line_slices):
     """
     Produce a 2d model of arc fluxes given a line list and a wavelength solution polynomial, a tilt, and a line width
 
@@ -183,7 +197,6 @@ def full_wavelength_solution_weights(theta, coordinates, lines):
     model array: 2d array with the match filter weights given the wavelength solution model
     """
     tilt, line_width, *polynomial_coefficients = theta
-    # We could cache only where the model is expected to be nonzero so we don't add a bunch of zeros each iteration
     x, y = coordinates
     tilted_x = tilt_coordinates(tilt, x, y)
     # We could cache the domain of the function
@@ -193,9 +206,9 @@ def full_wavelength_solution_weights(theta, coordinates, lines):
     line_sigma = fwhm_to_sigma(line_width)
     # Some possible optimizations are to truncate around each line (caching which indicies are for each line)
     # say +- 5 sigma around each line
-    for line in lines:
+    for line, line_slice in zip(lines, line_slices):
         # in principle we should set the resolution to be a constant, i.e. delta lambda / lambda, not the overall width
-        model += line['strength'] * gauss(model_wavelengths, line['wavelength'], line_sigma)
+        model[line_slice] += line['strength'] * gauss(model_wavelengths[line_slice], line['wavelength'], line_sigma)
     return model
 
 
@@ -218,8 +231,18 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     -------
     best_fit_params: 1-d array: (best_fit_tilt, best_fit_line_width, *best_fit_polynomial_coefficients)
     """
+    tilted_x = tilt_coordinates(initial_tilt, x, y)
+    # We could cache the domain of the function
+    wavelength_polynomial = Legendre(initial_polynomial_coefficients, domain=(np.min(x), np.max(x)))
+    model_wavelengths = wavelength_polynomial(tilted_x)
+    line_sigma = fwhm_to_sigma(initial_line_width)
+    # Cache where we think the lines are going to be. If we don't have a good initial solution this will create issues
+    # but that's true even if we don't cache here
+    line_slices = [np.where(np.logical_and(model_wavelengths > line['wavelength'] - 5.0 * line_sigma,
+                                           model_wavelengths < line['wavelength'] + 5.0 * line_sigma))
+                   for line in lines]
     best_fit_params = optimize_match_filter((initial_tilt, initial_line_width, *initial_polynomial_coefficients), data,
-                                            error, full_wavelength_solution_weights, (x, y), args=(lines,))
+                                            error, full_wavelength_solution_weights, (x, y), args=(lines, line_slices))
     return best_fit_params
 
 
@@ -252,8 +275,10 @@ class CalibrateWavelengths(Stage):
     INITIAL_DISPERSIONS = {1: 3.51, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    OFFSET_RANGES = {1: np.arange(7200.0, 7700.0, 0.5), 2: np.arange(4300, 4600, 0.5)}
-    MATCH_THRESHOLDS = {1: 20.0, 2: 10.0}
+    OFFSET_RANGES = {1: np.arange(7200.0, 7700.0, 0.5), 2: np.arange(4300, 4800, 0.5)}
+    # These thresholds were set using the data processed by the characterization tests.
+    # The notebook is in the diagnostics folder
+    MATCH_THRESHOLDS = {1: 50.0, 2: 25.0}
     # In pixels
     MIN_LINE_SEPARATIONS = {1: 5.0, 2: 5.0}
     FIT_ORDERS = {1: 3, 2: 2}
@@ -263,13 +288,13 @@ class CalibrateWavelengths(Stage):
     Stage that uses Arcs to fit wavelength solution
     """
     def do_stage(self, image):
-        orders = np.unique(image.orders.data)
-        orders = orders[orders != 0]
+        order_ids = np.unique(image.orders.data)
+        order_ids = order_ids[order_ids != 0]
         initial_wavelength_solutions = []
         # Do a quick extraction by medianing the central region of the order
         extraction_orders = copy(image.orders)
-        extraction_orders.order_heights = self.EXTRACTION_HEIGHT * np.ones_like(orders)
-        for i, order in enumerate(orders):
+        extraction_orders.order_heights = self.EXTRACTION_HEIGHT * np.ones_like(order_ids)
+        for i, order in enumerate(order_ids):
             order_region = get_order_2d_region(extraction_orders.data == order)
             # Note that his flux has an x origin at the x = 0 instead of the domain of the order
             # I don't think it matters though
@@ -304,15 +329,15 @@ class CalibrateWavelengths(Stage):
                                                                     image.orders.domains[i],
                                                                     order=self.FIT_ORDERS[order]))
         image.wavelengths = WavelengthSolution(initial_wavelength_solutions,
-                                               [self.INITIAL_LINE_WIDTHS[order] for order in orders],
-                                               [self.INITIAL_LINE_TILTS[order] for order in orders], orders)
+                                               [self.INITIAL_LINE_WIDTHS[order] for order in order_ids],
+                                               [self.INITIAL_LINE_TILTS[order] for order in order_ids], order_ids)
 
         best_fit_polynomials = []
         best_fit_tilts = []
         best_fit_widths = []
 
         for order, order_center, input_coefficients, input_tilt, input_width in \
-                zip(orders, image.orders._models, image.wavelengths.coefficients, image.wavelengths.line_tilts,
+                zip(order_ids, image.orders._models, image.wavelengths.coefficients, image.wavelengths.line_tilts,
                     image.wavelengths.line_widths):
             x2d, y2d = np.meshgrid(np.arange(image.data.shape[1]), np.arange(image.data.shape[0]))
 

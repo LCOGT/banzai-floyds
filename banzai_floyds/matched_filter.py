@@ -86,7 +86,10 @@ def matched_filter_metric(theta, data, error, weights_function, weights_jacobian
     """
     weights = weights_function(theta, x, *args)
     metric = matched_filter_signal(data, error, weights)
-    metric /= matched_filter_normalization(error, weights)
+    norm = matched_filter_normalization(error, weights)
+    if norm == 0.0:
+        import ipdb; ipdb.set_trace()
+    metric /= norm
     return metric
 
 
@@ -303,7 +306,7 @@ def matched_filter_hessian(theta, data, error, weights_function, weights_jacobia
 
 
 def optimize_match_filter(initial_guess, data, error, weights_function, x, weights_jacobian_function=None,
-                          weights_hessian_function=None, args=None, minimize=False):
+                          weights_hessian_function=None, args=None, minimize=False, bounds=None):
     """
     Find the best fit parameters for a match filter model
 
@@ -349,12 +352,13 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x, weigh
                                      args=(data, error, weights_function,
                                            weights_jacobian_function,
                                            weights_hessian_function, x, *args),
-                                     method='Powell')
+                                     method='Powell', bounds=bounds)
     elif weights_hessian_function is None:
         best_fit = optimize.minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
                                      args=(data, error, weights_function, weights_jacobian_function,
                                            weights_hessian_function, x, *args),
-                                     method='BFGS', jac=lambda *params: sign * matched_filter_jacobian(*params))
+                                     method='BFGS', jac=lambda *params: sign * matched_filter_jacobian(*params),
+                                     bounds=bounds)
     else:
         best_fit = optimize.minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
                                      args=(data, error, weights_function, weights_jacobian_function,
@@ -362,5 +366,5 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x, weigh
                                      method='Newton-CG',
                                      hess=lambda *params: sign * matched_filter_hessian(*params),
                                      jac=lambda *params: sign * matched_filter_jacobian(*params),
-                                     options={'eps': 1e-5})
+                                     options={'eps': 1e-5}, bounds=bounds)
     return best_fit.x
