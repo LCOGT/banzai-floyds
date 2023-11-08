@@ -87,8 +87,6 @@ def matched_filter_metric(theta, data, error, weights_function, weights_jacobian
     weights = weights_function(theta, x, *args)
     metric = matched_filter_signal(data, error, weights)
     norm = matched_filter_normalization(error, weights)
-    if norm == 0.0:
-        import ipdb; ipdb.set_trace()
     metric /= norm
     return metric
 

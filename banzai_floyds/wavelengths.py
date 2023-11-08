@@ -104,7 +104,8 @@ def centroiding_weights(theta, x):
     lower_pixel_limits = np.zeros_like(x, dtype=float)
     lower_pixel_limits[1:] = (x[:-1] + x[1:]) / 2.0
     lower_pixel_limits[0] = x[0] - (lower_pixel_limits[1] - x[0])
-    integrated_gauss = -erf((-upper_pixel_limits + center) / (np.sqrt(2) * sigma)) + erf((center - lower_pixel_limits) / (np.sqrt(2) * sigma))
+    integrated_gauss = -erf((-upper_pixel_limits + center) / (np.sqrt(2) * sigma))
+    integrated_gauss += erf((center - lower_pixel_limits) / (np.sqrt(2) * sigma))
     integrated_gauss /= 2.0
     return integrated_gauss
 
