@@ -14,7 +14,7 @@ from banzai_floyds.utils.flux_utils import rescale_by_airmass
 class FLOYDSObservationFrame(LCOObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, hdu_order: list = None):
         self.orders = None
-        self.wavelengths = None
+        self._wavelengths = None
         self._profile_fits = None
         self._background_fits = None
         self.wavelength_bins = None
@@ -28,10 +28,12 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def get_1d_and_2d_spectra_products(self, runtime_context):
         filename_1d = self.get_output_filename(runtime_context).replace('.fits', '-1d.fits')
         self.meta.pop('EXTNAME')
-        frame_1d = LCOObservationFrame([HeaderOnly(self.meta.copy()), self['EXTRACTED']],
-                                       os.path.join(self.get_output_directory(runtime_context), filename_1d))
+
+        hdus_1d = list(filter(None, [HeaderOnly(self.meta.copy()), self['EXTRACTED']]))
+        frame_1d = LCOObservationFrame(hdus_1d, os.path.join(self.get_output_directory(runtime_context), filename_1d))
         fits_1d = frame_1d.to_fits(runtime_context)
-        fits_1d['EXTRACTED'].name = 'SPECTRUM'
+        if 'EXTRACTED' in fits_1d:
+            fits_1d['EXTRACTED'].name = 'SPECTRUM'
         # TODO: Save telluric and sensitivity corrections that were applied
 
         filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')
@@ -42,8 +44,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         # TODO consider saving the background coeffs or the profile coeffs?
         frame_2d = LCOObservationFrame([hdu for hdu in self._hdus if hdu.name not in ['EXTRACTED']],
                                        os.path.join(self.get_output_directory(runtime_context), filename_2d))
+        frame_2d.meta['L1ID1D'] = filename_1d
         fits_2d = frame_2d.to_fits(runtime_context)
-        fits_2d[0].header['L1ID1D'] = filename_1d
         output_product_2d = DataProduct.from_fits(fits_2d, filename_2d, self.get_output_directory(runtime_context))
         return output_product_1d, output_product_2d
 
@@ -78,6 +80,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.binned_data['weights'] = profile_data[y, x]
 
     @property
+    def profile_fits(self):
+        return self._profile_fits
+
+    @property
     def airmass(self):
         return self.meta['AIRMASS']
 
@@ -102,6 +108,15 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def extracted(self, value):
         self._extracted = value
         self.add_or_update(DataTable(value, name='EXTRACTED', meta=fits.Header({})))
+
+    @property
+    def wavelengths(self):
+        return self._wavelengths
+
+    @wavelengths.setter
+    def wavelengths(self, value):
+        self._wavelengths = value
+        self.add_or_update(HeaderOnly(value.to_header(), name='WAVELENGTHS'))
 
     def apply_sensitivity(self):
         for order_id in [1, 2]:
@@ -135,7 +150,6 @@ class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
                  hdu_order: list = None):
         LCOCalibrationFrame.__init__(self, hdu_list, file_path,  grouping_criteria=grouping_criteria)
         FLOYDSObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
-        self.wavelengths = None
 
     def write(self, runtime_context):
         LCOCalibrationFrame.write(self, runtime_context)

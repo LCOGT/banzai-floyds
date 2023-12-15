@@ -1,5 +1,5 @@
 from banzai.dbs import Base
-from sqlalchemy import Column, Integer, String, Float
+from sqlalchemy import Column, Integer, String, Float, create_engine
 from banzai.dbs import get_session
 from astropy.coordinates import SkyCoord
 from astropy import units
@@ -47,6 +47,15 @@ class FluxStandard(Base):
     frameid = Column(Integer, nullable=True)
     ra = Column(Float)
     dec = Column(Float)
+
+
+def create_db(db_address):
+    # Create an engine for the database
+    engine = create_engine(db_address)
+
+    # Create all tables in the engine
+    # This only needs to be run once on initialization.
+    Base.metadata.create_all(engine)
 
 
 def ingest_standards(db_address):

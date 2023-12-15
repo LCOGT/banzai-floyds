@@ -3,34 +3,13 @@ import numpy as np
 from astropy.table import Table, vstack
 from banzai_floyds.matched_filter import optimize_match_filter
 from numpy.polynomial.legendre import Legendre
-from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, Legendre2d
+from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
+from astropy.modeling import fitting, models
 
 
 def profile_gauss_fixed_width(params, x, sigma):
     center, background_level = params
     return gauss(x, center, sigma) + background_level
-
-
-def background_fixed_profile_center(params, x, center):
-    sigma, *coeffs = params
-    background = Legendre(coef=coeffs, domain=(np.min(x), np.max(x)))
-    return gauss(x, center, sigma) + background(x)
-
-
-def background_fixed_profile(params, coords, center, sigma, x_deg):
-    x, y = coords
-    x_coeffs = params[:x_deg + 1]
-    y_coeffs = np.append([1.0], params[x_deg + 1:])
-    background = Legendre2d(x_coeffs, y_coeffs, domains=((np.min(x), np.max(x)), (np.min(y), np.max(y))))
-    return gauss(y, center, sigma) + background(x, y)
-
-
-def background_only(params, coords, x_deg):
-    x, y = coords
-    x_coeffs = params[:x_deg + 1]
-    y_coeffs = np.append([1.0], params[x_deg + 1:])
-    background = Legendre2d(x_coeffs, y_coeffs, domains=((np.min(x), np.max(x)), (np.min(y), np.max(y))))
-    return background(x, y)
 
 
 def bins_to_bin_edges(bins):
@@ -66,7 +45,7 @@ def bin_data(data, uncertainty, wavelengths, orders, wavelength_bins):
     return binned_data.group_by(('order', 'wavelength_bin'))
 
 
-def fit_profile(data, profile_width=4):
+def fit_profile_centers(data, profile_width=4):
     trace_points = Table({'wavelength': [], 'center': [], 'order': []})
     for data_to_fit in data.groups:
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
@@ -90,10 +69,11 @@ def fit_profile(data, profile_width=4):
     return trace_centers
 
 
-def fit_profile_width(data, profile_fits, poly_order=3, background_poly_order=2, default_width=4):
+def fit_profile_width(data, profile_fits, poly_order=3, default_width=4):
     # In principle, this should be some big 2d fit where we fit the profile center, the profile width,
     #   and the background in one go
     profile_width = {'wavelength': [], 'width': [], 'order': []}
+    fitter = fitting.LevMarLSQFitter()
     for data_to_fit in data.groups:
         wavelength_bin = data_to_fit['wavelength_bin'][0]
         order_id = data_to_fit['order'][0]
@@ -107,18 +87,21 @@ def fit_profile_width(data, profile_fits, poly_order=3, background_poly_order=2,
         if peak_snr < 2.0 * median_snr:
             continue
 
-        # TODO: Only fit the profile width where it is much larger than the background value,
-        # otherwise use a heuristic width
-        # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
-        initial_coeffs = np.zeros(background_poly_order + 1)
-        initial_coeffs[0] = np.median(data_to_fit['data']) / data_to_fit['data'][peak]
+        # Only fit the profile width where it is much larger than the background value
+        peak_window = np.abs(data_to_fit['y_order'] - profile_center) < 2.0 * fwhm_to_sigma(default_width)
 
-        initial_guess = fwhm_to_sigma(default_width), *initial_coeffs
-        best_fit_sigma, *_ = optimize_match_filter(initial_guess, data_to_fit['data'],
-                                                   data_to_fit['uncertainty'],
-                                                   background_fixed_profile_center,
-                                                   data_to_fit['y_order'],
-                                                   args=(profile_center,))
+        # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
+        initial_background = np.median(data_to_fit['data'])
+        initial_amplitude = np.max(data_to_fit['data'][peak_window])
+        model = models.Gaussian1D(amplitude=initial_amplitude, mean=profile_center, 
+                                  stddev=fwhm_to_sigma(default_width))
+        model.mean.fixed = True
+        model += models.Const1D(amplitude=initial_background)
+
+        inv_variance = data_to_fit['uncertainty'][peak_window] ** -2.0
+        best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window], 
+                                y=data_to_fit['data'][peak_window], weights=inv_variance)
+        best_fit_sigma = best_fit_model.stddev_0
 
         profile_width['wavelength'].append(wavelength_bin)
         profile_width['width'].append(best_fit_sigma)
@@ -132,6 +115,8 @@ def fit_profile_width(data, profile_fits, poly_order=3, background_poly_order=2,
 
 def fit_background(data, profile_centers, profile_widths, x_poly_order=2, y_poly_order=4):
     results = Table({'x': [], 'y': [], 'background': []})
+    model = models.Legendre2D(x_degree=x_poly_order, y_degree=y_poly_order)
+    fitter = fitting.LinearLSQFitter()
     for data_to_fit in data.groups:
         wavelength_bin = data_to_fit['wavelength_bin'][0]
         order_id = data_to_fit['order'][0]
@@ -144,23 +129,19 @@ def fit_background(data, profile_centers, profile_widths, x_poly_order=2, y_poly
         initial_coeffs[0] = np.median(data_to_fit['data']) / data_to_fit['data'][peak]
         # TODO: Fit the background with a totally fixed profile, and no need to iterate
         # since our filter is linear
-        best_fit_coeffs = optimize_match_filter(initial_coeffs, data_to_fit['data'],
-                                                data_to_fit['uncertainty'],
-                                                background_fixed_profile,
-                                                (data_to_fit['wavelength'], data_to_fit['y_order']),
-                                                args=(profile_center, profile_width, x_poly_order))
-        # The match filter is insensitive to the normalization, so we do a simply chi^2 fit for the normalization
-        # minimize sum(d - norm * poly)^2 / sig^2)
-        # norm = sum(d / sig^2) / sum(poly / sig^2)
-        normalization = np.sum(data_to_fit['data'] / (data_to_fit['uncertainty'] ** 2.0))
-        best_fit_model = background_fixed_profile(best_fit_coeffs, (data_to_fit['wavelength'], data_to_fit['y_order']),
-                                                  profile_center, profile_width, x_poly_order)
-        normalization /= np.sum(best_fit_model * data_to_fit['uncertainty'] ** -2.0)
-        normalized_coeffs = best_fit_coeffs.copy()
-        normalized_coeffs[:x_poly_order + 1] *= normalization
-        background = background_only(normalized_coeffs,
-                                     (data_to_fit['wavelength'], data_to_fit['y_order']),
-                                     x_poly_order)
+        background_window = np.abs(data_to_fit['y_order'] - profile_center) > 3.0 * fwhm_to_sigma(profile_width)
+        model = models.Legendre2D(x_degree=x_poly_order, y_degree=y_poly_order,
+                                  x_domain=(np.min(data_to_fit['wavelength'][background_window]),
+                                            np.max(data_to_fit['wavelength'][background_window])),
+                                  y_domain=(np.min(data_to_fit['y_order'][background_window]),
+                                            np.max(data_to_fit['y_order'][background_window])))
+        inv_variance = data_to_fit['uncertainty'][background_window] ** -2.0
+        best_fit_model = fitter(model,
+                                x=data_to_fit['wavelength'][background_window],
+                                y=data_to_fit['y_order'][background_window],
+                                z=data_to_fit['data'][background_window],
+                                weights=inv_variance)
+        background = best_fit_model(data_to_fit['x'], data_to_fit['y'])
         background_fit = Table({'x': data_to_fit['x'],
                                 'y': data_to_fit['y'],
                                 'background': background})
@@ -249,19 +230,23 @@ def combine_wavelegnth_bins(wavelength_bins):
     return Table(new_bins)
 
 
-class Extractor(Stage):
+class ProfileFitter(Stage):
     def do_stage(self, image):
         image.wavelength_bins = get_wavelength_bins(image.wavelengths)
         image.binned_data = bin_data(image.data, image.uncertainty, image.wavelengths,
                                      image.orders, image.wavelength_bins)
-        profile_centers = fit_profile(image.binned_data)
+        profile_centers = fit_profile_centers(image.binned_data)
         profile_widths = fit_profile_width(image.binned_data, profile_centers)
         image.profile = profile_centers, profile_widths
+        return image
 
+
+class Extractor(Stage):
+    def do_stage(self, image):
+        profile_centers, profile_widths = image.profile_fits
         background = fit_background(image.binned_data, profile_centers, profile_widths)
         image.background = background
         image.extracted = extract(image.binned_data)
-
         # TODO: Stitching together the orders is going to require flux calibration and probably
         # a scaling due to aperture corrections
 

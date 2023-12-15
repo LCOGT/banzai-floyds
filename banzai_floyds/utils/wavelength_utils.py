@@ -32,6 +32,7 @@ class WavelengthSolution:
             header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain))
             for j, coef in enumerate(polynomial.coef):
                 header[f'COEF{i + 1}_{j}'] = coef
+        header['EXTNAME'] = 'WAVELENGTHS'
         return header
 
     @property

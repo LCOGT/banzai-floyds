@@ -6,7 +6,7 @@ import requests
 from banzai.utils import import_utils
 from banzai import logs
 from banzai.data import DataProduct
-from banzai import dbs
+import banzai_floyds.dbs
 import logging
 
 
@@ -24,6 +24,26 @@ def floyds_run_realtime_pipeline():
     runtime_context = parse_args(settings, extra_console_arguments=extra_console_arguments)
 
     start_listener(runtime_context)
+
+
+def create_db():
+    """
+    Create the database structure.
+
+    This only needs to be run once on initialization of the database.
+    """
+    parser = argparse.ArgumentParser("Create the database.\n\n"
+                                     "This only needs to be run once on initialization of the database.")
+
+    parser.add_argument("--log-level", default='debug', choices=['debug', 'info', 'warning',
+                                                                 'critical', 'fatal', 'error'])
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    args = parser.parse_args()
+    logs.set_log_level(args.log_level)
+
+    banzai_floyds.dbs.create_db(args.db_address)
 
 
 def floyds_add_spectrophotometric_standard():

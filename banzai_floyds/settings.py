@@ -11,8 +11,9 @@ ORDERED_STAGES = [
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'banzai_floyds.fringe.FringeLoader',
     'banzai_floyds.fringe.FringeCorrector',
+    'banzai_floyds.extract.ProfileFitter',
     'banzai_floyds.extract.Extractor',
-    'banzai_floyds.flux.StandardLoader'
+    'banzai_floyds.flux.StandardLoader',
     'banzai_floyds.flux.FluxSensitivity',
     'banzai_floyds.flux.FluxCalibrator'
 ]

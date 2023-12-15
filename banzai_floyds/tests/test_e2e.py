@@ -206,6 +206,7 @@ class TestStandardFileCreation:
             for row in test_data:
                 archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
                 archive_record['frameid'] = archive_record['id']
+                # TODO: Only publish the message if this is a standard
                 producer.publish(archive_record)
             producer.release()
 
@@ -232,6 +233,7 @@ class TestScienceFileCreation:
             for row in test_data:
                 archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
                 archive_record['frameid'] = archive_record['id']
+                # TODO: Only publish the message if this is not a standard
                 producer.publish(archive_record)
             producer.release()
 

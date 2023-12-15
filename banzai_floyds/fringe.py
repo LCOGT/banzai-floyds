@@ -54,7 +54,9 @@ class FringeMaker(CalibrationMaker):
             reference_fringe = np.zeros_like(images[0].data)
             in_order = images[0].orders.data == 1
             reference_fringe[in_order] = images[0].data[in_order]
-        reference_fringe_spline = fit_smooth_fringe_spline(reference_fringe, reference_fringe > 0)
+        # Only fit where the fringe data is > 0.1. Anything smaller than this and we get really, bad residuals
+        # as we get close to zero
+        reference_fringe_spline = fit_smooth_fringe_spline(reference_fringe, reference_fringe > 0.1)
         super_fringe = np.zeros_like(images[0].data)
         super_fringe_weights = np.zeros_like(images[0].data)
         for image in images:
@@ -63,14 +65,17 @@ class FringeMaker(CalibrationMaker):
             # find the offset to the rest of the splines:
             fringe_offset = find_fringe_offset(image, reference_fringe_spline)
             # Interpolate onto the a normal pixel grid using the order offset
-            fringe_spline = fit_smooth_fringe_spline(image.data, image.orders.data == 1)
-
+            # We want a S/N of greater than 10 in the data
+            high_sn = image.data / image.uncertainty > 10.0
+            data_to_fit = np.logical_and(image.orders.data == 1, high_sn)
+            fringe_spline = fit_smooth_fringe_spline(image.data, data_to_fit)
+                                                     
             # TODO: Someone needs to check this transformation
-            shifted_order = get_order_2d_region(image.orders.shifted(-fringe_offset).data == 1)
-            offset_coordinates = [x[shifted_order].ravel(), y[shifted_order].ravel() + fringe_offset]
+            shifted_order = np.logical_and(image.orders.shifted(-fringe_offset).data == 1, high_sn)
+            offset_coordinates = [x[shifted_order], y[shifted_order] + fringe_offset]
             this_fringe = fringe_spline(np.array(offset_coordinates).T)
             this_fringe /= np.median(this_fringe[this_fringe > 0])
-            super_fringe[shifted_order] += this_fringe.reshape(shifted_order[0].shape)
+            super_fringe[shifted_order] += this_fringe
             super_fringe_weights[shifted_order] += 1.0
         # write out the calibration frame
         super_fringe[super_fringe_weights > 0] /= super_fringe_weights[super_fringe_weights > 0]
@@ -91,15 +96,19 @@ class FringeMaker(CalibrationMaker):
 
 class FringeCorrector(Stage):
     def do_stage(self, image):
-        fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0)
+        # Only divide the fringe out where the the divisor is > 0.1 so we don't amplify
+        # artifacts due to the edge of the slit
+        fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0.1)
         fringe_offset = find_fringe_offset(image, fringe_spline)
         x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
         in_order = image.orders.data == 1
         fringe_correction = fringe_spline(np.array([x[in_order], y[in_order] - fringe_offset]).T)
-        # TODO: Make sure the division propagates the uncertainty correctly
-        image.data[in_order] /= fringe_correction
+        to_correct = in_order.copy()
+        to_correct[in_order] *= fringe_correction > 0.1
+        image.data[to_correct] /= fringe_correction[fringe_correction > 0.1]
+        image.uncertainty[to_correct] /= fringe_correction[fringe_correction > 0.1]
+        image.meta['L1FRNGOF'] = (fringe_offset, 'Fringe offset (pixels)')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
-
         return image
 
 

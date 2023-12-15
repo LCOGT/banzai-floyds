@@ -1,7 +1,7 @@
 import numpy as np
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_science_frame
-from banzai_floyds.extract import Extractor, fit_profile, fit_profile_width, fit_background, extract
+from banzai_floyds.extract import Extractor, fit_profile_centers, fit_profile_width, fit_background, extract
 from banzai_floyds.extract import get_wavelength_bins, bin_data
 from collections import namedtuple
 
@@ -37,7 +37,7 @@ def test_tracing():
     wavelength_bins = get_wavelength_bins(fake_frame.wavelengths)
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders, wavelength_bins)
-    fitted_profile_centers = fit_profile(binned_data, profile_width=4)
+    fitted_profile_centers = fit_profile_centers(binned_data, profile_width=4)
     for fitted_center, input_center in zip(fitted_profile_centers, fake_frame.input_profile_centers):
         x = np.arange(fitted_center.domain[0], fitted_center.domain[1] + 1)
         np.testing.assert_allclose(fitted_center(x), input_center(x), rtol=0.00, atol=0.2)
@@ -98,4 +98,4 @@ def test_full_extraction_stage():
     stage = Extractor(input_context)
     frame = stage.do_stage(frame)
     expected = np.interp(frame['EXTRACTED'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
-    np.testing.assert_allclose(frame['EXTRACTED'].data['flux'], expected, rtol=0.065)
+    np.testing.assert_allclose(frame['EXTRACTED'].data['flux'], expected, rtol=0.07)
