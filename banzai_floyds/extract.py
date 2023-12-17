@@ -101,7 +101,7 @@ def fit_profile_width(data, profile_fits, poly_order=3, default_width=4):
         inv_variance = data_to_fit['uncertainty'][peak_window] ** -2.0
         best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window], 
                                 y=data_to_fit['data'][peak_window], weights=inv_variance)
-        best_fit_sigma = best_fit_model.stddev_0
+        best_fit_sigma = best_fit_model.stddev_0.value
 
         profile_width['wavelength'].append(wavelength_bin)
         profile_width['width'].append(best_fit_sigma)
@@ -141,7 +141,7 @@ def fit_background(data, profile_centers, profile_widths, x_poly_order=2, y_poly
                                 y=data_to_fit['y_order'][background_window],
                                 z=data_to_fit['data'][background_window],
                                 weights=inv_variance)
-        background = best_fit_model(data_to_fit['x'], data_to_fit['y'])
+        background = best_fit_model(data_to_fit['wavelength'], data_to_fit['y_order'])
         background_fit = Table({'x': data_to_fit['x'],
                                 'y': data_to_fit['y'],
                                 'background': background})
