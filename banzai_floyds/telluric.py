@@ -11,7 +11,7 @@ from scipy.signal import savgol_filter
 class TelluricMaker(Stage):
     def do_stage(self, image):
         flux_standard = get_standard(image.ra, image.dec,
-                                     self.runtime_context.db_address)
+                                     self.runtime_context)
         if flux_standard is None:
             return image
 
@@ -34,6 +34,9 @@ class TelluricMaker(Stage):
         correction /= image.airmass
 
         image.telluric = Table({'telluric': correction, 'wavelength': data['wavelength']})
+
+        # save the telluric data as a new extension
+        raise NotImplementedError
         return image
 
 

@@ -9,6 +9,8 @@ from banzai_floyds.utils.fitting_utils import gauss
 import os
 from astropy.io import fits
 from banzai_floyds.utils.flux_utils import rescale_by_airmass
+from astropy.coordinates import SkyCoord
+from astropy import units
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
@@ -24,12 +26,23 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.sensitivity = None
         self.telluric = None
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
+        # Override ra and dec to use the RA and Dec values because the CRVAL keywords don't really
+        # have a lot of meaning when the slitmask is in place
+        try:
+            coord = SkyCoord(self.meta.get('CAT-RA'), self.meta.get('CAT-DEC'),
+                             unit=(units.hourangle, units.degree))
+            self.ra = coord.ra.deg
+            self.dec = coord.dec.deg
+        except (ValueError, TypeError):
+            self.ra, self.dec = np.nan, np.nan
 
     def get_1d_and_2d_spectra_products(self, runtime_context):
         filename_1d = self.get_output_filename(runtime_context).replace('.fits', '-1d.fits')
         self.meta.pop('EXTNAME')
-
-        hdus_1d = list(filter(None, [HeaderOnly(self.meta.copy()), self['EXTRACTED']]))
+        hdus_1d = list(filter(None, [HeaderOnly(self.meta.copy(), name='SCI'), 
+                                     self['EXTRACTED'],
+                                     self['SENSITIVITY'],
+                                     self['TELLURIC']]))
         frame_1d = LCOObservationFrame(hdus_1d, os.path.join(self.get_output_directory(runtime_context), filename_1d))
         fits_1d = frame_1d.to_fits(runtime_context)
         if 'EXTRACTED' in fits_1d:
@@ -42,7 +55,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         output_product_1d = DataProduct.from_fits(fits_1d, filename_1d, self.get_output_directory(runtime_context))
 
         # TODO consider saving the background coeffs or the profile coeffs?
-        frame_2d = LCOObservationFrame([hdu for hdu in self._hdus if hdu.name not in ['EXTRACTED']],
+        frame_2d = LCOObservationFrame([hdu for hdu in self._hdus
+                                        if hdu.name not in ['EXTRACTED', 'SENSITIVITY', 'TELLURIC']],
                                        os.path.join(self.get_output_directory(runtime_context), filename_2d))
         frame_2d.meta['L1ID1D'] = filename_1d
         fits_2d = frame_2d.to_fits(runtime_context)
@@ -120,17 +134,18 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     def apply_sensitivity(self):
         for order_id in [1, 2]:
-            in_order = self.extracted['order_id'] == order_id
+            in_order = self.extracted['order'] == order_id
+            sensitivity_order = self.sensitivity['order'] == order_id
             # Divide the spectrum by the sensitivity function, correcting for airmass
             sensitivity = np.interp(self.extracted['wavelength'][in_order],
-                                    self.sensitivity['wavelength'],
-                                    self.sensitivity['sensitivity'])
+                                    self.sensitivity['wavelength'][sensitivity_order],
+                                    self.sensitivity['sensitivity'][sensitivity_order])
             self.extracted['flux'][in_order] *= sensitivity
             self.extracted['fluxerror'][in_order] *= sensitivity
-        self.extracted['fluxe'] = rescale_by_airmass(self.extracted['wavelength'],
-                                                     self.extracted['flux'],
-                                                     self.elevation,
-                                                     self.airmass)
+        self.extracted['flux'] = rescale_by_airmass(self.extracted['wavelength'],
+                                                    self.extracted['flux'],
+                                                    self.elevation,
+                                                    self.airmass)
         self.extracted['fluxerror'] = rescale_by_airmass(self.extracted['wavelength'],
                                                          self.extracted['fluxerror'],
                                                          self.elevation,
@@ -138,11 +153,11 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @property
     def elevation(self):
-        return self.meta['ELEVATIO']
+        return self.meta['HEIGHT']
 
     @elevation.setter
     def elevation(self, value):
-        self.meta['ELEVATIO'] = value
+        self.meta['HEIGHT'] = value
 
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
@@ -153,6 +168,15 @@ class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
 
     def write(self, runtime_context):
         LCOCalibrationFrame.write(self, runtime_context)
+
+
+class FLOYDSStandardFrame(FLOYDSCalibrationFrame):
+    def to_db_record(self, output_product):
+        # Only save the 1d extraction to the db
+        if 'EXTRACTED' in output_product:
+            return super().to_db_record(output_product)
+        else:
+            return None
 
 
 class FLOYDSFrameFactory(LCOFrameFactory):

@@ -11,7 +11,7 @@ import os
 from astropy.io import fits
 
 
-def get_standard(ra, dec, db_address, offset_threshold=5):
+def get_standard(ra, dec, runtime_context, offset_threshold=5):
     """
     Check if a position is in the table of flux standards
 
@@ -26,17 +26,19 @@ def get_standard(ra, dec, db_address, offset_threshold=5):
     """
     found_standard = None
     test_coordinate = SkyCoord(ra, dec, unit=(units.deg, units.deg))
-    with get_session(db_address) as db_session:
+    with get_session(runtime_context.db_address) as db_session:
         standards = db_session.query(FluxStandard).all()
         for standard in standards:
             standard_coordinate = SkyCoord(standard.ra, standard.dec, unit=(units.deg, units.deg))
-            if standard_coordinate.offset(test_coordinate) < (offset_threshold * units.arcsec):
+            if standard_coordinate.separation(test_coordinate) < (offset_threshold * units.arcsec):
                 found_standard = standard
     if found_standard is not None:
-        found_standard = open_fits_file({'path': found_standard.filepath, 'frameid': found_standard.frame_id,
-                                         'filename': found_standard.filename})
-
-    return Table(found_standard)
+        found_standard = open_fits_file({'path': os.path.join(found_standard.filepath, found_standard.filename),
+                                         'frameid': found_standard.frameid,
+                                         'filename': found_standard.filename}, runtime_context)
+        return Table(found_standard[0][1].data)
+    else:
+        return None
 
 
 class FluxStandard(Base):
@@ -59,7 +61,7 @@ def create_db(db_address):
 
 
 def ingest_standards(db_address):
-    standard_files = glob(pkg_resources.resource_filename('banzai_floyds.tests', 'data/standards/*.fits'))
+    standard_files = glob(pkg_resources.resource_filename('banzai_floyds', 'data/standards/*.fits'))
     for standard_file in standard_files:
         standard_hdu = fits.open(standard_file)
         standard_record = FluxStandard(filename=os.path.basename(standard_file),

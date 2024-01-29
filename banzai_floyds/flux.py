@@ -6,6 +6,7 @@ import numpy as np
 from numpy.polynomial.legendre import Legendre
 from scipy.signal import savgol_filter
 from banzai_floyds.utils.flux_utils import rescale_by_airmass
+from astropy.table import Table
 
 
 class FluxSensitivity(Stage):
@@ -14,15 +15,16 @@ class FluxSensitivity(Stage):
     WAVELENGTH_DOMAIN = [3000, 11000]
 
     def do_stage(self, image):
-        flux_standard = get_standard(image.ra, image.dec, self.runtime_context.db_address)
-        if flux_standard is None:
+        flux_standard = get_standard(image.ra, image.dec, self.runtime_context)
+        if flux_standard is None or len(flux_standard) == 0:
             return image
 
         flux_standard.sort('wavelength')
         sensitivity = np.zeros_like(image.extracted['wavelength'].data)
+        sensitivity_order = np.zeros_like(sensitivity, dtype=np.uint8)
         # Red and blue respectively
         for order_id in [1, 2]:
-            in_order = image.extracted['order_id'] == order_id
+            in_order = image.extracted['order'] == order_id
             data_to_fit = image.extracted[in_order]
             # TODO: check this value to make sure we are past the dip in the senstivity function
             wavelengths_to_fit = data_to_fit['wavelength'] > 4600.0
@@ -55,11 +57,16 @@ class FluxSensitivity(Stage):
                                                                7, 3)
             # We have to use this temp sensitivity variable because of how python does numpy array copying
             sensitivity[in_order] = this_sensitivity
+            sensitivity_order[in_order] = order_id
         # Scale the flux standard to airmass = 1
         sensitivity = rescale_by_airmass(image.extracted['wavelength'], sensitivity, image.elevation, image.airmass)
 
         # Save the flux normalization to the db
-        image.sensitivity = sensitivity
+        image.sensitivity = Table({'wavelength': image.extracted['wavelength'].data, 'sensitivity': sensitivity,
+                                   'order': sensitivity_order})
+        # convert into a FLOYDSStandardFrame
+        raise NotImplementedError
+
         return image
 
 
@@ -67,6 +74,7 @@ class StandardLoader(CalibrationUser):
     def apply_master_calibration(self, image, master_calibration_image):
         image.sensitivity = master_calibration_image.sensitivity
         image.telluric = master_calibration_image.telluric
+        image.meta['L1STNDRD'] = master_calibration_image.filename
         return image
 
     @property
@@ -74,7 +82,7 @@ class StandardLoader(CalibrationUser):
         return 'STANDARD'
 
     def on_missing_master_calibration(self, image):
-        flux_standard = get_standard(image.ra, image.dec, self.runtime_context.db_address)
+        flux_standard = get_standard(image.ra, image.dec, self.runtime_context)
         if flux_standard is None:
             return super().on_missing_master_calibration(image)
         else:
