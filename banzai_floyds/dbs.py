@@ -1,6 +1,6 @@
 from banzai.dbs import Base
 from sqlalchemy import Column, Integer, String, Float, create_engine
-from banzai.dbs import get_session
+from banzai.dbs import get_session, add_or_update_record
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
@@ -64,10 +64,9 @@ def ingest_standards(db_address):
     standard_files = glob(pkg_resources.resource_filename('banzai_floyds', 'data/standards/*.fits'))
     for standard_file in standard_files:
         standard_hdu = fits.open(standard_file)
-        standard_record = FluxStandard(filename=os.path.basename(standard_file),
-                                       filepath=os.path.dirname(standard_file),
-                                       ra=standard_hdu[0].header['RA'],
-                                       dec=standard_hdu[0].header['DEC'])
         with get_session(db_address) as db_session:
-            db_session.add(standard_record)
-            db_session.commit()
+            attributes = {'filename': os.path.basename(standard_file),
+                          'filepath': os.path.dirname(standard_file),
+                          'ra': standard_hdu[0].header['RA'],
+                          'dec': standard_hdu[0].header['DEC']}
+            add_or_update_record(db_session, FluxStandard, attributes, attributes)

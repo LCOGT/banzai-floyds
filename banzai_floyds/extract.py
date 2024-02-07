@@ -5,11 +5,14 @@ from banzai_floyds.matched_filter import optimize_match_filter
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 from astropy.modeling import fitting, models
+from banzai.logs import get_logger
+
+logger = get_logger()
 
 
 def profile_gauss_fixed_width(params, x, sigma):
-    center, background_level = params
-    return gauss(x, center, sigma) + background_level
+    center, = params
+    return gauss(x, center, sigma)
 
 
 def bins_to_bin_edges(bins):
@@ -49,10 +52,10 @@ def fit_profile_centers(data, profile_width=4):
     trace_points = Table({'wavelength': [], 'center': [], 'order': []})
     for data_to_fit in data.groups:
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
-        initial_guess = (data_to_fit['y_order'][np.argmax(data_to_fit['data'])], 0.05)
-        best_fit_center, _ = optimize_match_filter(initial_guess, data_to_fit['data'], data_to_fit['uncertainty'],
-                                                   profile_gauss_fixed_width, data_to_fit['y_order'],
-                                                   args=(fwhm_to_sigma(profile_width),))
+        initial_guess = (data_to_fit['y_order'][np.argmax(data_to_fit['data'])],)
+        best_fit_center, = optimize_match_filter(initial_guess, data_to_fit['data'], data_to_fit['uncertainty'],
+                                                 profile_gauss_fixed_width, data_to_fit['y_order'],
+                                                 args=(fwhm_to_sigma(profile_width),))
         # If the peak pixel of the match filter is > 2 times the median (or something like that) keep the point
         peak = np.argmin(np.abs(data_to_fit['y_order'] - best_fit_center))
         median_snr = np.median(np.abs(data_to_fit['data'] / data_to_fit['uncertainty']))
@@ -91,17 +94,13 @@ def fit_profile_width(data, profile_fits, poly_order=3, default_width=4):
         peak_window = np.abs(data_to_fit['y_order'] - profile_center) < 2.0 * fwhm_to_sigma(default_width)
 
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
-        initial_background = np.median(data_to_fit['data'])
         initial_amplitude = np.max(data_to_fit['data'][peak_window])
-        model = models.Gaussian1D(amplitude=initial_amplitude, mean=profile_center, 
+        model = models.Gaussian1D(amplitude=initial_amplitude, mean=profile_center,
                                   stddev=fwhm_to_sigma(default_width))
-        model.mean.fixed = True
-        model += models.Const1D(amplitude=initial_background)
-
         inv_variance = data_to_fit['uncertainty'][peak_window] ** -2.0
-        best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window], 
+        best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window],
                                 y=data_to_fit['data'][peak_window], weights=inv_variance)
-        best_fit_sigma = best_fit_model.stddev_0.value
+        best_fit_sigma = best_fit_model.stddev.value
 
         profile_width['wavelength'].append(wavelength_bin)
         profile_width['width'].append(best_fit_sigma)
@@ -178,7 +177,7 @@ def extract(binned_data):
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
 
-    results = {'flux': [], 'fluxerror': [], 'wavelength': [], 'binwidth': [], 'order': []}
+    results = {'fluxraw': [], 'fluxrawerr': [], 'wavelength': [], 'binwidth': [], 'order': []}
     for data_to_sum in binned_data.groups:
         wavelength_bin = data_to_sum['wavelength_bin'][0]
         wavelength_bin_width = data_to_sum['wavelength_bin_width'][0]
@@ -189,9 +188,9 @@ def extract(binned_data):
         flux *= data_to_sum['uncertainty'] ** -2
         flux = np.sum(flux)
         flux_normalization = np.sum(data_to_sum['weights']**2 * data_to_sum['uncertainty']**-2)
-        results['flux'].append(flux / flux_normalization)
+        results['fluxraw'].append(flux / flux_normalization)
         uncertainty = np.sqrt(np.sum(data_to_sum['weights']) / flux_normalization)
-        results['fluxerror'].append(uncertainty)
+        results['fluxrawerr'].append(uncertainty)
         results['wavelength'].append(wavelength_bin)
         results['binwidth'].append(wavelength_bin_width)
         results['order'].append(order_id)
@@ -237,7 +236,18 @@ class ProfileFitter(Stage):
                                      image.orders, image.wavelength_bins)
         profile_centers = fit_profile_centers(image.binned_data)
         profile_widths = fit_profile_width(image.binned_data, profile_centers)
-        image.profile = profile_centers, profile_widths
+        image.profile_fits = profile_centers, profile_widths
+        profile_data = np.zeros(image.orders.data.shape)
+        x2d, y2d = np.meshgrid(np.arange(profile_data.shape[1]), np.arange(profile_data.shape[0]))
+        order_iter = zip(image.orders.order_ids, profile_centers, profile_widths, image.orders.center(x2d))
+        for order_id, profile_center, profile_width, order_center in order_iter:
+            in_order = image.orders.data == order_id
+            wavelengths = image.wavelengths.data[in_order]
+            # TODO: Make sure this is normalized correctly
+            # Note that the widths in the value set here are sigma and not fwhm
+            profile_data[in_order] = gauss(y2d[in_order] - order_center[in_order],
+                                           profile_center(wavelengths), profile_width(wavelengths))
+        image.profile = profile_data
         return image
 
 

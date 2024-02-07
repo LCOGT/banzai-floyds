@@ -15,12 +15,14 @@ ORDERED_STAGES = [
     'banzai_floyds.extract.Extractor',
     'banzai_floyds.flux.StandardLoader',
     'banzai_floyds.flux.FluxSensitivity',
-    'banzai_floyds.flux.FluxCalibrator'
+#   'banzai_floyds.flux.FluxCalibrator',
+#   'banzai_floyds.telluric.TelluricMaker',
+#   'banzai_floyds.telluric.TelluricCorrector'
 ]
 
 FRAME_SELECTION_CRITERIA = [('type', 'contains', 'FLOYDS')]
 
-SUPPORTED_FRAME_TYPES = ['SPECTRUM', 'LAMPFLAT', 'ARC', 'SKYFLAT']
+SUPPORTED_FRAME_TYPES = ['SPECTRUM', 'LAMPFLAT', 'ARC', 'SKYFLAT', 'STANDARD']
 
 LAST_STAGE = {
     'SPECTRUM': None,

@@ -18,7 +18,7 @@ class TelluricMaker(Stage):
         flux_standard.sort('wavelength')
         # Divide out the known flux of the source and the
         # sensitivity corrected flux to get the telluric correction
-        in_order = image.extracted['order_id'] == 1
+        in_order = image.extracted['order'] == 1
         data = image.extracted[in_order]
         correction = np.ones_like(data['wavelength'])
 
@@ -34,9 +34,6 @@ class TelluricMaker(Stage):
         correction /= image.airmass
 
         image.telluric = Table({'telluric': correction, 'wavelength': data['wavelength']})
-
-        # save the telluric data as a new extension
-        raise NotImplementedError
         return image
 
 

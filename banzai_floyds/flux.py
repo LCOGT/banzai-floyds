@@ -7,6 +7,7 @@ from numpy.polynomial.legendre import Legendre
 from scipy.signal import savgol_filter
 from banzai_floyds.utils.flux_utils import rescale_by_airmass
 from astropy.table import Table
+from banzai.utils import import_utils
 
 
 class FluxSensitivity(Stage):
@@ -23,6 +24,7 @@ class FluxSensitivity(Stage):
         sensitivity = np.zeros_like(image.extracted['wavelength'].data)
         sensitivity_order = np.zeros_like(sensitivity, dtype=np.uint8)
         # Red and blue respectively
+        import ipdb; ipdb.set_trace()
         for order_id in [1, 2]:
             in_order = image.extracted['order'] == order_id
             data_to_fit = image.extracted[in_order]
@@ -38,10 +40,10 @@ class FluxSensitivity(Stage):
                                       flux_standard['flux'])
             # Fit a low order polynomial to the data between the telluric regions in the red
             sensitivity_polynomial = Legendre.fit(data_to_fit[wavelengths_to_fit]['wavelength'],
-                                                  expected_flux / data_to_fit[wavelengths_to_fit]['flux'],
+                                                  expected_flux / data_to_fit[wavelengths_to_fit]['fluxraw'],
                                                   self.SENSITIVITY_POLY_DEGREE[order_id],
                                                   self.WAVELENGTH_DOMAIN,
-                                                  w=data_to_fit[wavelengths_to_fit]['fluxerror'] ** -2.0)
+                                                  w=data_to_fit[wavelengths_to_fit]['fluxrawerr'] ** -2.0)
 
             # Divide the data by the flux standard in the blue
             polynomial_wavelengths = data_to_fit[data_to_fit['wavelength'] > 5000]['wavelength']
@@ -53,7 +55,7 @@ class FluxSensitivity(Stage):
                                       flux_standard['wavelength'],
                                       flux_standard['flux'])
             # We choose a window size of 7 which is just a little bigger than the resolution element
-            this_sensitivity[blue_wavelengths] = savgol_filter(expected_flux / data_to_fit['flux'][blue_wavelengths],
+            this_sensitivity[blue_wavelengths] = savgol_filter(expected_flux / data_to_fit['fluxraw'][blue_wavelengths],
                                                                7, 3)
             # We have to use this temp sensitivity variable because of how python does numpy array copying
             sensitivity[in_order] = this_sensitivity
@@ -65,9 +67,17 @@ class FluxSensitivity(Stage):
         image.sensitivity = Table({'wavelength': image.extracted['wavelength'].data, 'sensitivity': sensitivity,
                                    'order': sensitivity_order})
         # convert into a FLOYDSStandardFrame
-        raise NotImplementedError
+        image.obstype = 'STANDARD'
+        calibration_frame_class = import_utils.import_attribute(self.runtime_context.CALIBRATION_FRAME_CLASS)
+        cal_frame = calibration_frame_class.from_frame(image, self.runtime_context)
+        # We have to set the instrument by hand here because this is normally done in the factory
+        frame_factory = import_utils.import_attribute(self.runtime_context.FRAME_FACTORY)
+        cal_frame.instrument = frame_factory.get_instrument_from_header(image.primary_hdu.meta,
+                                                                        self.runtime_context.db_address)
+        cal_frame.is_master = True
+        cal_frame.is_bad = False
 
-        return image
+        return cal_frame
 
 
 class StandardLoader(CalibrationUser):
