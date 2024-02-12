@@ -48,7 +48,7 @@ def bin_data(data, uncertainty, wavelengths, orders, wavelength_bins):
     return binned_data.group_by(('order', 'wavelength_bin'))
 
 
-def fit_profile_centers(data, profile_width=4):
+def fit_profile_centers(data, polynomial_order=9, profile_width=4):
     trace_points = Table({'wavelength': [], 'center': [], 'order': []})
     for data_to_fit in data.groups:
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
@@ -67,7 +67,7 @@ def fit_profile_centers(data, profile_width=4):
             trace_points = vstack([trace_points, new_trace_table])
 
     # save the polynomial for the profile
-    trace_centers = [Legendre.fit(order_data['wavelength'], order_data['center'], deg=5)
+    trace_centers = [Legendre.fit(order_data['wavelength'], order_data['center'], deg=polynomial_order)
                      for order_data in trace_points.group_by('order').groups]
     return trace_centers
 
@@ -97,9 +97,14 @@ def fit_profile_width(data, profile_fits, poly_order=3, default_width=4):
         initial_amplitude = np.max(data_to_fit['data'][peak_window])
         model = models.Gaussian1D(amplitude=initial_amplitude, mean=profile_center,
                                   stddev=fwhm_to_sigma(default_width))
+        # Force the profile center to be on the chip...(add 0.3 to pad the edge)
+        model.mean.min = np.min(data_to_fit['y_order'][peak_window]) + 0.3
+        model.mean.max = np.max(data_to_fit['y_order'][peak_window]) - 0.3
+
         inv_variance = data_to_fit['uncertainty'][peak_window] ** -2.0
         best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window],
-                                y=data_to_fit['data'][peak_window], weights=inv_variance)
+                                y=data_to_fit['data'][peak_window], weights=inv_variance, maxiter=400)
+
         best_fit_sigma = best_fit_model.stddev.value
 
         profile_width['wavelength'].append(wavelength_bin)
@@ -230,11 +235,13 @@ def combine_wavelegnth_bins(wavelength_bins):
 
 
 class ProfileFitter(Stage):
+    POLYNOMIAL_ORDER = 6
+
     def do_stage(self, image):
         image.wavelength_bins = get_wavelength_bins(image.wavelengths)
         image.binned_data = bin_data(image.data, image.uncertainty, image.wavelengths,
                                      image.orders, image.wavelength_bins)
-        profile_centers = fit_profile_centers(image.binned_data)
+        profile_centers = fit_profile_centers(image.binned_data, polynomial_order=self.POLYNOMIAL_ORDER)
         profile_widths = fit_profile_width(image.binned_data, profile_centers)
         image.profile_fits = profile_centers, profile_widths
         profile_data = np.zeros(image.orders.data.shape)

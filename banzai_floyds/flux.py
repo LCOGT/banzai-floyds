@@ -3,9 +3,8 @@ from banzai.calibrations import CalibrationUser
 from banzai_floyds.dbs import get_standard
 from banzai_floyds.utils import telluric_utils
 import numpy as np
-from numpy.polynomial.legendre import Legendre
 from scipy.signal import savgol_filter
-from banzai_floyds.utils.flux_utils import rescale_by_airmass
+from banzai_floyds.utils.flux_utils import airmass_extinction
 from astropy.table import Table
 from banzai.utils import import_utils
 
@@ -23,45 +22,30 @@ class FluxSensitivity(Stage):
         flux_standard.sort('wavelength')
         sensitivity = np.zeros_like(image.extracted['wavelength'].data)
         sensitivity_order = np.zeros_like(sensitivity, dtype=np.uint8)
+
+        # Model the telluric extinction due to airmass so that we only save the instrument sensitivity
+        flux_standard['flux'] *= airmass_extinction(flux_standard['wavelength'], image.elevation, image.airmass)
         # Red and blue respectively
-        import ipdb; ipdb.set_trace()
         for order_id in [1, 2]:
             in_order = image.extracted['order'] == order_id
             data_to_fit = image.extracted[in_order]
-            # TODO: check this value to make sure we are past the dip in the senstivity function
-            wavelengths_to_fit = data_to_fit['wavelength'] > 4600.0
-            for telluric_region in telluric_utils.TELLURIC_REGIONS:
-                in_region = np.logical_and(data_to_fit['wavelength'] >= telluric_region['wavelength_min'],
-                                           data_to_fit['wavelength'] <= telluric_region['wavelength_max'])
-                wavelengths_to_fit = np.logical_and(wavelengths_to_fit, np.logical_not(in_region))
 
-            expected_flux = np.interp(data_to_fit[wavelengths_to_fit]['wavelength'],
+            # Fit the telluric coefficients using data in the red
+            expected_flux = np.interp(data_to_fit['wavelength'],
                                       flux_standard['wavelength'],
                                       flux_standard['flux'])
-            # Fit a low order polynomial to the data between the telluric regions in the red
-            sensitivity_polynomial = Legendre.fit(data_to_fit[wavelengths_to_fit]['wavelength'],
-                                                  expected_flux / data_to_fit[wavelengths_to_fit]['fluxraw'],
-                                                  self.SENSITIVITY_POLY_DEGREE[order_id],
-                                                  self.WAVELENGTH_DOMAIN,
-                                                  w=data_to_fit[wavelengths_to_fit]['fluxrawerr'] ** -2.0)
-
+            # Only correct the red order for telluric. It causes significant problems in the blue
+            if order_id == 1:
+                telluric_model = telluric_utils.fit_telluric(data_to_fit['wavelength'], data_to_fit['fluxraw'],
+                                                             data_to_fit['fluxrawerr'], telluric_model=image.telluric)
+            else:
+                telluric_model = np.ones_like(data_to_fit['wavelength'])
             # Divide the data by the flux standard in the blue
-            polynomial_wavelengths = data_to_fit[data_to_fit['wavelength'] > 5000]['wavelength']
-            this_sensitivity = np.zeros_like(data_to_fit['wavelength'].data)
-            this_sensitivity[data_to_fit['wavelength'] > 5000] = sensitivity_polynomial(polynomial_wavelengths)
-            blue_wavelengths = data_to_fit['wavelength'] <= 5000
-            # SavGol filter the ratio in the blue
-            expected_flux = np.interp(data_to_fit[blue_wavelengths]['wavelength'],
-                                      flux_standard['wavelength'],
-                                      flux_standard['flux'])
-            # We choose a window size of 7 which is just a little bigger than the resolution element
-            this_sensitivity[blue_wavelengths] = savgol_filter(expected_flux / data_to_fit['fluxraw'][blue_wavelengths],
-                                                               7, 3)
+            # We choose a window size of 17 which is bigger than the resolution element
+            this_sensitivity = savgol_filter(expected_flux * telluric_model / data_to_fit['fluxraw'], 17, 3)
             # We have to use this temp sensitivity variable because of how python does numpy array copying
             sensitivity[in_order] = this_sensitivity
             sensitivity_order[in_order] = order_id
-        # Scale the flux standard to airmass = 1
-        sensitivity = rescale_by_airmass(image.extracted['wavelength'], sensitivity, image.elevation, image.airmass)
 
         # Save the flux normalization to the db
         image.sensitivity = Table({'wavelength': image.extracted['wavelength'].data, 'sensitivity': sensitivity,

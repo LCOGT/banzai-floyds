@@ -4,7 +4,7 @@ from banzai import context
 from banzai_floyds.tests.utils import generate_fake_extracted_frame
 import mock
 from astropy.table import Table
-from banzai_floyds.utils.flux_utils import rescale_by_airmass
+from banzai_floyds.utils.flux_utils import airmass_extinction
 
 
 def test_flux_stage():
@@ -29,5 +29,5 @@ def test_sensitivity_stage(mock_standard):
 
 def test_null_airmass_correction():
     wavelengths = np.arange(3000, 11000, 1)
-    corrected = rescale_by_airmass(wavelengths, np.ones_like(wavelengths), 2198.0, 1)
+    corrected = airmass_extinction(wavelengths, np.ones_like(wavelengths), 2198.0, 1)
     np.testing.assert_allclose(corrected, np.ones_like(wavelengths))
