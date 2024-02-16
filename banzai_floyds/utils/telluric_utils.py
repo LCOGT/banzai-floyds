@@ -2,9 +2,10 @@ import numpy as np
 from banzai_floyds.matched_filter import optimize_match_filter
 import pkg_resources
 from astropy.io import ascii
-from scipy.signal import convolve
 from banzai.logs import get_logger
-from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
+from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
+from scipy.ndimage import gaussian_filter1d
+
 
 logger = get_logger()
 
@@ -13,7 +14,9 @@ logger = get_logger()
 # plots and comparing to MoelcFit (Smette+15, 10.1051/0004-6361/201423932)
 # Also see Matheson et al. 2000, AJ 120, 1499
 # I had to be pretty judicious on my choice of telluric regions so that there were anchor points for all the
-# polynomial fits
+# polynomial fits.
+# In principle, we could also use telfit to fit the telluric absorption but that will be slower. See 
+# Gullikson et al. 2014, AJ 148, 53
 TELLURIC_REGIONS = [{'wavelength_min': 5000.0, 'wavelength_max': 5155.0, 'molecule': 'O2'},
                     {'wavelength_min': 5370.0, 'wavelength_max': 5545.0, 'molecule': 'O2'},
                     {'wavelength_min': 5655.0, 'wavelength_max': 5815.0, 'molecule': 'O2'},
@@ -24,7 +27,8 @@ TELLURIC_REGIONS = [{'wavelength_min': 5000.0, 'wavelength_max': 5155.0, 'molecu
                     {'wavelength_min': 7100.0, 'wavelength_max': 7500.0, 'molecule': 'H2O'},
                     {'wavelength_min': 7580.0, 'wavelength_max': 7770.0, 'molecule': 'O2'},
                     {'wavelength_min': 7800.0, 'wavelength_max': 8690.0, 'molecule': 'H2O'},
-                    {'wavelength_min': 8730.0, 'wavelength_max': 9800.0, 'molecule': 'H2O'}]
+                    {'wavelength_min': 8730.0, 'wavelength_max': 9800.0, 'molecule': 'H2O'},
+                    {'wavelength_min': 10500.0, 'wavelength_max': 12500.0, 'molecule': 'H2O'}]
 
 
 def scale_trasmission(transmission, airmass_scale):
@@ -62,40 +66,41 @@ def scale_telluric(telluric_transmission, wavelength, o2_scale, h2o_scale, h2o_r
     return {'telluric': scaled_model, 'wavelength': wavelength}
 
 
-def fit_telluric(wavelength, flux, flux_errors, telluric_model=None, meta=None, airmass=1.0, resolution_fwhm=5):
+def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resolution_fwhm=17.5):
     if telluric_model is None:
         # Load the default telluric absorption model from Matheson 2000
         telluric_model = ascii.read(pkg_resources.resource_filename('banzai_floyds', 'data/telluric.dat'))
         # Convolve with the resolution of FLOYDS
         # The default value of 5 pixels is picked for the 2" slit. This only needs to be roughly correct.
+        # The telluric model from Matheson 2000 is sampled at 1 Angstrom per pixel so use a resolution of 17.5
         sigma = fwhm_to_sigma(resolution_fwhm)
-        x = np.arange(-int(3 * resolution_fwhm), int(3 * resolution_fwhm) + 1, 1.0)
-        conv_filter = gauss(x, 0.0, sigma)
-        telluric_model['telluric'] = convolve(telluric_model['telluric'], conv_filter, mode='same')
+        telluric_model['telluric'] = gaussian_filter1d(telluric_model['telluric'], sigma, mode='constant', cval=1.0)
+        # We adopt the elevation of KPNO for which this was measured on the McMath-Pierce Solar Telescope
+        # Don't rescale the telluric model at all for now
+        # airmass_ratio = elevation_to_airmass_ratio(elevation, 2096)
+        # telluric_model['telluric'] = scale_trasmission(telluric_model['telluric'], airmass_ratio)
+
     telluric_correction = np.interp(wavelength, telluric_model['wavelength'], telluric_model['telluric'],
                                     right=1.0, left=1.0)
-    o2_region, h2o_region = get_molecular_regions(wavelength)
-
-    best_fit = optimize_match_filter([0.0, airmass],
-                                     flux, flux_errors, telluric_match_weights, wavelength,
-                                     args=(telluric_correction, wavelength,
-                                           o2_region, h2o_region), bounds=[(-10, 10), (0.0, 10.0)])
-    # Right now we only fit a single telluric scale
-    shift, scale = best_fit
-    if meta is not None:
-        meta['TELSHIFT'] = shift
-        meta['TELSCALE'] = scale
-
-    return telluric_match_weights(best_fit, wavelength, telluric_correction, wavelength, o2_region, h2o_region)
+    # telluric_correction = scale_trasmission(telluric_correction, airmass)
+    return telluric_correction
 
 
 def telluric_match_weights(params, x, correction, wavelengths, o2_region, h2o_region):
-    # Right now we only fit a single telluric scale
-    shift, scale = params
+    shift, o2_scale, h2o_scale = params
     model_correction = correction.copy()
-    model_correction[o2_region] = scale_trasmission(model_correction[o2_region], scale)
-    model_correction[h2o_region] = scale_trasmission(model_correction[h2o_region], scale)
+    model_correction[o2_region] = scale_trasmission(model_correction[o2_region], o2_scale)
+    model_correction[h2o_region] = scale_trasmission(model_correction[h2o_region], h2o_scale)
     correction = np.interp(x, wavelengths - shift, model_correction, right=1.0, left=1.0)
     correction[correction < 0.0] = 0.0
     correction[correction > 1.0] = 1.0
     return correction
+
+
+def elevation_to_airmass_ratio(elevation1, elevation2):
+    # To estimate the delta airmass, we assume a very basic exponential model for the atmosphere
+    # rho = rho0 * exp(-h/H) where H is 10.4 km from the ideal gas law
+    # see https://en.wikipedia.org/wiki/Density_of_air#Exponential_approximation
+    # So the ratio of the airmass (total air column) is (1 - exp(-h1 / H)) / (1 - exp(-h2 / H))
+    airmass_ratio = (1.0 - np.exp(-elevation1 / 10400.0)) / (1.0 - np.exp(-elevation2 / 10400.0))
+    return airmass_ratio

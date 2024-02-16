@@ -27,8 +27,9 @@ class TelluricMaker(Stage):
 
         correction[correction < 0.0] = 0.0
         correction[correction > 1.0] = 1.0
+        # Remove any scaling for the telluric model at the moment
         # Normalize to airmass = 1
-        correction = telluric_utils.scale_trasmission(correction, 1.0 / image.airmass)
+        # correction = telluric_utils.scale_trasmission(correction, 1.0 / image.airmass)
 
         image.telluric = Table({'wavelength': data['wavelength'], 'telluric': correction})
         return image
@@ -40,10 +41,10 @@ class TelluricCorrector(Stage):
         data = image.extracted[in_order]
         # Scale the water bands by minimizing the match filter statistic between the telluric corrected spectrum
         # and the telluric correction
-        telluric_model = telluric_utils.fit_telluric(data['wavelength'], data['flux'],
-                                                     data['fluxerror'], telluric_model=image.telluric,
-                                                     meta=image.meta)
-        telluric_model = telluric_utils.scale_trasmission(telluric_model, image.airmass)
-        data['flux'] /= telluric_model
+        telluric_model = np.interp(data['wavelength'], image.telluric['wavelength'], image.telluric['telluric'],
+                                   left=1.0, right=1.0)
+        # Don't do telluric model scaling at the moment
+        # telluric_model = telluric_utils.scale_trasmission(telluric_model, image.airmass)
+        image.extracted['flux'][in_order] /= telluric_model
         image.telluric = Table({'wavelength': data['wavelength'], 'telluric': telluric_model})
         return image

@@ -36,8 +36,10 @@ class FluxSensitivity(Stage):
                                       flux_standard['flux'])
             # Only correct the red order for telluric. It causes significant problems in the blue
             if order_id == 1:
-                telluric_model = telluric_utils.fit_telluric(data_to_fit['wavelength'], data_to_fit['fluxraw'],
-                                                             data_to_fit['fluxrawerr'], telluric_model=image.telluric)
+                telluric_model = telluric_utils.estimate_telluric(data_to_fit['wavelength'],
+                                                                  image.airmass, image.elevation,
+                                                                  telluric_model=image.telluric)
+                
             else:
                 telluric_model = np.ones_like(data_to_fit['wavelength'])
             # Divide the data by the flux standard in the blue
