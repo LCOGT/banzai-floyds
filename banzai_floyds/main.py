@@ -1,13 +1,13 @@
 from banzai_floyds import settings
 from banzai.main import parse_args, start_listener
 import argparse
-from banzai.main import add_settings_to_context
-import requests
-from banzai.utils import import_utils
 from banzai import logs
-from banzai.data import DataProduct
 import banzai_floyds.dbs
 import logging
+import celery
+import celery.bin.beat
+from celery.schedules import crontab
+from banzai.celery import app, schedule_calibration_stacking
 
 
 logger = logging.getLogger('banzai')
@@ -46,31 +46,24 @@ def create_db():
     banzai_floyds.dbs.create_db(args.db_address)
 
 
-def floyds_add_spectrophotometric_standard():
-    parser = argparse.ArgumentParser(description="Add bad pixel mask from a given archive api")
+def populate_photometric_standards():
+    parser = argparse.ArgumentParser("Ingest the location of the known flux standard tables.\n\n"
+                                     "This only needs to be run once on initialization of the database.")
     parser.add_argument('--db-address', dest='db_address',
-                        default='mysql://cmccully:password@localhost/test',
+                        default='sqlite3:///test.db',
                         help='Database address: Should be in SQLAlchemy form')
     args = parser.parse_args()
-    add_settings_to_context(args, settings)
-    # Query the archive for all bpm files
-    url = f'{settings.ARCHIVE_FRAME_URL}/?OBSTYPE=BPM&limit=1000'
-    archive_auth_header = settings.ARCHIVE_AUTH_HEADER
-    response = requests.get(url, headers=archive_auth_header)
-    response.raise_for_status()
-    results = response.json()['results']
+    banzai_floyds.dbs.ingest_standards(args.db_address)
 
-    # Load each one, saving the calibration info for each
-    frame_factory = import_utils.import_attribute(settings.FRAME_FACTORY)()
-    for frame in results:
-        frame['frameid'] = frame['id']
-        try:
-            bpm_image = frame_factory.open(frame, args)
-            if bpm_image is not None:
-                bpm_image.is_master = True
-                dbs.save_calibration_info(bpm_image.to_db_record(DataProduct(None, filename=bpm_image.filename,
-                                                                             filepath=None)),
-                                          args.db_address)
-        except Exception:
-            logger.error(f"BPM not added to database: {logs.format_exception()}",
-                         extra_tags={'filename': frame.get('filename')})
+
+def start_flat_stacking_scheduler():
+    logger.info('Started Flat Stacking Scheduler')
+    runtime_context = parse_args(settings)
+    for site, hour in zip(['coj', 'ogg'], [0, 4]):
+        app.add_periodic_task(crontab(minute=0, hour=hour),
+                              schedule_calibration_stacking.s(site=site, runtime_context=vars(runtime_context)),
+                              queue=runtime_context.CELERY_TASK_QUEUE_NAME)
+
+    beat = celery.bin.beat.beat(app=app)
+    logger.info('Starting celery beat')
+    beat.run(schedule='/tmp/celerybeat-schedule', pidfile='/tmp/celerybeat.pid', working_directory='/tmp')

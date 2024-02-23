@@ -39,7 +39,6 @@ class FluxSensitivity(Stage):
                 telluric_model = telluric_utils.estimate_telluric(data_to_fit['wavelength'],
                                                                   image.airmass, image.elevation,
                                                                   telluric_model=image.telluric)
-                
             else:
                 telluric_model = np.ones_like(data_to_fit['wavelength'])
             # Divide the data by the flux standard in the blue

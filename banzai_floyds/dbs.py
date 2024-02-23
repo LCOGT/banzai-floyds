@@ -46,7 +46,6 @@ class FluxStandard(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     filename = Column(String(100), unique=True)
     filepath = Column(String(150))
-    frameid = Column(Integer, nullable=True)
     ra = Column(Float)
     dec = Column(Float)
 

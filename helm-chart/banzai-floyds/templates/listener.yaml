@@ -51,6 +51,42 @@ spec:
             - name: listener-tmp
               mountPath: /tmp
               readOnly: false
+        - name: 'banzai-floyds-calibration-scheduler'
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command:
+            - "banzai_floyds_start_stacker"
+            - "--post-to-archive"
+            - "--post-to-opensearch"
+            - "--opensearch-url=$(OPENSEARCH_URL)"
+            - "--fpack"
+            - "--rlevel=91"
+            - "--db-address=$(DB_ADDRESS)"
+            - "--broker-url=$(FITS_BROKER)"
+            - "--log-level=info"
+          env:
+            {{- include "banzai.Env" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: "0.1"
+              memory: "512M"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: scheduler-tmp
+              mountPath: /tmp
+              readOnly: false
+
+      volumes:
+        - name: listener-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: scheduler-tmp
+          emptyDir:
+            sizeLimit: 1Gi
       volumes:
         - name: listener-tmp
           emptyDir:
