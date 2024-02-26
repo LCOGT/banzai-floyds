@@ -2,7 +2,7 @@ from banzai.lco import LCOObservationFrame, LCOFrameFactory, LCOCalibrationFrame
 from typing import Optional
 from banzai.frames import ObservationFrame
 from banzai.data import DataProduct, HeaderOnly, ArrayData, DataTable
-from banzai_floyds.orders import Orders
+from banzai_floyds.orders import orders_from_fits
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 import numpy as np
 from banzai_floyds.utils.fitting_utils import gauss
@@ -164,13 +164,7 @@ class FLOYDSFrameFactory(LCOFrameFactory):
             image.meta['TRIMSEC'] = '[1:2048,1:512]'
         # Load the orders if they exist
         if 'ORDER_COEFFS' in image:
-            polynomial_order = image['ORDER_COEFFS'].meta['POLYORD']
-            coeffs = [np.array([row[f'c{i}'] for i in range(polynomial_order + 1)])
-                      for row in image['ORDER_COEFFS'].data]
-            domains = [(row['domainmin'], row['domainmax']) for row in image['ORDER_COEFFS'].data]
-            models = [np.polynomial.legendre.Legendre(coeff_set, domain=domain)
-                      for coeff_set, domain in zip(coeffs, domains)]
-            image.orders = Orders(models, image.data.shape, [image['ORDER_COEFFS'].meta['ORDHGHT'] for _ in models])
+            image.orders = orders_from_fits(image['ORDER_COEFFS'].data, image['ORDER_COEFFS'].meta, image.shape)
         if 'WAVELENGTHS' in image:
             image.wavelengths = WavelengthSolution.from_header(image['WAVELENGTHS'].meta, image.orders)
         if 'FRINGE' in image:

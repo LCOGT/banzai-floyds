@@ -39,12 +39,6 @@ used_lines = [
         'line_notes': 'Found in both Red/Blue Orders'
     },
     {
-        'wavelength': 5769.61,
-        'line_strength': 0.0296,
-        'line_source': 'Hg',
-        'line_notes': ''
-    },
-    {
         'wavelength': 6965.4307,
         'line_strength': 0.236,
         'line_source': 'ArI',
@@ -216,6 +210,11 @@ unused_lines = [{
     'Zn',
     'line_notes':
     'Removed until we start turning on the Zn lamp again.'
+}, {
+    'wavelength': 5769.61,
+    'line_strength': 0.0296,
+    'line_source': 'Hg',
+    'line_notes': 'Typically a blend at FLOYDS resolution'
 }, {
     'wavelength': 6677.282,
     'line_strength': 0.0017,
