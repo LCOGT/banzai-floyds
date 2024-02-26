@@ -67,7 +67,7 @@ spec:
             - "--broker-url=$(FITS_BROKER)"
             - "--log-level=info"
           env:
-            {{- include "banzai.Env" . | nindent 12 }}
+            {{- include "banzaiFloyds.Env" . | nindent 12 }}
           resources:
             requests:
               cpu: "0.1"
@@ -85,10 +85,6 @@ spec:
           emptyDir:
             sizeLimit: 1Gi
         - name: scheduler-tmp
-          emptyDir:
-            sizeLimit: 1Gi
-      volumes:
-        - name: listener-tmp
           emptyDir:
             sizeLimit: 1Gi
 
