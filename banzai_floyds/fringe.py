@@ -2,7 +2,6 @@ from banzai.calibrations import CalibrationMaker, CalibrationUser
 from banzai.stages import Stage
 from banzai.utils import import_utils
 from banzai.utils.file_utils import make_calibration_filename_function
-from banzai_floyds.utils.order_utils import get_order_2d_region
 from datetime import datetime
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.matched_filter import optimize_match_filter
@@ -69,7 +68,7 @@ class FringeMaker(CalibrationMaker):
             high_sn = image.data / image.uncertainty > 10.0
             data_to_fit = np.logical_and(image.orders.data == 1, high_sn)
             fringe_spline = fit_smooth_fringe_spline(image.data, data_to_fit)
-                                                     
+                                        
             # TODO: Someone needs to check this transformation
             shifted_order = np.logical_and(image.orders.shifted(-fringe_offset).data == 1, high_sn)
             offset_coordinates = [x[shifted_order], y[shifted_order] + fringe_offset]

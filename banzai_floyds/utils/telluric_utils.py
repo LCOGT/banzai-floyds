@@ -1,5 +1,4 @@
 import numpy as np
-from banzai_floyds.matched_filter import optimize_match_filter
 import pkg_resources
 from astropy.io import ascii
 from banzai.logs import get_logger
@@ -15,7 +14,7 @@ logger = get_logger()
 # Also see Matheson et al. 2000, AJ 120, 1499
 # I had to be pretty judicious on my choice of telluric regions so that there were anchor points for all the
 # polynomial fits.
-# In principle, we could also use telfit to fit the telluric absorption but that will be slower. See 
+# In principle, we could also use telfit to fit the telluric absorption but that will be slower. See
 # Gullikson et al. 2014, AJ 148, 53
 TELLURIC_REGIONS = [{'wavelength_min': 5000.0, 'wavelength_max': 5155.0, 'molecule': 'O2'},
                     {'wavelength_min': 5370.0, 'wavelength_max': 5545.0, 'molecule': 'O2'},

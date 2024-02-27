@@ -249,6 +249,6 @@ class TestScienceFileCreation:
 
     def test_if_science_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
-        for expected_file in expected_filenames(test_data):
+        for i, expected_file in enumerate(expected_filenames(test_data)):
             if 'e91.fits' in expected_file and not is_standard(test_data['object'][i]):
                 assert os.path.exists(expected_file)

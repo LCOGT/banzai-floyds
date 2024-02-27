@@ -182,7 +182,7 @@ def extract(binned_data):
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
 
-    results = {'fluxraw': [], 'fluxrawerr': [], 'wavelength': [], 'binwidth': [], 'order': []}
+    results = {'fluxraw': [], 'fluxrawerr': [], 'wavelength': [], 'binwidth': [], 'order': [], 'background': []}
     for data_to_sum in binned_data.groups:
         wavelength_bin = data_to_sum['wavelength_bin'][0]
         wavelength_bin_width = data_to_sum['wavelength_bin_width'][0]
@@ -193,7 +193,11 @@ def extract(binned_data):
         flux *= data_to_sum['uncertainty'] ** -2
         flux = np.sum(flux)
         flux_normalization = np.sum(data_to_sum['weights']**2 * data_to_sum['uncertainty']**-2)
+        background = data_to_sum['background'] * data_to_sum['weights']
+        background *= data_to_sum['uncertainty'] ** -2
+        background = np.sum(background)
         results['fluxraw'].append(flux / flux_normalization)
+        results['background'].append(background / flux_normalization)
         uncertainty = np.sqrt(np.sum(data_to_sum['weights']) / flux_normalization)
         results['fluxrawerr'].append(uncertainty)
         results['wavelength'].append(wavelength_bin)
