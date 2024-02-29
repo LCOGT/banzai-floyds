@@ -44,7 +44,7 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
 class FluxStandard(Base):
     __tablename__ = 'fluxstandards'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    frameid = Column(Integer, unique=True)
+    frameid = Column(Integer, unique=True, default=None)
     filename = Column(String(100), unique=True)
     filepath = Column(String(150))
     ra = Column(Float)
