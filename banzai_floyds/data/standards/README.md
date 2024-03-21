@@ -25,7 +25,7 @@ for standard in standards:
                              fits.BinTableHDU(data)])
     hdu_list.writeto(f'{standard["name"]}.fits', overwrite=True)
 ```
-Note that we use the same units as ESO: $\frac{ergs}{s cm^2 \AA}$.
+Note that we use the same units as ESO: $\frac{ergs}{s \cdot cm^2 \cdot \unicode{x212B}}$.
 
 I have currently omitted L745-46A as a standard because it was not available through ESO and appears to not have been calibrated
 since 1984 (Baldwin & Stone). We should bootstrap this fluxed file based on standards observed on the same night with FLOYDS. LTT 3218 is a decent candidate to cross calibrate with. EG21 was reproduced in Hamuy 1994 but at very low resolution. The fluxes from Hamuy also do not look telluric corrected to me. We should probably use GD50 to bootstrap the EG21. Feige 67 will need to be bootstrapped from the HST CALSPEC spectrum of GD153. HZ44 will also need to be derived from its observations in CALSPEC + a model for minor extrapolation. Similarly for G191-B2B.
