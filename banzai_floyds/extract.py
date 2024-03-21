@@ -6,6 +6,8 @@ from numpy.polynomial.legendre import Legendre
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 from astropy.modeling import fitting, models
 from banzai.logs import get_logger
+from banzai_floyds.utils.profile_utils import profile_fits_to_data
+
 
 logger = get_logger()
 
@@ -90,22 +92,25 @@ def fit_profile_width(data, profile_fits, poly_order=3, default_width=4):
         if peak_snr < 2.0 * median_snr:
             continue
 
-        # Only fit the profile width where it is much larger than the background value
-        peak_window = np.abs(data_to_fit['y_order'] - profile_center) < 2.0 * fwhm_to_sigma(default_width)
+        # Only fit the data close to the profile so that we can assume a low order background
+        peak_window = np.abs(data_to_fit['y_order'] - profile_center) <= 6.0 * fwhm_to_sigma(default_width)
 
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         initial_amplitude = np.max(data_to_fit['data'][peak_window])
         model = models.Gaussian1D(amplitude=initial_amplitude, mean=profile_center,
                                   stddev=fwhm_to_sigma(default_width))
+        model += models.Legendre1D(degree=2, domain=(np.min(data_to_fit['y_order'][peak_window]),
+                                                     np.max(data_to_fit['y_order'][peak_window])),
+                                   c0=np.median(data_to_fit['data'][peak_window]))
         # Force the profile center to be on the chip...(add 0.3 to pad the edge)
-        model.mean.min = np.min(data_to_fit['y_order'][peak_window]) + 0.3
-        model.mean.max = np.max(data_to_fit['y_order'][peak_window]) - 0.3
+        model.mean_0.min = np.min(data_to_fit['y_order'][peak_window]) + 0.3
+        model.mean_0.max = np.max(data_to_fit['y_order'][peak_window]) - 0.3
 
         inv_variance = data_to_fit['uncertainty'][peak_window] ** -2.0
         best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window],
                                 y=data_to_fit['data'][peak_window], weights=inv_variance, maxiter=400)
 
-        best_fit_sigma = best_fit_model.stddev.value
+        best_fit_sigma = best_fit_model.stddev_0.value
 
         profile_width['wavelength'].append(wavelength_bin)
         profile_width['width'].append(best_fit_sigma)
@@ -248,17 +253,8 @@ class ProfileFitter(Stage):
         profile_centers = fit_profile_centers(image.binned_data, polynomial_order=self.POLYNOMIAL_ORDER)
         profile_widths = fit_profile_width(image.binned_data, profile_centers)
         image.profile_fits = profile_centers, profile_widths
-        profile_data = np.zeros(image.orders.data.shape)
-        x2d, y2d = np.meshgrid(np.arange(profile_data.shape[1]), np.arange(profile_data.shape[0]))
-        order_iter = zip(image.orders.order_ids, profile_centers, profile_widths, image.orders.center(x2d))
-        for order_id, profile_center, profile_width, order_center in order_iter:
-            in_order = image.orders.data == order_id
-            wavelengths = image.wavelengths.data[in_order]
-            # TODO: Make sure this is normalized correctly
-            # Note that the widths in the value set here are sigma and not fwhm
-            profile_data[in_order] = gauss(y2d[in_order] - order_center[in_order],
-                                           profile_center(wavelengths), profile_width(wavelengths))
-        image.profile = profile_data
+        image.profile = profile_fits_to_data(image.data.shape, profile_centers, profile_widths,
+                                             image.orders, image.wavelengths.data)
         return image
 
 

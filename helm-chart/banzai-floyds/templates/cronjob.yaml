@@ -1,0 +1,37 @@
+{{- $root := . -}}
+{{- range .Values.cronjobs }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: "{{ include "banzai-floyds.fullname" $root -}}-{{ .site -}}-cronjob"
+  labels:
+{{ include "banzai-floyds.labels" $root | indent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "banzai-floyds.name" $root }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "banzai-floyds.name" $root }}
+        app.kubernetes.io/instance: "{{ $root.Release.Name }}"
+  schedule: "{{ .schedule }}"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: "banzai-floyds-stack-flats-{{ .site }}"
+            image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag }}"
+            imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+            securityContext:
+              runAsUser: 10087
+              runAsGroup: 10000
+            env:
+              {{- include "banzaiFloyds.Env" $root | nindent 12 }}
+            args:
+            - banzai_floyds_stack_flats
+            - --site {{ .site }}
+          restartPolicy: Never
+{{- end }}

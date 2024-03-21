@@ -3,6 +3,7 @@ from banzai import context
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.extract import Extractor, fit_profile_centers, fit_profile_width, fit_background, extract
 from banzai_floyds.extract import get_wavelength_bins, bin_data
+from banzai_floyds.utils.profile_utils import profile_fits_to_data
 from collections import namedtuple
 
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
@@ -82,11 +83,13 @@ def test_extraction():
                                       fake_frame.orders, fake_frame.wavelength_bins)
     fake_profile_width_funcs = [lambda _: fwhm_to_sigma(fake_frame.input_profile_width)
                                 for _ in fake_frame.input_profile_centers]
-    fake_frame.profile = fake_frame.input_profile_centers, fake_profile_width_funcs
+    fake_frame.profile_fits = fake_frame.input_profile_centers, fake_profile_width_funcs
+    fake_frame.profile = profile_fits_to_data(fake_frame.data.shape, fake_frame.input_profile_centers,
+                                              fake_profile_width_funcs, fake_frame.orders, fake_frame.wavelengths.data)
     fake_frame.binned_data['background'] = 0.0
     extracted = extract(fake_frame.binned_data)
-    np.testing.assert_allclose(extracted['flux'], 10000.0, rtol=0.05)
-    np.testing.assert_allclose(extracted['flux'] / extracted['fluxerror'], 100.0, rtol=0.10)
+    np.testing.assert_allclose(extracted['fluxraw'], 10000.0, rtol=0.05)
+    np.testing.assert_allclose(extracted['fluxraw'] / extracted['fluxrawerr'], 100.0, rtol=0.10)
 
 
 def test_full_extraction_stage():
@@ -97,9 +100,10 @@ def test_full_extraction_stage():
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths,
                                  frame.orders, frame.wavelength_bins)
     fake_profile_width_funcs = [lambda _: fwhm_to_sigma(frame.input_profile_width) for _ in frame.input_profile_centers]
-    frame.profile = frame.input_profile_centers, fake_profile_width_funcs
-
+    frame.profile_fits = frame.input_profile_centers, fake_profile_width_funcs
+    frame.profile = profile_fits_to_data(frame.data.shape, frame.input_profile_centers, fake_profile_width_funcs,
+                                         frame.orders, frame.wavelengths.data)
     stage = Extractor(input_context)
     frame = stage.do_stage(frame)
     expected = np.interp(frame['EXTRACTED'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
-    np.testing.assert_allclose(frame['EXTRACTED'].data['flux'], expected, rtol=0.085)
+    np.testing.assert_allclose(frame['EXTRACTED'].data['fluxraw'], expected, rtol=0.085)

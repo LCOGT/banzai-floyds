@@ -3,11 +3,13 @@ from banzai.main import parse_args, start_listener
 import argparse
 from banzai import logs
 import banzai_floyds.dbs
+import banzai.dbs
 import logging
-import celery
-import celery.bin.beat
-from celery.schedules import crontab
-from banzai.celery import app, schedule_calibration_stacking
+from banzai.celery import app
+from banzai import calibrations
+from banzai.utils.date_utils import TIMESTAMP_FORMAT
+import datetime
+from astropy.time import Time
 
 
 logger = logging.getLogger('banzai')
@@ -56,14 +58,31 @@ def populate_photometric_standards():
     banzai_floyds.dbs.ingest_standards(args.db_address)
 
 
-def start_flat_stacking_scheduler():
-    logger.info('Started Flat Stacking Scheduler')
-    runtime_context = parse_args(settings)
-    for site, hour in zip(['coj', 'ogg'], [0, 4]):
-        app.add_periodic_task(crontab(minute=0, hour=hour),
-                              schedule_calibration_stacking.s(site=site, runtime_context=vars(runtime_context)),
-                              queue=runtime_context.CELERY_TASK_QUEUE_NAME)
+@app.task(name='celery.stack_flats', reject_on_worker_lost=True, max_retries=5)
+def stack_flats_task(min_date, max_date, instrument_id, runtime_context):
+    instrument = banzai.dbs.get_instrument_by_id(instrument_id, db_address=runtime_context.db_address)
+    calibrations.make_master_calibrations(instrument, 'LAMPFLAT', min_date, max_date, runtime_context)
 
-    beat = celery.bin.beat.beat(app=app)
-    logger.info('Starting celery beat')
-    beat.run(schedule='/tmp/celerybeat-schedule', pidfile='/tmp/celerybeat.pid', working_directory='/tmp')
+
+def banzai_floyds_stack_flats():
+    logger.info('Submitting flat field stacking task')
+    extra_args = [{'args': ['site']}, {'args': ['min-date']}, {'args': ['max-date']}, {'args': ['lookback-days']}]
+    runtime_context = parse_args(settings, extra_console_arguments=extra_args)
+    instruments = banzai.dbs.get_instruments_at_site(runtime_context.site, db_address=runtime_context.db_address)
+    for instrument in instruments:
+        if 'floyds' in instrument.name.lower():
+            instrument_to_stack = instrument
+
+    if runtime_context.min_date is None:
+        min_date = datetime.datetime.now(tz='utc') - datetime.timedelta(days=runtime_context.lookback_days)
+    else:
+        min_date = Time(runtime_context.min_date, scale='utc').to_datetime()
+    if runtime_context.max_date is None:
+        max_date = datetime.datetime.now(tz='utc')
+    else:
+        max_date = Time(runtime_context.max_date, scale='utc').to_datetime()
+
+    stacking_min_date = min_date.strftime(TIMESTAMP_FORMAT)
+    stacking_max_date = max_date.strftime(TIMESTAMP_FORMAT)
+    stack_flats_task.apply_async(args=(stacking_min_date, stacking_max_date,
+                                       instrument_to_stack.id, vars(runtime_context)))

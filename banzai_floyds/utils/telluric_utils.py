@@ -26,7 +26,7 @@ TELLURIC_REGIONS = [{'wavelength_min': 5000.0, 'wavelength_max': 5155.0, 'molecu
                     {'wavelength_min': 7100.0, 'wavelength_max': 7500.0, 'molecule': 'H2O'},
                     {'wavelength_min': 7580.0, 'wavelength_max': 7770.0, 'molecule': 'O2'},
                     {'wavelength_min': 7800.0, 'wavelength_max': 8690.0, 'molecule': 'H2O'},
-                    {'wavelength_min': 8730.0, 'wavelength_max': 9800.0, 'molecule': 'H2O'},
+                    {'wavelength_min': 8730.0, 'wavelength_max': 9960.0, 'molecule': 'H2O'},
                     {'wavelength_min': 10500.0, 'wavelength_max': 12500.0, 'molecule': 'H2O'}]
 
 

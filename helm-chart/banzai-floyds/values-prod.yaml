@@ -104,3 +104,9 @@ rabbitmq:
   rabbitmq:
     username: banzai
   vhost: banzai
+
+cronjobs:
+  - site: coj
+    schedule: "0 0 * * *"
+  - site: ogg
+    schedule: "0 4 * * *"
