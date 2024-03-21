@@ -32,5 +32,6 @@ spec:
             args:
             - banzai_floyds_stack_flats
             - --site {{ .site }}
+            - --db-address=$(DB_ADDRESS)
           restartPolicy: Never
 {{- end }}

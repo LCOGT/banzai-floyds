@@ -81,11 +81,12 @@ def banzai_floyds_stack_flats():
             instrument_to_stack = instrument
 
     if runtime_context.min_date is None:
-        min_date = datetime.datetime.now(tz='utc') - datetime.timedelta(days=runtime_context.lookback_days)
+        min_date = datetime.datetime.now(tz=datetime.timezone.utc)
+        min_date -= datetime.timedelta(days=runtime_context.lookback_days)
     else:
         min_date = Time(runtime_context.min_date, scale='utc').to_datetime()
     if runtime_context.max_date is None:
-        max_date = datetime.datetime.now(tz='utc')
+        max_date = datetime.datetime.now(tz=datetime.timezone.utc)
     else:
         max_date = Time(runtime_context.max_date, scale='utc').to_datetime()
 
