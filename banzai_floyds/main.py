@@ -66,7 +66,14 @@ def stack_flats_task(min_date, max_date, instrument_id, runtime_context):
 
 def banzai_floyds_stack_flats():
     logger.info('Submitting flat field stacking task')
-    extra_args = [{'args': ['site']}, {'args': ['min-date']}, {'args': ['max-date']}, {'args': ['lookback-days']}]
+    extra_args = [{'args': ['--site'], 'kwargs': {'choices': ['coj', 'ogg'],
+                                                  'help': 'Site to process data from'}},
+                  {'args': ['--min-date'], 'kwargs': {'dest': 'min_date', 'default': None,
+                                                      'help': 'Minimum date of data to use in stack.'}},
+                  {'args': ['--max-date'], 'kwargs': {'dest': 'max_date', 'default': None,
+                                                      'help': 'Maximum date of data to use in stack.'}},
+                  {'args': ['--lookback-days'], 'kwargs': {'dest': 'lookback_days', 'default': 3,
+                                                           'help': 'Number of days to include in the stack'}}]
     runtime_context = parse_args(settings, extra_console_arguments=extra_args)
     instruments = banzai.dbs.get_instruments_at_site(runtime_context.site, db_address=runtime_context.db_address)
     for instrument in instruments:
