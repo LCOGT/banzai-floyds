@@ -5,6 +5,8 @@ from banzai_floyds.orders import Orders
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.fringe import fit_smooth_fringe_spline
+from banzai_floyds.utils.telluric_utils import estimate_telluric
+from banzai_floyds.utils.flux_utils import airmass_extinction
 
 import numpy as np
 from astropy.io import fits
@@ -215,31 +217,33 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     sensitivity_wavelengths = np.arange(sensitivity_domain[0], sensitivity_domain[1] + 1, 1)
     sensitivity_model = Polynomial1D(1, domain=sensitivity_domain, c0=1.0, c1=0.24)
     sensitivity = sensitivity_model(wavelengths)
-    sensitivity_data = Table({'sensitivity': sensitivity_model(sensitivity_wavelengths),
-                              'wavelength': sensitivity_wavelengths})
 
-    telluric = np.ones_like(wavelengths)
+    sensitivity_data = Table({'sensitivity': np.concatenate([sensitivity_model(sensitivity_wavelengths),
+                                                             sensitivity_model(sensitivity_wavelengths)]),
+                              'wavelength': np.concatenate([sensitivity_wavelengths, sensitivity_wavelengths]),
+                              'order': np.concatenate([np.ones_like(sensitivity_wavelengths, dtype=int),
+                                                       2 * np.ones_like(sensitivity_wavelengths, dtype=int)])})
+
     # Add the A and B bands
-    telluric -= 40 * gauss(wavelengths, 6940.0, 35)
-    telluric -= 55 * gauss(wavelengths, 7650.0, 30)
-
-    telluric_model = np.ones_like(sensitivity_wavelengths)
-    telluric_model -= 40 * gauss(sensitivity_wavelengths, 6940.0, 35)
-    telluric_model -= 55 * gauss(sensitivity_wavelengths, 7650.0, 30)
+    telluric = estimate_telluric(wavelengths, 1.0, 2198.0)
+    telluric_model = estimate_telluric(sensitivity_wavelengths, 1.0, 2198.0)
 
     telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
     flux = input_flux.copy()
     if do_sensitivity:
         flux /= sensitivity
+        airmass_correction = airmass_extinction(wavelengths, 2198.0, 1.0)
+        flux *= airmass_correction
     if do_telluric:
         flux *= telluric
 
     flux = np.random.poisson(flux.astype(int)).astype(float)
     flux += np.random.normal(read_noise, size=flux.shape)
     flux_error = np.sqrt(read_noise**2 + np.abs(flux))
-    data = Table({'wavelength': wavelengths, 'flux': flux, 'fluxerror': flux_error, 'order_id': orders})
+    data = Table({'wavelength': wavelengths, 'flux': flux, 'fluxerror': flux_error,
+                  'fluxraw': flux, 'fluxrawerr': flux_error, 'order': orders})
 
-    frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}))], file_path='foo.fits')
+    frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}), name='foo')], file_path='foo.fits')
     frame.telluric = telluric_data
     frame.sensitivity = sensitivity_data
     frame.input_telluric = telluric[orders == 1]
