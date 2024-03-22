@@ -32,6 +32,11 @@ spec:
             args:
             - banzai_floyds_stack_flats
             - --site {{ .site }}
-            - --db-address=$(DB_ADDRESS)
+            - "--post-to-archive"
+            - "--post-to-opensearch"
+            - "--fpack"
+            - "--rlevel=91"
+            - "--db-address=$(DB_ADDRESS)"
+            - "--no-file-cache"
           restartPolicy: Never
 {{- end }}
