@@ -29,7 +29,7 @@ spec:
           command:
             - "celery"
             - "-A"
-            - "banzai"
+            - "banzai_floyds.main:app"
             - "worker"
             - "--concurrency"
             - "1"

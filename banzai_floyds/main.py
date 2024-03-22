@@ -10,6 +10,7 @@ from banzai import calibrations
 from banzai.utils.date_utils import TIMESTAMP_FORMAT
 import datetime
 from astropy.time import Time
+from banzai.context import Context
 
 
 logger = logging.getLogger('banzai')
@@ -60,8 +61,13 @@ def populate_photometric_standards():
 
 @app.task(name='celery.stack_flats', reject_on_worker_lost=True, max_retries=5)
 def stack_flats_task(min_date, max_date, instrument_id, runtime_context):
-    instrument = banzai.dbs.get_instrument_by_id(instrument_id, db_address=runtime_context.db_address)
-    calibrations.make_master_calibrations(instrument, 'LAMPFLAT', min_date, max_date, runtime_context)
+    try:
+        runtime_context = Context(runtime_context)
+        instrument = banzai.dbs.get_instrument_by_id(instrument_id, db_address=runtime_context.db_address)
+        calibrations.make_master_calibrations(instrument, 'LAMPFLAT', min_date, max_date, runtime_context)
+    except Exception:
+        logger.error("Exception processing frame: {error}".format(error=logs.format_exception()),
+                     extra_tags={'instrument_id': instrument_id, 'min_date': min_date, 'max_date': max_date})
 
 
 def banzai_floyds_stack_flats():
