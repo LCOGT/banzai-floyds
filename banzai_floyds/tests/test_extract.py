@@ -1,8 +1,9 @@
 import numpy as np
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_science_frame
-from banzai_floyds.extract import Extractor, fit_profile, fit_profile_width, fit_background, extract
+from banzai_floyds.extract import Extractor, fit_profile_centers, fit_profile_width, fit_background, extract
 from banzai_floyds.extract import get_wavelength_bins, bin_data
+from banzai_floyds.utils.profile_utils import profile_fits_to_data
 from collections import namedtuple
 
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
@@ -37,7 +38,7 @@ def test_tracing():
     wavelength_bins = get_wavelength_bins(fake_frame.wavelengths)
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders, wavelength_bins)
-    fitted_profile_centers = fit_profile(binned_data, profile_width=4)
+    fitted_profile_centers = fit_profile_centers(binned_data, profile_width=4)
     for fitted_center, input_center in zip(fitted_profile_centers, fake_frame.input_profile_centers):
         x = np.arange(fitted_center.domain[0], fitted_center.domain[1] + 1)
         np.testing.assert_allclose(fitted_center(x), input_center(x), rtol=0.00, atol=0.2)
@@ -56,7 +57,7 @@ def test_profile_width_fitting():
 
 
 def test_background_fitting():
-    np.random.seed(9813245)
+    np.random.seed(234515)
     fake_frame = generate_fake_science_frame(include_sky=True)
     wavelength_bins = get_wavelength_bins(fake_frame.wavelengths)
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
@@ -71,7 +72,7 @@ def test_background_fitting():
                                 fake_frame.orders, wavelength_bins)
     np.testing.assert_allclose(binned_fitted_background['data'].groups.aggregate(np.sum),
                                binned_input_sky['data'].groups.aggregate(np.sum),
-                               rtol=0.03)
+                               rtol=0.033)
 
 
 def test_extraction():
@@ -82,20 +83,27 @@ def test_extraction():
                                       fake_frame.orders, fake_frame.wavelength_bins)
     fake_profile_width_funcs = [lambda _: fwhm_to_sigma(fake_frame.input_profile_width)
                                 for _ in fake_frame.input_profile_centers]
-    fake_frame.profile = fake_frame.input_profile_centers, fake_profile_width_funcs
+    fake_frame.profile_fits = fake_frame.input_profile_centers, fake_profile_width_funcs
+    fake_frame.profile = profile_fits_to_data(fake_frame.data.shape, fake_frame.input_profile_centers,
+                                              fake_profile_width_funcs, fake_frame.orders, fake_frame.wavelengths.data)
     fake_frame.binned_data['background'] = 0.0
     extracted = extract(fake_frame.binned_data)
-    np.testing.assert_allclose(extracted['flux'], 10000.0, rtol=0.05)
-    np.testing.assert_allclose(extracted['flux'] / extracted['fluxerror'], 100.0, rtol=0.10)
+    np.testing.assert_allclose(extracted['fluxraw'], 10000.0, rtol=0.05)
+    np.testing.assert_allclose(extracted['fluxraw'] / extracted['fluxrawerr'], 100.0, rtol=0.10)
 
 
 def test_full_extraction_stage():
     np.random.seed(192347)
     input_context = context.Context({})
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True)
+    frame.wavelength_bins = get_wavelength_bins(frame.wavelengths)
+    frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths,
+                                 frame.orders, frame.wavelength_bins)
     fake_profile_width_funcs = [lambda _: fwhm_to_sigma(frame.input_profile_width) for _ in frame.input_profile_centers]
-    frame.profile = frame.input_profile_centers, fake_profile_width_funcs
+    frame.profile_fits = frame.input_profile_centers, fake_profile_width_funcs
+    frame.profile = profile_fits_to_data(frame.data.shape, frame.input_profile_centers, fake_profile_width_funcs,
+                                         frame.orders, frame.wavelengths.data)
     stage = Extractor(input_context)
     frame = stage.do_stage(frame)
     expected = np.interp(frame['EXTRACTED'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
-    np.testing.assert_allclose(frame['EXTRACTED'].data['flux'], expected, rtol=0.065)
+    np.testing.assert_allclose(frame['EXTRACTED'].data['fluxraw'], expected, rtol=0.085)

@@ -5,6 +5,11 @@ BANZAI Data Reduction for FLOYDS spectra
     :target: http://www.astropy.org
     :alt: Powered by Astropy Badge
 
+Installation
+------------
+```
+pip install .
+```
 
 License
 -------

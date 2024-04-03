@@ -192,6 +192,10 @@ class TestFringeCreation:
         assert len(calibrations_in_db) == 2
 
 
+def is_standard(object_name):
+    return 'bd+' in object_name.lower() or 'feige' in object_name.lower()
+
+
 @pytest.mark.e2e
 @pytest.mark.standards
 class TestStandardFileCreation:
@@ -204,9 +208,11 @@ class TestStandardFileCreation:
         with Connection(os.getenv('FITS_BROKER')) as conn:
             producer = conn.Producer(exchange=exchange)
             for row in test_data:
-                archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
-                archive_record['frameid'] = archive_record['id']
-                producer.publish(archive_record)
+                if 'e00.fits' in row['filename'] and is_standard(row['object']):
+                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
+                    archive_record['frameid'] = archive_record['id']
+                    # TODO: Only publish the message if this is a standard
+                    producer.publish(archive_record)
             producer.release()
 
         celery_join()
@@ -214,8 +220,9 @@ class TestStandardFileCreation:
 
     def test_if_standards_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
-        for expected_file in expected_filenames(test_data):
-            assert os.path.exists(expected_file)
+        for i, expected_file in enumerate(expected_filenames(test_data)):
+            if 'e91.fits' in expected_file and is_standard(test_data['object'][i]):
+                assert os.path.exists(expected_file)
 
 
 @pytest.mark.e2e
@@ -230,9 +237,11 @@ class TestScienceFileCreation:
         with Connection(os.getenv('FITS_BROKER')) as conn:
             producer = conn.Producer(exchange=exchange)
             for row in test_data:
-                archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
-                archive_record['frameid'] = archive_record['id']
-                producer.publish(archive_record)
+                if 'e00.fits' in row['filename'] and not is_standard(row['object']):
+                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
+                    archive_record['frameid'] = archive_record['id']
+                    # TODO: Only publish the message if this is not a standard
+                    producer.publish(archive_record)
             producer.release()
 
         celery_join()
@@ -240,5 +249,6 @@ class TestScienceFileCreation:
 
     def test_if_science_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
-        for expected_file in expected_filenames(test_data):
-            assert os.path.exists(expected_file)
+        for i, expected_file in enumerate(expected_filenames(test_data)):
+            if 'e91.fits' in expected_file and not is_standard(test_data['object'][i]):
+                assert os.path.exists(expected_file)
