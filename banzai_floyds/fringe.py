@@ -63,7 +63,7 @@ class FringeMaker(CalibrationMaker):
             x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
             # find the offset to the rest of the splines:
             fringe_offset = find_fringe_offset(image, reference_fringe_spline)
-            # Interpolate onto the a normal pixel grid using the order offset
+            # Interpolate onto a normal pixel grid using the order offset
             # We want a S/N of greater than 10 in the data
             high_sn = image.data / image.uncertainty > 10.0
             data_to_fit = np.logical_and(image.orders.data == 1, high_sn)
@@ -95,7 +95,7 @@ class FringeMaker(CalibrationMaker):
 
 class FringeCorrector(Stage):
     def do_stage(self, image):
-        # Only divide the fringe out where the the divisor is > 0.1 so we don't amplify
+        # Only divide the fringe out where the divisor is > 0.1 so we don't amplify
         # artifacts due to the edge of the slit
         fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0.1)
         fringe_offset = find_fringe_offset(image, fringe_spline)

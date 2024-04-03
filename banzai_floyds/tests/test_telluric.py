@@ -5,7 +5,7 @@ from banzai_floyds.telluric import TelluricCorrector, TelluricMaker
 from astropy.table import Table
 import mock
 
-from banzai_floyds.utils.telluric_utils import scale_trasmission
+from banzai_floyds.utils.telluric_utils import scale_transmission
 
 
 def test_telluric_corrector():
@@ -28,5 +28,5 @@ def test_telluric_maker(mock_standard):
 
 
 def test_null_airmass_correction():
-    correction = scale_trasmission(np.ones(1024), 1)
+    correction = scale_transmission(np.ones(1024), 1)
     np.testing.assert_allclose(correction, np.ones_like(correction))

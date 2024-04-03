@@ -18,9 +18,9 @@ def airmass_extinction(wavelength, elevation, airmass):
     # Convert the extinction curve from APO to our current site
     # We adopt an elevation of 2788m for APO
     airmass_ratio = telluric_utils.elevation_to_airmass_ratio(elevation, 2788.0)
-    transmission = telluric_utils.scale_trasmission(transmission, airmass_ratio)
+    transmission = telluric_utils.scale_transmission(transmission, airmass_ratio)
 
-    transmission = telluric_utils.scale_trasmission(transmission, airmass)
+    transmission = telluric_utils.scale_transmission(transmission, airmass)
 
     # Interpolate the extinction curve to the wavelength grid
     return np.interp(wavelength, extinction_curve['wavelength'], transmission)

@@ -30,7 +30,7 @@ TELLURIC_REGIONS = [{'wavelength_min': 5000.0, 'wavelength_max': 5155.0, 'molecu
                     {'wavelength_min': 10500.0, 'wavelength_max': 12500.0, 'molecule': 'H2O'}]
 
 
-def scale_trasmission(transmission, airmass_scale):
+def scale_transmission(transmission, airmass_scale):
     # This was a giant pain to figure out.
     # We assume the transmission is an exponential with airmass ala the Beer-Lambert Law
     # T = e^(-A(λ) * X) where X is the airmass and A(λ) is the absorption for a given atmospheric composition
@@ -60,8 +60,8 @@ def scale_telluric(telluric_transmission, wavelength, o2_scale, h2o_scale, h2o_r
     scaled_model = telluric_transmission.copy()
     if o2_region is None or h2o_region is None:
         o2_region, h2o_region = get_molecular_regions(wavelength)
-    scaled_model[h2o_region] = scale_trasmission(scaled_model[h2o_region], h2o_scale)
-    scaled_model[o2_region] = scale_trasmission(scaled_model[o2_region], o2_scale)
+    scaled_model[h2o_region] = scale_transmission(scaled_model[h2o_region], h2o_scale)
+    scaled_model[o2_region] = scale_transmission(scaled_model[o2_region], o2_scale)
     return {'telluric': scaled_model, 'wavelength': wavelength}
 
 
@@ -74,10 +74,11 @@ def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resol
         # The telluric model from Matheson 2000 is sampled at 1 Angstrom per pixel so use a resolution of 17.5
         sigma = fwhm_to_sigma(resolution_fwhm)
         telluric_model['telluric'] = gaussian_filter1d(telluric_model['telluric'], sigma, mode='constant', cval=1.0)
+
+        # TODO: Rescaling the telluric correction currently makes things worse so we need to revist.
         # We adopt the elevation of KPNO for which this was measured on the McMath-Pierce Solar Telescope
-        # Don't rescale the telluric model at all for now
         # airmass_ratio = elevation_to_airmass_ratio(elevation, 2096)
-        # telluric_model['telluric'] = scale_trasmission(telluric_model['telluric'], airmass_ratio)
+        # telluric_model['telluric'] = scale_transmission(telluric_model['telluric'], airmass_ratio)
 
     telluric_correction = np.interp(wavelength, telluric_model['wavelength'], telluric_model['telluric'],
                                     right=1.0, left=1.0)
@@ -88,8 +89,8 @@ def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resol
 def telluric_match_weights(params, x, correction, wavelengths, o2_region, h2o_region):
     shift, o2_scale, h2o_scale = params
     model_correction = correction.copy()
-    model_correction[o2_region] = scale_trasmission(model_correction[o2_region], o2_scale)
-    model_correction[h2o_region] = scale_trasmission(model_correction[h2o_region], h2o_scale)
+    model_correction[o2_region] = scale_transmission(model_correction[o2_region], o2_scale)
+    model_correction[h2o_region] = scale_transmission(model_correction[h2o_region], h2o_scale)
     correction = np.interp(x, wavelengths - shift, model_correction, right=1.0, left=1.0)
     correction[correction < 0.0] = 0.0
     correction[correction > 1.0] = 1.0

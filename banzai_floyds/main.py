@@ -82,10 +82,14 @@ def banzai_floyds_stack_flats():
                                                            'help': 'Number of days to include in the stack'}}]
     runtime_context = parse_args(settings, extra_console_arguments=extra_args)
     instruments = banzai.dbs.get_instruments_at_site(runtime_context.site, db_address=runtime_context.db_address)
+    instrument_to_stack = None
     for instrument in instruments:
         if 'floyds' in instrument.name.lower():
             instrument_to_stack = instrument
 
+    # If floyds is missing at this site, short circuit.
+    if instrument_to_stack is None:
+        return
     if runtime_context.min_date is None:
         min_date = datetime.datetime.now(tz=datetime.timezone.utc)
         min_date -= datetime.timedelta(days=runtime_context.lookback_days)

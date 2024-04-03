@@ -42,8 +42,13 @@ class FluxSensitivity(Stage):
             else:
                 telluric_model = np.ones_like(data_to_fit['wavelength'])
             # Divide the data by the flux standard in the blue
-            # We choose a window size of 17 which is bigger than the resolution element
-            this_sensitivity = savgol_filter(expected_flux * telluric_model / data_to_fit['fluxraw'], 17, 3)
+            # We choose a window size of 17 a polynomial order of 3
+            # The results should not depend strongly on these choices as long as the window size is larger than the
+            # resolution element and the polynomial order isn't so high we overfit
+            window_size = 17
+            smoothing_order = 3
+            this_sensitivity = savgol_filter(expected_flux * telluric_model / data_to_fit['fluxraw'],
+                                             window_size, smoothing_order)
             # We have to use this temp sensitivity variable because of how python does numpy array copying
             sensitivity[in_order] = this_sensitivity
             sensitivity_order[in_order] = order_id

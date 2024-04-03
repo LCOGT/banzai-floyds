@@ -12,7 +12,7 @@ from astropy.io import fits, ascii
 from astropy.table import Table
 
 
-standards = [{'name': 'gd108', 'input_file': 'fgd108.dat', 'ra': 115.086642, 'dec': -17.413667},
+standards = [{'name': 'gd108', 'input_file': 'fgd108.dat', 'ra': 150.196859, 'dec': -7.558548},
              {'name': 'eg274', 'input_file': 'fEG274.dat', 'ra': 245.890989, 'dec': -39.229487},
              {'name': 'feige110', 'input_file': 'ffeige110.dat', 'ra': 349.99332558, 'dec': -5.16560011},
              {'name': 'feige34', 'input_file': 'ffeige34.dat', 'ra': 159.903066, 'dec': 43.102559},
@@ -21,7 +21,8 @@ standards = [{'name': 'gd108', 'input_file': 'fgd108.dat', 'ra': 115.086642, 'de
 for standard in standards:
     eso_data = ascii.read(standard['input_file'])
     data = Table({'wavelength': eso_data['col1'], 'flux': eso_data['col2']})
-    hdu_list = fits.HDUList([fits.PrimaryHDU(header=fits.Header({'RA': standard['ra'], 'DEC': standard['dec']})), 
+    hdu_list = fits.HDUList([fits.PrimaryHDU(header=fits.Header({'RA': standard['ra'], 'DEC': standard['dec'], 
+                                                                 'OBSTYPE': 'fluxstandard'})), 
                              fits.BinTableHDU(data)])
     hdu_list.writeto(f'{standard["name"]}.fits', overwrite=True)
 ```

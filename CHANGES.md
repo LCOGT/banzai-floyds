@@ -1,3 +1,10 @@
+0.9.0 (2024-04-02)
+------------------
+- Fixes based on Joey's comments
+- Deployment fixes
+- We now don't keep the filepath of the standards in the db. We assume they are in the archive
+  or are in the install director
+
 0.8.0 (2024-03-18)
 ------------------
 - Increased the memory limit on the containers to accomodate stacking

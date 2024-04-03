@@ -124,7 +124,6 @@ def fit_profile_width(data, profile_fits, poly_order=3, default_width=4):
 
 def fit_background(data, profile_centers, profile_widths, x_poly_order=2, y_poly_order=4):
     results = Table({'x': [], 'y': [], 'background': []})
-    model = models.Legendre2D(x_degree=x_poly_order, y_degree=y_poly_order)
     fitter = fitting.LinearLSQFitter()
     for data_to_fit in data.groups:
         wavelength_bin = data_to_fit['wavelength_bin'][0]

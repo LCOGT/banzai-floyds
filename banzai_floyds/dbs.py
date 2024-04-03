@@ -33,9 +33,14 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
             if standard_coordinate.separation(test_coordinate) < (offset_threshold * units.arcsec):
                 found_standard = standard
     if found_standard is not None:
-        found_standard = open_fits_file({'path': os.path.join(found_standard.filepath, found_standard.filename),
-                                         'frameid': found_standard.frameid,
-                                         'filename': found_standard.filename}, runtime_context)
+        found_standard = open_fits_file(
+            {'path': pkg_resources.resource_filename('banzai_floyds',
+                                                     os.path.join('data',
+                                                                  'standards',
+                                                                  found_standard.filename)),
+             'frameid': found_standard.frameid,
+             'filename': found_standard.filename},
+            runtime_context)
         return Table(found_standard[0][1].data)
     else:
         return None
@@ -46,7 +51,6 @@ class FluxStandard(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     frameid = Column(Integer, unique=True, default=None)
     filename = Column(String(100), unique=True)
-    filepath = Column(String(150))
     ra = Column(Float)
     dec = Column(Float)
 
@@ -66,7 +70,6 @@ def ingest_standards(db_address):
         standard_hdu = fits.open(standard_file)
         with get_session(db_address) as db_session:
             attributes = {'filename': os.path.basename(standard_file),
-                          'filepath': os.path.dirname(standard_file),
                           'ra': standard_hdu[0].header['RA'],
                           'dec': standard_hdu[0].header['DEC']}
             add_or_update_record(db_session, FluxStandard, attributes, attributes)

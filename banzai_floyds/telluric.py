@@ -27,9 +27,11 @@ class TelluricMaker(Stage):
 
         correction[correction < 0.0] = 0.0
         correction[correction > 1.0] = 1.0
-        # Remove any scaling for the telluric model at the moment
-        # Normalize to airmass = 1
-        # correction = telluric_utils.scale_trasmission(correction, 1.0 / image.airmass)
+
+        # TODO: We should have to normalize to airmass = 1 here but for some reason, all the
+        # reductions look better with no correction. We need to take another look at the
+        # airmass scaling to make sure it is being applied correctly.
+        # correction = telluric_utils.scale_transmission(correction, 1.0 / image.airmass)
 
         image.telluric = Table({'wavelength': data['wavelength'], 'telluric': correction})
         return image
@@ -39,12 +41,13 @@ class TelluricCorrector(Stage):
     def do_stage(self, image):
         in_order = image.extracted['order'] == 1
         data = image.extracted[in_order]
-        # Scale the water bands by minimizing the match filter statistic between the telluric corrected spectrum
-        # and the telluric correction
+
         telluric_model = np.interp(data['wavelength'], image.telluric['wavelength'], image.telluric['telluric'],
                                    left=1.0, right=1.0)
-        # Don't do telluric model scaling at the moment
-        # telluric_model = telluric_utils.scale_trasmission(telluric_model, image.airmass)
+
+        # TODO: We should need to rescale the telluric depths here based on humidity and possibly airmass,
+        # but the fits did not converge well and the correction is fine without. Need to revist.
+        # telluric_model = telluric_utils.scale_transmission(telluric_model, image.airmass)
         image.extracted['flux'][in_order] /= telluric_model
         image.telluric = Table({'wavelength': data['wavelength'], 'telluric': telluric_model})
         return image
