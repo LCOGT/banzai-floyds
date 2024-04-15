@@ -66,7 +66,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         fits_1d = frame_1d.to_fits(runtime_context)
         if 'EXTRACTED' in fits_1d:
             fits_1d['EXTRACTED'].name = 'SPECTRUM'
-        # TODO: Save telluric and sensitivity corrections that were applied
 
         filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')
 
