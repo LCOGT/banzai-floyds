@@ -121,6 +121,32 @@ def test_refine_peak_centers():
         assert np.min(abs(test_lines - fit)) < 0.2
 
 
+def test_refine_peak_centers_with_background():
+    x = np.arange(2500.0, dtype=float)
+    flux = np.zeros_like(x, dtype=float)
+    lines = []
+    line_sigma = 2.5
+    read_noise = 10.0
+    np.random.seed(2193457)
+
+    # Only choose 10 lines here. 20 basically guaruntees that the peaks will overlap
+    # Thanks birthday problem in statistics
+    for line in np.random.uniform(10, 2490, size=10):
+        lines.append(line)
+        flux += gauss(x, line, line_sigma) * np.random.uniform(1000, 10000)
+    lines = np.array(lines)
+    background_poly = Legendre([100.0, 5.0, 10.0, -6], domain=(0, 2501))
+    flux += background_poly(x)
+    flux = np.random.poisson(flux).astype(float)
+    flux += np.random.normal(0, read_noise, size=flux.shape)
+    flux_error = np.sqrt(read_noise ** 2 + np.sqrt(np.abs(flux)))
+
+    fit_list = refine_peak_centers(flux, flux_error, lines, sigma_to_fwhm(line_sigma) * 0.7)
+
+    for fit_line in fit_list:
+        assert np.min(np.abs(lines - fit_line)) < 0.2
+
+
 def test_2d_wavelength_solution():
     nx = 501
     data = np.zeros((512, nx))
@@ -131,6 +157,8 @@ def test_2d_wavelength_solution():
     trace_center = Legendre(input_center_params, domain=(0, data.shape[1] - 1))
     input_order_region = order_region(order_height, trace_center, data.shape)
 
+    bkg_order_x = 4
+    bkg_order_y = 2
     min_wavelength = 3200.0
     seed = 76856
     line_width = 3 * (2 * np.sqrt(2 * np.log(2)))
@@ -150,13 +178,17 @@ def test_2d_wavelength_solution():
     # Note that weight function has the line width in angstroms whereas our line width here is in pixels
     params = full_wavelength_solution(data[input_order_region], error[input_order_region], x2d[input_order_region],
                                       (y2d - trace_center(x1d))[input_order_region], converted_input_polynomial.coef,
-                                      tilt, dispersion * line_width, lines)
+                                      tilt, dispersion * line_width, lines,
+                                      background_order_x=bkg_order_x,
+                                      background_order_y=bkg_order_y)
 
     fit_tilt, fit_line_width, *fit_polynomial_coefficients = params
     # Assert that the best fit parameters are close to the inputs
     np.testing.assert_allclose(tilt, fit_tilt, atol=0.1)
     np.testing.assert_allclose(dispersion * line_width, fit_line_width, atol=0.3)
-    np.testing.assert_allclose(converted_input_polynomial.coef, fit_polynomial_coefficients, atol=0.1)
+    n_bkg_coefficients = bkg_order_x + 1 + bkg_order_y + 1
+    np.testing.assert_allclose(converted_input_polynomial.coef, fit_polynomial_coefficients[:-n_bkg_coefficients],
+                               atol=0.1)
 
 
 def generate_fake_arc_frame():
@@ -172,7 +204,7 @@ def generate_fake_arc_frame():
     # make a reasonable wavelength model
     wavelength_model1 = Legendre((7425, 2950.5, 20., -5., 1.), domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    line_widths = [CalibrateWavelengths.INITIAL_LINE_WIDTHS[i] for i in range(1, 3)]
+    line_widths = [CalibrateWavelengths.INITIAL_LINE_FWHMS[i] for i in range(1, 3)]
     line_tilts = [CalibrateWavelengths.INITIAL_LINE_TILTS[i] for i in range(1, 3)]
     dispersions = [CalibrateWavelengths.INITIAL_DISPERSIONS[i] for i in range(1, 3)]
     flux_scale = 80000.0

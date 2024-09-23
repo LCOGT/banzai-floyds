@@ -4,8 +4,8 @@ import numpy as np
 
 
 class WavelengthSolution:
-    def __init__(self, polymomials, line_widths, line_tilts, orders):
-        self._line_widths = line_widths
+    def __init__(self, polymomials, line_fwhms, line_tilts, orders):
+        self._line_fwhms = line_fwhms
         self._polynomials = polymomials
         self._line_tilts = line_tilts
         self._orders = orders
@@ -25,13 +25,13 @@ class WavelengthSolution:
 
     def to_header(self):
         header = fits.Header()
-        for i, (polynomial, width, tilt) in enumerate(zip(self._polynomials, self._line_widths, self._line_tilts)):
-            header[f'LINWIDE{i + 1}'] = width
-            header[f'LINTILT{i + 1}'] = tilt
-            header[f'POLYORD{i + 1}'] = polynomial.degree()
-            header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain))
+        for i, (polynomial, fwhm, tilt) in enumerate(zip(self._polynomials, self._line_fwhms, self._line_tilts)):
+            header[f'LINFWHM{i + 1}'] = fwhm, f'Line spread FWHM in angstroms for order {i}'
+            header[f'LINTILT{i + 1}'] = tilt, f'Tilt angle in deg for order {i}'
+            header[f'POLYORD{i + 1}'] = polynomial.degree(), f'Wavelength polynomial order for order {i}'
+            header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain order for order {i}'
             for j, coef in enumerate(polynomial.coef):
-                header[f'COEF{i + 1}_{j}'] = coef
+                header[f'COEF{i + 1}_{j}'] = coef, 'Wavelength polynomial coef {j} for order {i}'
         header['EXTNAME'] = 'WAVELENGTHS'
         return header
 
@@ -40,8 +40,8 @@ class WavelengthSolution:
         return [polynomial.coef for polynomial in self._polynomials]
 
     @property
-    def line_widths(self):
-        return self._line_widths
+    def line_fwhms(self):
+        return self._line_fwhms
 
     @property
     def line_tilts(self):
@@ -50,16 +50,16 @@ class WavelengthSolution:
     @classmethod
     def from_header(cls, header, orders):
         order_ids = np.arange(1, len([x for x in header.keys() if 'POLYORD' in x]) + 1)
-        line_widths = []
+        line_fwhms = []
         line_tilts = []
         polynomials = []
         for order_id in order_ids:
             line_tilts.append(header[f'LINTILT{order_id}'])
-            line_widths.append(header[f'LINWIDE{order_id}'])
+            line_fwhms.append(header[f'LINFWHM{order_id}'])
             polynomials.append(Legendre([float(header[f'COEF{order_id}_{i}'])
                                          for i in range(int(header[f'POLYORD{order_id}']) + 1)],
                                domain=eval(header[f'POLYDOM{order_id}'])))
-        return cls(polynomials, line_widths, line_tilts, orders)
+        return cls(polynomials, line_fwhms, line_tilts, orders)
 
     @property
     def orders(self):

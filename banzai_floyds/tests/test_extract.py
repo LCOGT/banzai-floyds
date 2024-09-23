@@ -1,8 +1,10 @@
 import numpy as np
 from banzai import context
+from banzai_floyds.profile import fit_profile_centers, fit_profile_width
 from banzai_floyds.tests.utils import generate_fake_science_frame
-from banzai_floyds.extract import Extractor, fit_profile_centers, fit_profile_width, fit_background, extract
-from banzai_floyds.extract import get_wavelength_bins, bin_data
+from banzai_floyds.extract import Extractor, fit_background, extract
+from banzai_floyds.utils.binning_utils import get_wavelength_bins
+from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.profile_utils import profile_fits_to_data
 from collections import namedtuple
 

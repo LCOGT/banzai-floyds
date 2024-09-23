@@ -1,7 +1,7 @@
 import pytest
 import time
 from banzai.celery import app, stack_calibrations
-from banzai.tests.utils import FakeResponse
+from banzai.tests.utils import FakeResponse, load_manual_region
 import banzai.dbs
 import os
 import pkg_resources
@@ -17,6 +17,9 @@ from banzai.utils import file_utils
 from types import ModuleType
 import banzai_floyds.dbs
 import logging
+import json
+from banzai_floyds.utils.order_utils import get_order_2d_region
+from numpy.polynomial.legendre import Legendre
 
 
 logger = logging.getLogger('banzai')
@@ -25,6 +28,8 @@ app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 
 DATA_FILELIST = pkg_resources.resource_filename('banzai_floyds.tests', 'data/test_data.dat')
 CONFIGDB_FILENAME = pkg_resources.resource_filename('banzai_floyds.tests', 'data/configdb.json')
+
+ORDER_HEIGHT = 95
 
 
 def celery_join():
@@ -107,6 +112,25 @@ class TestOrderDetection:
             # Note there are only two orders in floyds
             assert np.max(hdu['ORDERS'].data) == 2
 
+    def test_that_order_mask_overlaps_manual_reducion(self):
+        # This uses the by hand measurements in chacterization_testing/ManualReduction.ipynb
+        test_data = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/test_skyflat.dat'))
+        for row in test_data:
+            row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
+
+        filenames = expected_filenames(test_data)
+        manual_fits_filename = pkg_resources.resource_filename('banzai.tests', 'data/orders_e2e_fits.dat')
+        for filename in filenames:
+            hdu = fits.open(filename)
+            site_id = hdu['SCI'].header['SITEID']
+            for order_id in [1, 2]:
+                manual_order_region = load_manual_region(manual_fits_filename,
+                                                         site_id, order_id,
+                                                         hdu['SCI'].data.shape,
+                                                         ORDER_HEIGHT)
+                found_order = hdu['ORDERS'].data == order_id
+                assert np.logical_and(manual_order_region, found_order).sum() / found_order.sum() >= 0.99
+
 
 @pytest.mark.e2e
 @pytest.mark.arc_frames
@@ -134,6 +158,36 @@ class TestWavelengthSolutionCreation:
         for expected_file in expected_filenames(test_data):
             if 'a91.fits' in expected_file:
                 assert os.path.exists(expected_file)
+
+    def test_if_arc_solution_is_sensible(self):
+
+        with open(pkg_resources.resource_filename('banzai.tests', 'data/wavelength_e2e_fits.dat')) as solution_file:
+            solution_params = json.load(solution_file)
+        order_fits_file = pkg_resources.filename('banzai.tests', 'data/orders_e2e_fits.dat')
+        test_data = ascii.read(DATA_FILELIST)
+        for expected_file in expected_filenames(test_data):
+            if 'a91' not in expected_file:
+                continue
+            hdu = fits.open(expected_file)
+            site_id = os.path.basename(expected_file)[:3]
+            for order_id in [1, 2]:
+                order_region = load_manual_region(order_fits_file,
+                                                  site_id, order_id,
+                                                  hdu['SCI'].data.shape,
+                                                  ORDER_HEIGHT)
+                manual_wavelengths = np.zeros(hdu['SCI'].shape)
+                region = get_order_2d_region(order_region)
+                for i in range(region.shape[0]):
+                    wavelength_solution = Legendre(coef=solution_params[site_id][order_id]['coef'][i],
+                                                   domain=solution_params[site_id][order_id]['domain'][i],
+                                                   window=solution_params[site_id][order_id]['window'][i])
+                    x_pixels = np.arange(wavelength_solution.domain[0], wavelength_solution.domain[1] + 1)
+                    manual_wavelengths[region][i] = wavelength_solution(x_pixels)
+                overlap = np.logical_and(hdu['ORDERS'].data == order_id, order_region)
+                # Require < 0.5 Angstrom tolerance
+                assert np.testing.assert_allclose(hdu['WAVELENGTHS'][overlap],
+                                                  manual_wavelengths[overlap],
+                                                  atol=0.5)
 
 
 @pytest.mark.e2e

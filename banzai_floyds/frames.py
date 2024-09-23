@@ -15,10 +15,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, hdu_order: list = None):
         self.orders = None
         self._wavelengths = None
-        self.profile_fits = None
+        self._profile_fits = None
         self._background_fits = None
         self.wavelength_bins = None
-        self.binned_data = None
+        self._binned_data = None
         self._extracted = None
         self.fringe = None
         self._sensitivity = None
@@ -98,6 +98,36 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         if self.binned_data is not None:
             x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
             self.binned_data['weights'] = self['PROFILE'].data[y, x]
+
+    @property
+    def profile_fits(self):
+        return self._profile_fits
+
+    @profile_fits.setter
+    def profile_fits(self, value):
+        centers, widths, fitted_points = value
+        self._profile_fits = centers, widths
+        header = fits.Header()
+        for order, center, width in zip([1, 2], centers, widths):
+            for i, coef in enumerate(width.coef):
+                header[f'O{order}WID{i:02}'] = coef, f'P_{i:02} coefficient for width for order {order}'
+            for i, coef in enumerate(center.coef):
+                header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
+            domain_str = '{0} domain value for {1} fit of the profile for order {2}'
+            header[f'O{order}WIDDM0'] = width.domain[0], domain_str.format('Min', 'width', order)
+            header[f'O{order}WIDDM1'] = width.domain[1], domain_str.format('Max', 'width', order)
+            header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', 'center', order)
+            header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', 'center', order)
+        self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
+
+    @property
+    def binned_data(self):
+        return self._binned_data
+
+    @binned_data.setter
+    def binned_data(self, value):
+        self._binned_data = value
+        self.add_or_update(DataTable(value, name='BINNED2D', meta=fits.Header({})))
 
     @property
     def obstype(self):
