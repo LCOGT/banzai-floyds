@@ -47,6 +47,14 @@ class WavelengthSolution:
     def line_tilts(self):
         return self._line_tilts
 
+    @property
+    def domains(self):
+        return [polynomial.domain for polynomial in self._polynomials]
+
+    @property
+    def wavelength_domains(self):
+        return [polynomial(polynomial.domain) for polynomial in self._polynomials]
+
     @classmethod
     def from_header(cls, header, orders):
         order_ids = np.arange(1, len([x for x in header.keys() if 'POLYORD' in x]) + 1)

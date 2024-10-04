@@ -1,7 +1,6 @@
 from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table, vstack
-from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
 from astropy.modeling import fitting, models
 from banzai.logs import get_logger
 

@@ -9,13 +9,16 @@ from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import ArrayData, DataTable
 from banzai_floyds.utils.binning_utils import bin_data, get_wavelength_bins
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
-from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.arc_lines import arc_lines_table, used_lines
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 from banzai_floyds.extract import extract
 from scipy.special import erf
 from copy import copy
 from astropy.table import Table
+from banzai.logs import get_logger
+
+
+logger = get_logger()
 
 
 def wavelength_model_weights(theta, x, lines, line_sigma):
@@ -28,7 +31,7 @@ def wavelength_model_weights(theta, x, lines, line_sigma):
     for line in lines:
         if line['used']:
             # We need the line sigma in angstroms, we use delta lambda = dlambda/dx delta x
-            wavelength_sigma = wavelength_model.deriv(x) * line_sigma
+            wavelength_sigma = wavelength_model.deriv(1)(x) * line_sigma
             weights += line['strength'] * gauss(wavelengths, line['wavelength'], wavelength_sigma)
     return weights
 
@@ -64,7 +67,7 @@ def linear_wavelength_solution(data, error, lines, dispersion, line_fwhm, offset
     return Legendre((best_fit_offset, slope), domain=domain)
 
 
-def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=25.0):
+def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=5.0):
     """
         Detect peaks in spectrum extraction
 
@@ -77,6 +80,8 @@ def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=
         line_sep: minimum separation distance before lines are determined to be unique in pixels
         domain: tuple
             min and max x-values of the order
+        snr_threshold: float
+            cutoff for the peak detection in signal to noise in units of the median s/n of the spectrum
 
         Returns
         -------
@@ -94,7 +99,7 @@ def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=
     normalization = np.convolve(kernel * kernel, 1.0 / error / error, mode='same') ** 0.5
 
     metric = signal / normalization
-    peaks, _ = find_peaks(metric, height=snr_threshold, distance=line_sep)
+    peaks, _ = find_peaks(metric, height=snr_threshold * np.median(metric), distance=line_sep)
     peaks += int(min(domain))
     return peaks
 
@@ -205,9 +210,11 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
     """
     tilt, line_width = theta[:2]
     n_bkg_coefficients = bkg_order_x + 1 + bkg_order_y + 1
-    polynomial_coefficients = theta[2:-n_bkg_coefficients]
-    bkg_coefficients_x = theta[-n_bkg_coefficients:-bkg_order_y]
-    bkg_coefficients_y = theta[-bkg_order_y:-len(lines)]
+    polynomial_coefficients = theta[2:-n_bkg_coefficients - len(lines)]
+    bkg_x_low_index = 2 + len(polynomial_coefficients)
+    bkg_x_high_index = 2 + len(polynomial_coefficients) + 1 + bkg_order_x
+    bkg_coefficients_x = theta[bkg_x_low_index: bkg_x_high_index]
+    bkg_coefficients_y = theta[bkg_x_high_index:bkg_x_high_index + bkg_order_y + 1]
     line_strengths = theta[-len(lines):]
     x, y = coordinates
     tilted_x = tilt_coordinates(tilt, x, y)
@@ -219,7 +226,7 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
 
     line_sigma = fwhm_to_sigma(line_width)
     # Convert line sigma in pixels to wavelengths
-    line_sigma = line_sigma * wavelength_polynomial.deriv(tilted_x)
+    line_sigma = line_sigma * wavelength_polynomial.deriv(1)(tilted_x)
     model = np.zeros(x.shape)
     # Some possible optimizations are to truncate around each line (caching which indicies are for each line)
     # say +- 5 sigma around each line
@@ -233,6 +240,7 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
     model[used_region] *= bkg_polynomial_x(x[used_region]) * bkg_polynomial_y(y[used_region])
     # TODO: There is probably some annoying normalization here that is unconstrained
     # so we probably need 1 fewer free parameters
+
     return model
 
 
@@ -262,9 +270,10 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     # We could cache the domain of the function
     wavelength_polynomial = Legendre(initial_polynomial_coefficients, domain=(np.min(x), np.max(x)))
     line_sigma = fwhm_to_sigma(initial_line_fwhm)
-    pixels = np.range(*wavelength_polynomial.domain)
+    pixels = np.arange(wavelength_polynomial.domain[0], wavelength_polynomial.domain[1] + 1, 1.0)
     inverted_wavelength_polynomial = Legendre.fit(x=wavelength_polynomial(pixels), y=pixels,
-                                                  deg=wavelength_polynomial.degree, domain=wavelength_polynomial.domain)
+                                                  deg=wavelength_polynomial.degree(),
+                                                  domain=wavelength_polynomial.domain)
     line_pixel_positions = [inverted_wavelength_polynomial(line['wavelength']) for line in lines]
 
     # Cache where we think the lines are going to be. If we don't have a good initial solution this will create issues
@@ -274,6 +283,8 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
                    for line_pixel in line_pixel_positions]
     bkg_coefficients_x = np.zeros(background_order_x + 1)
     bkg_coefficients_y = np.zeros(background_order_y + 1)
+    bkg_coefficients_x[0] = np.median(data)
+    bkg_coefficients_y[0] = 1.0
     line_strengths = np.array([line['strength'] for line in lines])
 
     best_fit_params = optimize_match_filter((initial_tilt, initial_line_fwhm, *initial_polynomial_coefficients,
@@ -357,8 +368,10 @@ class CalibrateWavelengths(Stage):
     # These thresholds were set using the data processed by the characterization tests.
     # The notebook is in the diagnostics folder
     MATCH_THRESHOLDS = {1: 50.0, 2: 25.0}
-    # In pixels
-    MIN_LINE_SEPARATION = 5.0
+    # In units of the line fwhm (converted to sigma)
+    MIN_LINE_SEPARATION_N_SIGMA = 7.5
+    # In units of median signal to noise in the spectrum
+    PEAK_SNR_THRESHOLD = 3.0
     FIT_ORDERS = {1: 5, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
@@ -373,46 +386,48 @@ class CalibrateWavelengths(Stage):
         order_ids = order_ids[order_ids != 0]
         # Do a quick extraction by medianing the central region of the order
         extraction_orders = copy(image.orders)
-        extraction_orders.order_heights = self.EXTRACTION_HEIGHT * np.ones_like(order_ids)
 
         best_fit_polynomials = []
         best_fit_tilts = []
         best_fit_fwhms = []
 
         for i, order in enumerate(order_ids):
-            order_region = get_order_2d_region(extraction_orders.data == order)
+            order_region = extraction_orders.data == order
 
             # Bin the data using titled coordinates in pixel space
             x2d, y2d = np.meshgrid(np.arange(image.data.shape[1]), np.arange(image.data.shape[0]))
             order_center = image.orders.center(x2d[order_region])[i]
             tilt_ys = y2d[order_region] - order_center
-            tilted_x = tilt_coordinates(self.INITIAL_LINE_TILTS[order], x2d, tilt_ys)
+            tilted_x = tilt_coordinates(self.INITIAL_LINE_TILTS[order], x2d[order_region], tilt_ys)
             # The 1.0 at the end is arbitrarily larger than +0.5 so the sequence knows when to stop
             # with the final bin edge = last pixel + 0.5
             bins = np.arange(np.min(image.orders.domains[i]) - 0.5, np.max(image.orders.domains[i]) + 1.0)
             # Do a average over all the bins to get better signal to noise. This just does it without for loops
-            flux_1d = np.histogram(tilted_x, bins=bins, weights=image.data[order_region], density=False)
-            flux_1d /= np.histgram(tilted_x, bins=bins, density=False)
+            flux_1d = np.histogram(tilted_x, bins=bins, weights=image.data[order_region], density=False)[0]
+            flux_1d /= np.histogram(tilted_x, bins=bins, density=False)[0]
 
             # Note that this flux has an x origin at the x = 0 instead of the domain of the order
             # I don't think it matters though
 
             flux_1d_error = np.histogram(tilted_x, bins=bins, weights=image.uncertainty[order_region] ** 2.0,
-                                         density=False)
+                                         density=False)[0]
             flux_1d_error **= 0.5
-            flux_1d_error /= np.histgram(tilted_x, bins=bins, density=False)
+            flux_1d_error /= np.histogram(tilted_x, bins=bins, density=False)[0]
             linear_solution = linear_wavelength_solution(flux_1d, flux_1d_error, self.LINES[self.LINES['used']],
                                                          self.INITIAL_DISPERSIONS[order],
-                                                         self.INITIAL_LINE_FWHMS[order],
+                                                         self.INITIAL_LINE_FWHMS[image.site][order],
                                                          self.OFFSET_RANGES[order],
                                                          domain=image.orders.domains[i])
             # from 1D estimate linear solution
             # Estimate 1D distortion with higher order polynomials
+            min_line_separation = fwhm_to_sigma(self.INITIAL_LINE_FWHMS[image.site][order])
+            min_line_separation *= self.MIN_LINE_SEPARATION_N_SIGMA
             peaks = identify_peaks(flux_1d, flux_1d_error,
-                                   self.INITIAL_LINE_FWHMS[order] / self.INITIAL_DISPERSIONS[order],
-                                   self.MIN_LINE_SEPARATIONS[order], domain=image.orders.domains[i])
+                                   self.INITIAL_LINE_FWHMS[image.site][order] / self.INITIAL_DISPERSIONS[order],
+                                   min_line_separation, domain=image.orders.domains[i],
+                                   snr_threshold=self.PEAK_SNR_THRESHOLD)
             peaks = refine_peak_centers(flux_1d, flux_1d_error, peaks,
-                                        self.INITIAL_LINE_FWHMS[order],
+                                        self.INITIAL_LINE_FWHMS[image.site][order],
                                         domain=image.orders.domains[i])
             corresponding_lines = np.array(correlate_peaks(peaks, linear_solution, self.LINES[self.LINES['used']],
                                                            self.MATCH_THRESHOLDS[order])).astype(float)
@@ -426,7 +441,6 @@ class CalibrateWavelengths(Stage):
                                                    corresponding_lines[successful_matches],
                                                    image.orders.domains[i],
                                                    order=self.FIT_ORDERS[order])
-
             # Do a final fit that allows the fwhm, the line tilt, the strength of the catalog lines,
             # the background, and a single set of polynomial coeffs,to vary.
             # The background and line strengths are just nuisance parameters
@@ -438,7 +452,8 @@ class CalibrateWavelengths(Stage):
                 image.data[image.orders.data == order],
                 image.uncertainty[image.orders.data == order],
                 x2d[order_region], tilt_ys,
-                initial_solution, self.INITIAL_LINE_TILTS[order], self.INITIAL_LINE_FWHMS[order],
+                initial_solution.coef, self.INITIAL_LINE_TILTS[order],
+                self.INITIAL_LINE_FWHMS[image.site][order],
                 self.LINES[self.LINES['used']],
                 background_order_x=self.BKG_ORDER_X,
                 background_order_y=self.BKG_ORDER_Y
@@ -463,9 +478,11 @@ class CalibrateWavelengths(Stage):
         binned_data = bin_data(image.data, image.uncertainty, image.wavelengths, image.orders, wavelength_bins)
         binned_data['background'] = 0.0
         binned_data['weights'] = 1.0
-        extracted_data = extract(binned_data)
-        image.add_or_update(DataTable(extracted_data, name='EXTRACTED'))
+        binned_data['extraction_window'] = True
+        image.extracted = extract(binned_data)
 
-        image.add_or_update(DataTable(estimate_residuals(image, min_line_separation=self.MIN_LINE_SEPARATION),
+        min_line_separation = fwhm_to_sigma(np.max(list(self.INITIAL_LINE_FWHMS[image.site].values())))
+        min_line_separation *= self.MIN_LINE_SEPARATION_N_SIGMA
+        image.add_or_update(DataTable(estimate_residuals(image, min_line_separation=min_line_separation),
                                       name='LINESUSED'))
         return image
