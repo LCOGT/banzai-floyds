@@ -2,33 +2,27 @@ from astropy.table import Table, vstack
 import numpy as np
 
 
-def bins_to_bin_edges(bins):
-    bin_edges = bins['center'] - (bins['width'] / 2.0)
-    bin_edges = np.append(bin_edges, bins['center'][-1] + (bins['width'][-1] / 2.0))
-    return bin_edges
-
-
-def bin_data(data, uncertainty, wavelengths, orders, wavelength_bins, mask=None):
+def bin_data(data, uncertainty, wavelengths, orders, mask=None):
     if mask is None:
         mask = np.zeros_like(data, dtype=int)
     binned_data = None
     x2d, y2d = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
-    for order_id, order_wavelengths in zip(orders.order_ids, wavelength_bins):
+    for order_id, order_bins in zip(orders.order_ids, wavelengths.bin_edges):
         in_order = orders.data == order_id
-        # Throw away the data that is outside the first and last bins
-        min_wavelength = order_wavelengths[0]['center'] - (order_wavelengths[0]['width'] / 2.0)
-        max_wavelength = order_wavelengths[-1]['center'] + (order_wavelengths[-1]['width'] / 2.0)
-
-        in_order = np.logical_and(in_order, wavelengths.data > min_wavelength)
-        in_order = np.logical_and(in_order, wavelengths.data < max_wavelength)
 
         y_order = y2d[in_order] - orders.center(x2d[in_order])[order_id - 1]
         data_table = Table({'data': data[in_order], 'uncertainty': uncertainty[in_order],
                             'mask': mask[in_order], 'wavelength': wavelengths.data[in_order],
                             'x': x2d[in_order], 'y': y2d[in_order], 'y_order': y_order})
-        bin_number = np.digitize(data_table['wavelength'], bins_to_bin_edges(order_wavelengths))
-        data_table['wavelength_bin'] = order_wavelengths['center'][bin_number - 1]
-        data_table['wavelength_bin_width'] = order_wavelengths['width'][bin_number - 1]
+        bin_number = np.digitize(data_table['wavelength'], order_bins)
+        bin_centers = (order_bins[1:] + order_bins[:-1]) / 2.0
+        # Append the first and last bin centers as zero to flag that the edge pixels aren't in a
+        # bin
+        bin_centers = np.hstack([0, bin_centers, 0])
+        bin_widths = (order_bins[1:] - order_bins[:-1])
+        bin_widths = np.hstack([0, bin_widths, 0])
+        data_table['wavelength_bin'] = bin_centers[bin_number]
+        data_table['wavelength_bin_width'] = bin_widths[bin_number]
         data_table['order'] = order_id
         if binned_data is None:
             binned_data = data_table
@@ -37,30 +31,7 @@ def bin_data(data, uncertainty, wavelengths, orders, wavelength_bins, mask=None)
     return binned_data.group_by(('order', 'wavelength_bin'))
 
 
-def get_wavelength_bins(wavelengths):
-    """
-    Set the wavelength bins to be at the pixel edges along the center of the orders.
-    """
-    # TODO: in the long run we probably shouldn't bin at all and just do a full 2d sky fit
-    #   (including all flux in the order, yikes)
-    # Throw out the edge bins of the order as the lines are tilt and our orders are vertical
-    pixels_to_cut = np.round(0.5 * np.sin(np.deg2rad(wavelengths.line_tilts)) * wavelengths.orders.order_heights)
-    pixels_to_cut = pixels_to_cut.astype(int)
-    bin_edges = wavelengths.bin_edges
-    cuts = []
-    for cut in pixels_to_cut:
-        if cut == 0:
-            right_side_slice = slice(1, None)
-        else:
-            right_side_slice = slice(1+cut, -cut)
-        left_side_slice = slice(cut, -1-cut)
-        cuts.append((right_side_slice, left_side_slice))
-    return [Table({'center': (edges[right_cut] + edges[left_cut]) / 2.0,
-                   'width': edges[right_cut] - edges[left_cut]})
-            for edges, (right_cut, left_cut) in zip(bin_edges, cuts)]
-
-
-def combine_wavelegnth_bins(wavelength_bins):
+def combine_wavelength_bins(wavelength_bins):
     """
     Combine wavelength bins, taking the small delta (higher resolution) bins
     """

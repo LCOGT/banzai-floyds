@@ -9,6 +9,8 @@ from banzai_floyds.utils.flux_utils import airmass_extinction
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.frames import CalibrationFrame
+from banzai_floyds.utils.profile_utils import load_profile_fits
+from astropy.table import Table
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
@@ -17,12 +19,13 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self._wavelengths = None
         self._profile_fits = None
         self._background_fits = None
-        self.wavelength_bins = None
         self._binned_data = None
         self._extracted = None
         self.fringe = None
         self._sensitivity = None
         self._telluric = None
+        self.background_windows = None
+        self.extraction_windows = None
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
         # Override ra and dec to use the RA and Dec values because the CRVAL keywords don't really
         # have a lot of meaning when the slitmask is in place
@@ -46,6 +49,11 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.wavelengths = WavelengthSolution.from_header(self['WAVELENGTHS'].meta, self.orders)
         if 'PROFILE' in self:
             self.profile = self['PROFILE'].data
+        if 'PROFILEFITS' in self:
+            self.profile_fits = load_profile_fits(self['PROFILEFITS'])
+        if 'BINNED2D' in self:
+            binned_data = Table(self['BINNED2D'].data)
+            self.binned_data = binned_data.group_by(('order', 'wavelength_bin'))
         if 'EXTRACTED' in self:
             self.extracted = self['EXTRACTED'].data
         if 'FRINGE' in self:
@@ -88,6 +96,11 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         else:
             return super().get_output_data_products(runtime_context)
 
+    def save_processing_metadata(self, context):
+        super().save_processing_metadata(context)
+        if 'REDUCER' not in self.meta:
+            self.meta['REDUCER'] = 'BANZAI'
+
     @property
     def profile(self):
         return self['PROFILE'].data
@@ -113,6 +126,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                 header[f'O{order}WID{i:02}'] = coef, f'P_{i:02} coefficient for width for order {order}'
             for i, coef in enumerate(center.coef):
                 header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
+
+            header[f'O{order}CTRO'] = center.degree(), f'Polynomial Order for the center in order {order}'
+            header[f'O{order}WIDO'] = width.degree(), f'Polynomial Order for the width in order {order}'
+
             domain_str = '{0} domain value for {1} fit of the profile for order {2}'
             header[f'O{order}WIDDM0'] = width.domain[0], domain_str.format('Min', 'width', order)
             header[f'O{order}WIDDM1'] = width.domain[1], domain_str.format('Max', 'width', order)

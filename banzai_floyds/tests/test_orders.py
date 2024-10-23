@@ -64,8 +64,8 @@ def test_order_solver_stage():
     order_solver = OrderSolver(FakeContext())
     order_solver.ORDER_HEIGHT = order_height
     order_solver.CENTER_CUT_WIDTH = 21
-    order_solver.ORDER_REGIONS = [(0, nx), (0, nx)]
-    image = FLOYDSObservationFrame([CCDData(data=data, uncertainty=error, meta=fits.Header({}))], 'foo.fits')
+    order_solver.ORDER_REGIONS = {'ogg': [(0, nx), (0, nx)]}
+    image = FLOYDSObservationFrame([CCDData(data=data, uncertainty=error, meta=fits.Header({'SITEID': 'ogg'}))], 'foo.fits')
     image = order_solver.do_stage(image)
 
     for i, input_region in enumerate(input_order_regions):

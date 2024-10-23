@@ -1,7 +1,8 @@
 import pytest
 import time
 from banzai.celery import app, stack_calibrations
-from banzai.tests.utils import FakeResponse, load_manual_region
+from banzai.tests.utils import FakeResponse
+from banzai_floyds.tests.utils import load_manual_region
 import banzai.dbs
 import os
 import pkg_resources

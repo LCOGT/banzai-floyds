@@ -3,12 +3,13 @@ from astropy.modeling import fitting, models
 from astropy.table import Table, vstack, join
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.matched_filter import matched_filter_metric, optimize_match_filter
-from banzai_floyds.utils.binning_utils import bin_data, get_wavelength_bins
+from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.profile_utils import profile_fits_to_data
-
-
 from banzai.stages import Stage
+from banzai.logs import get_logger
+
+logger = get_logger()
 
 
 def fit_profile_width(data, profile_fits, domains, poly_order=2, default_width=6.0):
@@ -18,6 +19,9 @@ def fit_profile_width(data, profile_fits, domains, poly_order=2, default_width=6
     fitter = fitting.LMLSQFitter()
     for data_to_fit in data.groups:
         wavelength_bin = data_to_fit['wavelength_bin'][0]
+        # Skip pixels that don't fall into a normal bin
+        if wavelength_bin == 0:
+            continue
         order_id = data_to_fit['order'][0]
         profile_center = profile_fits[order_id - 1](wavelength_bin)
 
@@ -72,6 +76,9 @@ def profile_gauss_fixed_width(params, x, sigma):
 def fit_profile_centers(data, domains, polynomial_order=5, profile_width=6):
     trace_points = Table({'wavelength': [], 'center': [], 'order': []})
     for data_to_fit in data.groups:
+        # Skip pixels that don't fall into a normal bin
+        if data_to_fit['wavelength_bin'][0] == 0:
+            continue
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         # Find a rough estimate of the center by running across the whole slit (excluding 1-sigma on each side)
         sigma = fwhm_to_sigma(profile_width)
@@ -80,10 +87,10 @@ def fit_profile_centers(data, domains, polynomial_order=5, profile_width=6):
         lower_bound = np.min(data_to_fit['y_order']) + sigma
         non_edge = np.logical_and(data_to_fit['y_order'] > lower_bound, data_to_fit['y_order'] < upper_bound)
         # Run a matched filter (don't fit yet) over all the centers
-        snrs = [matched_filter_metric([center,], data_to_fit['data'] - np.median(data_to_fit['data']), 
-                                      data_to_fit['uncertainty'],
-                                      profile_gauss_fixed_width, None, None, data_to_fit['y_order'],
-                                      sigma) for center in data_to_fit['y_order'][non_edge]]
+        snrs = [matched_filter_metric([center,], data_to_fit['data'] - np.median(data_to_fit['data']),
+                                      data_to_fit['uncertainty'], profile_gauss_fixed_width, None, None,
+                                      data_to_fit['y_order'], sigma)
+                for center in data_to_fit['y_order'][non_edge]]
 
         # If the peak pixel of the match filter is < 2 times the median (ish) move on
         if np.max(snrs) < 2.0 * np.median(snrs):
@@ -117,14 +124,17 @@ class ProfileFitter(Stage):
     POLYNOMIAL_ORDER = 5
 
     def do_stage(self, image):
-        image.wavelength_bins = get_wavelength_bins(image.wavelengths)
+        logger.info('Binning data', image=image)
         image.binned_data = bin_data(image.data, image.uncertainty, image.wavelengths,
-                                     image.orders, image.wavelength_bins, image.mask)
+                                     image.orders, image.mask)
+        logger.info('Fitting profile centers', image=image)
         profile_centers, center_fitted_points = fit_profile_centers(image.binned_data,
                                                                     image.wavelengths.wavelength_domains,
                                                                     polynomial_order=self.POLYNOMIAL_ORDER)
+        logger.info('Fitting profile widths', image=image)
         profile_widths, width_fitted_points = fit_profile_width(image.binned_data, profile_centers,
                                                                 image.wavelengths.wavelength_domains)
+        logger.info('Storing profile fits', image=image)
         fitted_points = join(center_fitted_points, width_fitted_points, join_type='inner')
         image.profile_fits = profile_centers, profile_widths, fitted_points
         image.profile = profile_fits_to_data(image.data.shape, profile_centers, profile_widths,

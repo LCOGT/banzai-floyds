@@ -7,7 +7,7 @@ from scipy.signal import find_peaks
 from banzai_floyds.matched_filter import optimize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import ArrayData, DataTable
-from banzai_floyds.utils.binning_utils import bin_data, get_wavelength_bins
+from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
 from banzai_floyds.arc_lines import arc_lines_table, used_lines
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
@@ -81,7 +81,7 @@ def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=
         domain: tuple
             min and max x-values of the order
         snr_threshold: float
-            cutoff for the peak detection in signal to noise in units of the median s/n of the spectrum
+            cutoff for the peak detection in signal to noise
 
         Returns
         -------
@@ -99,7 +99,7 @@ def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=
     normalization = np.convolve(kernel * kernel, 1.0 / error / error, mode='same') ** 0.5
 
     metric = signal / normalization
-    peaks, _ = find_peaks(metric, height=snr_threshold * np.median(metric), distance=line_sep)
+    peaks, _ = find_peaks(metric, height=snr_threshold, distance=line_sep)
     peaks += int(min(domain))
     return peaks
 
@@ -237,10 +237,9 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
                                                    line_sigma[line_slice])
 
     used_region = np.where(model != 0.0)
-    model[used_region] *= bkg_polynomial_x(x[used_region]) * bkg_polynomial_y(y[used_region])
+    model[used_region] += bkg_polynomial_x(x[used_region]) * bkg_polynomial_y(y[used_region])
     # TODO: There is probably some annoying normalization here that is unconstrained
     # so we probably need 1 fewer free parameters
-
     return model
 
 
@@ -274,8 +273,10 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     inverted_wavelength_polynomial = Legendre.fit(x=wavelength_polynomial(pixels), y=pixels,
                                                   deg=wavelength_polynomial.degree(),
                                                   domain=wavelength_polynomial.domain)
-    line_pixel_positions = [inverted_wavelength_polynomial(line['wavelength']) for line in lines]
-
+    line_pixel_positions = np.array([inverted_wavelength_polynomial(line['wavelength']) for line in lines])
+    line_in_order = np.logical_and(np.min(x) <= line_pixel_positions, line_pixel_positions <= np.max(x))
+    lines = lines[line_in_order]
+    line_pixel_positions = line_pixel_positions[line_in_order]
     # Cache where we think the lines are going to be. If we don't have a good initial solution this will create issues
     # but that's true even if we don't cache here
     line_slices = [np.where(np.logical_and(tilted_x > line_pixel - 5.0 * line_sigma,
@@ -285,12 +286,29 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     bkg_coefficients_y = np.zeros(background_order_y + 1)
     bkg_coefficients_x[0] = np.median(data)
     bkg_coefficients_y[0] = 1.0
-    line_strengths = np.array([line['strength'] for line in lines])
 
+    initial_line_strengths = []
+
+    for line_pixel in line_pixel_positions:
+        line_flux = np.median(data[np.abs(tilted_x - line_pixel) <= 1.0])
+        line_flux -= bkg_coefficients_x[0]
+        line_flux /= (1 / np.sqrt(2.0 * np.pi) / line_sigma)
+        initial_line_strengths.append(line_flux)
+
+    bounds = [(-90., 90), [0.0, None]]
+    for _ in initial_polynomial_coefficients:
+        bounds.append([None, None])
+    for _ in bkg_coefficients_x:
+        bounds.append([None, None])
+    for _ in bkg_coefficients_y:
+        bounds.append([None, None])
+    for _ in initial_line_strengths:
+        bounds.append([0.0, None])
     best_fit_params = optimize_match_filter((initial_tilt, initial_line_fwhm, *initial_polynomial_coefficients,
-                                             *bkg_coefficients_x, *bkg_coefficients_y, *line_strengths), data,
+                                             *bkg_coefficients_x, *bkg_coefficients_y, *initial_line_strengths), data,
                                             error, full_wavelength_solution_weights, (x, y),
-                                            args=(lines, line_slices, background_order_x, background_order_y))
+                                            args=(lines, line_slices, background_order_x, background_order_y),
+                                            bounds=bounds)
     return best_fit_params
 
 
@@ -323,8 +341,8 @@ def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line
             continue
         closest_peak = peaks[np.argmin(np.abs(wavelengths[peaks] - line['wavelength']))]
         closest_peak_wavelength = wavelengths[closest_peak]
-        if np.abs(closest_peak_wavelength - line['wavelength']) <= 20:
-            refined_peak = refine_peak_centers(flux, flux_errors, np.array([closest_peak]), 4)[0]
+        if np.abs(closest_peak_wavelength - line['wavelength']) <= 5:
+            refined_peak = refine_peak_centers(flux, flux_errors, np.array([closest_peak]), line_fwhm)[0]
             if not np.isfinite(refined_peak):
                 continue
             if np.abs(refined_peak - closest_peak) > 5:
@@ -371,12 +389,12 @@ class CalibrateWavelengths(Stage):
     # In units of the line fwhm (converted to sigma)
     MIN_LINE_SEPARATION_N_SIGMA = 7.5
     # In units of median signal to noise in the spectrum
-    PEAK_SNR_THRESHOLD = 3.0
+    PEAK_SNR_THRESHOLD = 10.0
     FIT_ORDERS = {1: 5, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
     # Background polynomial orders
-    BKG_ORDER_X = 4
+    BKG_ORDER_X = 2
     BKG_ORDER_Y = 2
     """
     Stage that uses Arcs to fit wavelength solution
@@ -411,8 +429,8 @@ class CalibrateWavelengths(Stage):
 
             flux_1d_error = np.histogram(tilted_x, bins=bins, weights=image.uncertainty[order_region] ** 2.0,
                                          density=False)[0]
-            flux_1d_error **= 0.5
             flux_1d_error /= np.histogram(tilted_x, bins=bins, density=False)[0]
+            flux_1d_error **= 0.5
             linear_solution = linear_wavelength_solution(flux_1d, flux_1d_error, self.LINES[self.LINES['used']],
                                                          self.INITIAL_DISPERSIONS[order],
                                                          self.INITIAL_LINE_FWHMS[image.site][order],
@@ -426,9 +444,7 @@ class CalibrateWavelengths(Stage):
                                    self.INITIAL_LINE_FWHMS[image.site][order] / self.INITIAL_DISPERSIONS[order],
                                    min_line_separation, domain=image.orders.domains[i],
                                    snr_threshold=self.PEAK_SNR_THRESHOLD)
-            peaks = refine_peak_centers(flux_1d, flux_1d_error, peaks,
-                                        self.INITIAL_LINE_FWHMS[image.site][order],
-                                        domain=image.orders.domains[i])
+
             corresponding_lines = np.array(correlate_peaks(peaks, linear_solution, self.LINES[self.LINES['used']],
                                                            self.MATCH_THRESHOLDS[order])).astype(float)
             successful_matches = np.isfinite(corresponding_lines)
@@ -437,6 +453,11 @@ class CalibrateWavelengths(Stage):
                 # too few lines for good wavelength solution
                 image.is_bad = True
                 return image
+
+            peaks = refine_peak_centers(flux_1d, flux_1d_error, peaks,
+                                        self.INITIAL_LINE_FWHMS[image.site][order],
+                                        domain=image.orders.domains[i])
+
             initial_solution = estimate_distortion(peaks[successful_matches],
                                                    corresponding_lines[successful_matches],
                                                    image.orders.domains[i],
@@ -446,7 +467,6 @@ class CalibrateWavelengths(Stage):
             # The background and line strengths are just nuisance parameters
             # Limit the fit to only include +-5 sigma from known lines. This probably needs to be slit width
             # dependent. This is so the lines that we don't include in the model don't pull the background fits.
-
             # Fit 2D wavelength solution using initial guess either loaded or from 1D extraction
             tilt, fwhm, *coefficients = full_wavelength_solution(
                 image.data[image.orders.data == order],
@@ -463,19 +483,16 @@ class CalibrateWavelengths(Stage):
             polynomial = Legendre(coefficients[:self.FIT_ORDERS[order] + 1],
                                   domain=(min(x2d[image.orders.data == order]),
                                           max(x2d[image.orders.data == order])))
-
             best_fit_polynomials.append(polynomial)
             best_fit_tilts.append(tilt)
             best_fit_fwhms.append(fwhm)
-
         image.wavelengths = WavelengthSolution(best_fit_polynomials, best_fit_fwhms, best_fit_tilts, image.orders)
         image.add_or_update(ArrayData(image.wavelengths.data, name='WAVELENGTHS',
                                       meta=image.wavelengths.to_header()))
         image.is_master = True
 
         # Extract the data
-        wavelength_bins = get_wavelength_bins(image.wavelengths)
-        binned_data = bin_data(image.data, image.uncertainty, image.wavelengths, image.orders, wavelength_bins)
+        binned_data = bin_data(image.data, image.uncertainty, image.wavelengths, image.orders)
         binned_data['background'] = 0.0
         binned_data['weights'] = 1.0
         binned_data['extraction_window'] = True

@@ -14,7 +14,7 @@ ORDERED_STAGES = [
     'banzai_floyds.fringe.FringeCorrector',
     'banzai_floyds.profile.ProfileFitter',
     'banzai_floyds.extract.Extractor',
-    'banzai_floyds.trim.Trimmer',
+    # 'banzai_floyds.trim.Trimmer',
     'banzai_floyds.flux.StandardLoader',
     'banzai_floyds.flux.FluxSensitivity',
     'banzai_floyds.flux.FluxCalibrator',
@@ -28,6 +28,7 @@ SUPPORTED_FRAME_TYPES = ['SPECTRUM', 'LAMPFLAT', 'ARC', 'SKYFLAT', 'STANDARD']
 
 LAST_STAGE = {
     'SPECTRUM': None,
+    'STANDARD': None,
     'LAMPFLAT': 'banzai_floyds.fringe.FringeLoader',
     'ARC': 'banzai_floyds.orders.OrderTweaker',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
@@ -37,7 +38,7 @@ CALIBRATION_STACKER_STAGES = {'LAMPFLAT': ['banzai_floyds.fringe.FringeMaker']}
 CALIBRATION_MIN_FRAMES['LAMPFLAT'] = 2  # noqa: F405
 CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = ('banzai_floyds.utils.file_utils.config_to_filename',)  # noqa: F405
 
-EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': None,
+EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': None, 'STANDARD': None,
                 'ARC': ['banzai_floyds.wavelengths.CalibrateWavelengths'],
                 'SKYFLAT': ['banzai_floyds.orders.OrderSolver']}
 

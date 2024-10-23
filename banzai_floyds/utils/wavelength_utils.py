@@ -31,7 +31,7 @@ class WavelengthSolution:
             header[f'POLYORD{i + 1}'] = polynomial.degree(), f'Wavelength polynomial order for order {i}'
             header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain order for order {i}'
             for j, coef in enumerate(polynomial.coef):
-                header[f'COEF{i + 1}_{j}'] = coef, 'Wavelength polynomial coef {j} for order {i}'
+                header[f'COEF{i + 1}_{j}'] = coef, f'Wavelength polynomial coef {j} for order {i}'
         header['EXTNAME'] = 'WAVELENGTHS'
         return header
 

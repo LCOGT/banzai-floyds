@@ -1,5 +1,6 @@
 import numpy as np
 from banzai_floyds.utils.fitting_utils import gauss
+from numpy.polynomial.legendre import Legendre
 
 
 def profile_fits_to_data(data_shape, profile_centers, profile_widths, orders, wavelengths_data):
@@ -14,3 +15,18 @@ def profile_fits_to_data(data_shape, profile_centers, profile_widths, orders, wa
         profile_data[in_order] = gauss(y2d[in_order] - order_center[in_order],
                                        profile_center(wavelengths), profile_width(wavelengths))
     return profile_data
+
+
+def load_profile_fits(hdu):
+    centers = []
+    widths = []
+    for order in [1, 2]:
+        center_order = hdu.meta[f'O{order}CTRO']
+        width_order = hdu.meta[f'O{order}WIDO']
+        center_coeffs = [hdu.meta[f'O{order}CTR{i:02}'] for i in range(center_order + 1)]
+        width_coeffs = [hdu.meta[f'O{order}WID{i:02}'] for i in range(width_order + 1)]
+        center_poly = Legendre(center_coeffs, domain=[hdu.meta[f'O{order}CTRDM0'], hdu.meta[f'O{order}CTRDM1']])
+        width_poly = Legendre(width_coeffs, domain=[hdu.meta[f'O{order}WIDDM0'], hdu.meta[f'O{order}WIDDM1']])
+        centers.append(center_poly)
+        widths.append(width_poly)
+    return centers, widths, hdu.data

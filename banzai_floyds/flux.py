@@ -18,7 +18,6 @@ class FluxSensitivity(Stage):
         flux_standard = get_standard(image.ra, image.dec, self.runtime_context)
         if flux_standard is None or len(flux_standard) == 0:
             return image
-
         flux_standard.sort('wavelength')
         sensitivity = np.zeros_like(image.extracted['wavelength'].data)
         sensitivity_order = np.zeros_like(sensitivity, dtype=np.uint8)
