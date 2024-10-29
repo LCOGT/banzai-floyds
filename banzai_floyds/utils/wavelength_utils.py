@@ -26,8 +26,8 @@ class WavelengthSolution:
     def to_header(self):
         header = fits.Header()
         for i, (polynomial, fwhm, tilt) in enumerate(zip(self._polynomials, self._line_fwhms, self._line_tilts)):
-            header[f'LINFWHM{i + 1}'] = fwhm, f'Line spread FWHM in angstroms for order {i}'
-            header[f'LINTILT{i + 1}'] = tilt, f'Tilt angle in deg for order {i}'
+            header[f'FWHM{i + 1}'] = fwhm, f'Line spread FWHM in angstroms for order {i}'
+            header[f'TILT{i + 1}'] = tilt, f'Tilt angle in deg for order {i}'
             header[f'POLYORD{i + 1}'] = polynomial.degree(), f'Wavelength polynomial order for order {i}'
             header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain order for order {i}'
             for j, coef in enumerate(polynomial.coef):
@@ -62,8 +62,8 @@ class WavelengthSolution:
         line_tilts = []
         polynomials = []
         for order_id in order_ids:
-            line_tilts.append(header[f'LINTILT{order_id}'])
-            line_fwhms.append(header[f'LINFWHM{order_id}'])
+            line_tilts.append(header[f'TILT{order_id}'])
+            line_fwhms.append(header[f'FWHM{order_id}'])
             polynomials.append(Legendre([float(header[f'COEF{order_id}_{i}'])
                                          for i in range(int(header[f'POLYORD{order_id}']) + 1)],
                                domain=eval(header[f'POLYDOM{order_id}'])))

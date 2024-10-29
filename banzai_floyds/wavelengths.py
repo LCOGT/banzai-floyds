@@ -200,7 +200,7 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
 
     Parameters
     ----------
-    theta: tuple: tilt, line_width, *polynomial_coefficients, *background_coefficients, *line_strengths
+    theta: tuple: tilt, line_fwhm, *polynomial_coefficients, *background_coefficients, *line_strengths
     coordinates: tuple of 2d arrays x, y. x and y are the coordinates of the data array for the model
     lines: astropy table of the lines in the line list with wavelength (in angstroms) and strength
 
@@ -208,7 +208,7 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
     -------
     model array: 2d array with the match filter weights given the wavelength solution model
     """
-    tilt, line_width = theta[:2]
+    tilt, line_fwhm = theta[:2]
     n_bkg_coefficients = bkg_order_x + 1 + bkg_order_y + 1
     polynomial_coefficients = theta[2:-n_bkg_coefficients - len(lines)]
     bkg_x_low_index = 2 + len(polynomial_coefficients)
@@ -224,7 +224,7 @@ def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg
     bkg_polynomial_x = Legendre(bkg_coefficients_x, domain=(np.min(x), np.max(x)))
     bkg_polynomial_y = Legendre(bkg_coefficients_y, domain=(np.min(y), np.max(y)))
 
-    line_sigma = fwhm_to_sigma(line_width)
+    line_sigma = fwhm_to_sigma(line_fwhm)
     # Convert line sigma in pixels to wavelengths
     line_sigma = line_sigma * wavelength_polynomial.deriv(1)(tilted_x)
     model = np.zeros(x.shape)
@@ -333,6 +333,7 @@ class WavelengthSolutionLoader(CalibrationUser):
 
 
 def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line_separation):
+    # Note line_separation is in pixels here.
     reference_wavelengths = []
     measured_wavelengths = []
     peaks = np.array(identify_peaks(flux, flux_errors, line_fwhm, line_separation, snr_threshold=15.0))
@@ -354,6 +355,7 @@ def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line
 
 
 def estimate_residuals(image, min_line_separation=5.0):
+    # Note min_line_separation is in pixels here.
     reference_wavelengths = []
     measured_wavelengths = []
     orders = []
