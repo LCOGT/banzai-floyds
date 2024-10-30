@@ -78,7 +78,7 @@ def test_background_region():
     order_height = 21
     orders = np.zeros_like(x)
     for order_id in [1, 2]:
-        in_order = order_centers[order_id - 1] - order_height // 2 <= y 
+        in_order = order_centers[order_id - 1] - order_height // 2 <= y
         in_order = np.logical_and(y <= order_centers[order_id - 1] + order_height // 2, in_order)
         orders[in_order] = order_id
     profile_sigma = 1.0

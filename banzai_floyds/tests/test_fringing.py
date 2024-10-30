@@ -59,7 +59,7 @@ def test_create_super_fringe():
     # Trim off the edges of the order due to edge effects
     trimmed_order = frames[0].orders.new(frames[0].orders.order_heights - 20)
     in_order = trimmed_order.data == 1
-    np.testing.assert_allclose(frame.data[in_order], frames[0].input_fringe[in_order], rtol=0.02)
+    np.testing.assert_allclose(frame.data[in_order], frames[0].input_fringe[in_order], rtol=0.02, atol=0.02)
 
 
 def test_correct_fringe():

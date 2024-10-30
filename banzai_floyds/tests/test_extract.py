@@ -4,7 +4,6 @@ from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.extract import Extractor, extract, set_extraction_region
 from banzai_floyds.utils.binning_utils import bin_data
 from collections import namedtuple
-from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
 from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
 

@@ -1,6 +1,6 @@
 import numpy as np
 from astropy.table import Table, vstack
-from scipy.interpolate import RectBivariateSpline, CloughTocher2DInterpolator
+from scipy.interpolate import CloughTocher2DInterpolator
 from banzai.stages import Stage
 from numpy.polynomial.legendre import Legendre
 

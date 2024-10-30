@@ -25,7 +25,7 @@ def test_bin_data():
         points_in_bins.append(len(data_group))
 
     # Each bin should have two columns of points in it
-    # We count the first and last column that isn't really in a bin as the same bin label, so the same expected 
+    # We count the first and last column that isn't really in a bin as the same bin label, so the same expected
     # number of points
     expected_points_in_bins = [2 * data_height] * (data_width // 2)
     np.testing.assert_array_equal(points_in_bins, expected_points_in_bins)
