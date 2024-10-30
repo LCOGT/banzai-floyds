@@ -75,7 +75,10 @@ class WavelengthSolution:
 
     @property
     def bin_edges(self):
-        return [model(np.arange(min(model.domain)-0.5, max(model.domain)+1)) for model in self._polynomials]
+        # By convention, integer numbers are pixel centers.
+        # Here we take the bin edge between the first and second pixel as the beginning of our bins
+        # This means that our bin positions are fully in the domain of the wavelength model
+        return [model(np.arange(min(model.domain)+0.5, max(model.domain))) for model in self._polynomials]
 
 
 def tilt_coordinates(tilt_angle, x, y):

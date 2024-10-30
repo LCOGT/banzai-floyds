@@ -63,7 +63,7 @@ def test_create_super_fringe():
 
 
 def test_correct_fringe():
-    np.random.seed(291523)
+    np.random.seed(91275)
     # Make fake fringe data and using a fixed sin fringe pattern but offset in the image
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True,
                                         fringe=True, fringe_offset=3.5, include_super_fringe=True)

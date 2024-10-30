@@ -16,8 +16,8 @@ def bin_data(data, uncertainty, wavelengths, orders, mask=None):
                             'x': x2d[in_order], 'y': y2d[in_order], 'y_order': y_order})
         bin_number = np.digitize(data_table['wavelength'], order_bins)
         bin_centers = (order_bins[1:] + order_bins[:-1]) / 2.0
-        # Append the first and last bin centers as zero to flag that the edge pixels aren't in a
-        # bin
+        # Append the first and last bin centers as zero to flag that the
+        # edge pixels aren't in a bin
         bin_centers = np.hstack([0, bin_centers, 0])
         bin_widths = (order_bins[1:] - order_bins[:-1])
         bin_widths = np.hstack([0, bin_widths, 0])

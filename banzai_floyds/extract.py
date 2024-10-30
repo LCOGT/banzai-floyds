@@ -43,6 +43,14 @@ def extract(binned_data):
         # Skip pixels that don't fall into a bin we are going to extract
         if wavelength_bin == 0:
             continue
+        if data_to_sum['extraction_window'].sum() == 0:
+            continue
+        # Cut any bins that don't include the profile center. If the weights are small (i.e. we only caught the edge
+        # of the profile), this blows up numerically. The threshold here is a little arbitrary. It needs to be small
+        # enough to not have numerical artifacts but large enough to not reject broad profiles.
+        if np.max(data_to_sum['weights'][data_to_sum['extraction_window']]) < 5e-3:
+            continue
+
         wavelength_bin_width = data_to_sum['wavelength_bin_width'][0]
         order_id = data_to_sum['order'][0]
         # This should be equivalent to Horne 1986 optimal extraction

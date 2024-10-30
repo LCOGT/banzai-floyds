@@ -2,84 +2,68 @@ import numpy as np
 from astropy.table import Table, vstack
 from scipy.interpolate import RectBivariateSpline, CloughTocher2DInterpolator
 from banzai.stages import Stage
-import operator
+from numpy.polynomial.legendre import Legendre
 
 
-def wavelength_to_pixel(data, wavelength_knots, x_knots):
-    """Convert the wavelength to pixel coordinates
-
-    Parameters
-    ----------
-    data : astropy.table.Table with columns 'wavelength', 'wavelength_bin', 'wavelength_bin_width'
-    wavelength_knots : array-like which has the wavelength values at each x_knot position
-    x_knots : array-like which has the pixel values at each wavelength_knot position
-    """
-    pixel = np.interp(data['wavelength_bin'], wavelength_knots, x_knots)
-    pixel += (data['wavelength'] - data['wavelength_bin']) / data['wavelength_bin_width']
-    return pixel
-
-
-def background_region_to_grid(data):
-    """Make a pixel grid of values that buffer the edges in case the region of interest is off the edge of the order"""
-    grid = []
-    # We break the regions into both sides of the profile
-    for comparison in [operator.lt, operator.gt]:
-        region_data = data[comparison(data['y_profile'], 0)].group_by('wavelength_bin')
-        # Then we find the max of the mins and the min of the maxs grouped by wavelength bin to get the
-        # region of the order we cover
-        region_extrema = []
-        for extrema in [[np.max, np.min], [np.min, np.max]]:
-            extreme_by_wavelength = extrema[0](region_data['y_profile'].groups.aggregate(extrema[1]))
-            grid_point = np.mean(region_data['y_profile'][np.abs(region_data['y_profile'] - extreme_by_wavelength) < 1])
-            region_extrema.append(grid_point)
-        grid.append(np.linspace(region_extrema[0], region_extrema[1], int(region_extrema[1] - region_extrema[0]) + 1))
-    return np.hstack(grid)
-
-
-def fit_background(data, x_spline_order=3, y_spline_order=3):
-    results = Table({'x': [], 'y': [], 'background': []})
+def fit_background(data, background_order=3):
+    data['data_bin_center'] = 0.0
+    data['uncertainty_bin_center'] = 0.0
     for order in [1, 2]:
         in_order = data['order'] == order
-        in_order = np.logical_and(in_order, data['wavelength_bin'] != 0)
-        in_background = np.logical_and(in_order, data['in_background'])
 
-        # Interpolate the background region onto a regular grid
+        data_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][in_order],
+                                                                 data['y_profile'][in_order]]).T,
+                                                       data['data'][in_order].ravel(), fill_value=0)
+        uncertainty_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][in_order],
+                                                                       data['y_profile'][in_order]]).T,
+                                                              data['uncertainty'][in_order].ravel(), fill_value=0)
 
-        y_knots = background_region_to_grid(data[in_order])
+        data['data_bin_center'][in_order] = data_interpolator(data['wavelength_bin'][in_order],
+                                                              data['y_profile'][in_order])
+        data['uncertainty_bin_center'][in_order] = uncertainty_interpolator(data['wavelength_bin'][in_order],
+                                                                            data['y_profile'][in_order])
 
-        # For x convert to pixel steps in wavelength
-        # i.e. x_knots = np.arange(len(list(set(wavelength_bins))))
-        wavelength_bins = list(set(data[in_order]['wavelength_bin']))
-        wavelength_bins = np.array(wavelength_bins)
-        wavelength_bins = wavelength_bins[wavelength_bins != 0]
-        wavelength_bins.sort()
-        x_knots = np.arange(len(wavelength_bins))
+    # Assume no wavelength dependence for the wavelength_bin = 0 and first and last bin in the order
+    # which have funny edge effects
+    background_bin_center = []
+    for data_to_fit in data.groups:
+        if data_to_fit['wavelength_bin'][0] == 0:
+            continue
+        # Catch the case where we are an edge and fall outside the qhull interpolation surface
+        if np.all(data_to_fit['data_bin_center'] == 0):
+            data_column = 'data'
+            uncertainty_column = 'uncertainty'
+        else:
+            data_column = 'data_bin_center'
+            uncertainty_column = 'uncertainty_bin_center'
+        in_background = data_to_fit['in_background']
+        in_background = np.logical_and(in_background, data_to_fit[data_column] != 0)
+        polynomial = Legendre.fit(data_to_fit['y_profile'][in_background], data_to_fit[data_column][in_background],
+                                  background_order,
+                                  domain=[np.min(data_to_fit['y_profile']), np.max(data_to_fit['y_profile'])],
+                                  w=1/data_to_fit[uncertainty_column][in_background]**2)
 
-        # The data x pixel coordinates = index of wavelength_bin is
-        # bin_pixel + (wavelength - wavelength_bin) / bin_width
-        x_in_background = wavelength_to_pixel(data[in_background], wavelength_bins, x_knots)
+        background_bin_center.append(polynomial(data_to_fit['y_profile']))
 
-        # data y coordinates are just y_profile
-        y_in_background = data[in_background]['y_profile']
-        # Interpolate onto a grid in wavelength / y_profile space because only the RectBiVariateSpline
-        # seems to work reliably
-        interpolator = CloughTocher2DInterpolator(np.array([x_in_background, y_in_background]).T,
-                                                  data[in_background]['data'].ravel(), fill_value=0)
-        x_grid, y_grid = np.meshgrid(x_knots, y_knots)
-        resampled_background = interpolator(x_grid, y_grid)
-        # Find a rectangular smoothing spline for the rectified background data
-        background_spline = RectBivariateSpline(x_knots, y_knots, resampled_background.T,
-                                                kx=x_spline_order, ky=y_spline_order,
-                                                s=resampled_background.size)
-        # evaluate the spline at all the pixels removing pixels that require extrapolation
-        to_interp = np.logical_and(np.min(y_knots) <= data['y_profile'], data['y_profile'] <= np.max(y_knots))
-        to_interp = np.logical_and(to_interp, in_order)
-        to_interp = np.logical_and(to_interp, data['wavelength_bin'] != 0)
-        x_to_interp = wavelength_to_pixel(data[to_interp], wavelength_bins, x_knots)
-        y_to_interp = data['y_profile'][to_interp]
-        background = background_spline(x_to_interp, y_to_interp, grid=False)
-        order_results = Table({'x': data['x'][to_interp], 'y': data['y'][to_interp], 'background': background})
+    data['background_bin_center'] = 0.0
+    data['background_bin_center'][data['wavelength_bin'] != 0] = np.hstack(background_bin_center)
+
+    results = Table({'x': [], 'y': [], 'background': []})
+    for order in [1, 2]:
+        in_order = np.logical_and(data['order'] == order, data['wavelength_bin'] != 0)
+        background_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength_bin'][in_order],
+                                                                       data['y_profile'][in_order]]).T,
+                                                             data['background_bin_center'][in_order], fill_value=0)
+        background = background_interpolator(data['wavelength'][in_order], data['y_profile'][in_order])
+        # Deal with the funniness at the wavelength bin edges
+        upper_edge = data['wavelength'][in_order] > np.max(data['wavelength_bin'][in_order])
+        background[upper_edge] = data[in_order]['background_bin_center'][upper_edge]
+        lower_edge = data['wavelength'][in_order] < np.min(data['wavelength_bin'][in_order])
+        background[lower_edge] = data['background_bin_center'][in_order][lower_edge]
+        order_results = Table({'x': data['x'][in_order], 'y': data['y'][in_order], 'background': background})
         results = vstack([results, order_results])
+    # Clean up our intermediate columns for now
+    data.remove_columns(['data_bin_center', 'uncertainty_bin_center', 'background_bin_center'])
     return results
 
 

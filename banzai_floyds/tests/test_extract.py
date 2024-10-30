@@ -36,7 +36,7 @@ def test_extraction_region():
 
 
 def test_extraction():
-    np.random.seed(23341507)
+    np.random.seed(3515)
     fake_frame = generate_fake_science_frame(include_sky=False)
     fake_frame.binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                                       fake_frame.orders)

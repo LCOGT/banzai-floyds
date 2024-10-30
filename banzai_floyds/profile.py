@@ -13,26 +13,25 @@ logger = get_logger()
 def fit_profile_sigma(data, profile_fits, domains, poly_order=2, default_fwhm=6.0):
     # In principle, this should be some big 2d fit where we fit the profile center, the profile width,
     #   and the background in one go
-    profile_width_table = {'wavelength': [], 'width': [], 'order': []}
+    profile_width_table = {'wavelength': [], 'sigma': [], 'order': []}
     fitter = fitting.LMLSQFitter()
     for data_to_fit in data.groups:
         wavelength_bin = data_to_fit['wavelength_bin'][0]
+
         # Skip pixels that don't fall into a normal bin
         if wavelength_bin == 0:
             continue
         order_id = data_to_fit['order'][0]
         profile_center = profile_fits[order_id - 1](wavelength_bin)
 
-        # If the SNR of the peak of the profile is 2 > than the peak of the background, keep the profile width
         peak = np.argmin(np.abs(profile_center - data_to_fit['y_order']))
-        peak_snr = data_to_fit['data'][peak] / data_to_fit['uncertainty'][peak]
-        median_snr = np.median(np.abs(data_to_fit['data'] / data_to_fit['uncertainty']))
+        peak_snr = (data_to_fit['data'][peak] - np.median(data_to_fit['data'])) / data_to_fit['uncertainty'][peak]
         # Short circuit if the trace is not significantly brighter than the background in this bin
-        if peak_snr < 2.0 * median_snr:
+        if peak_snr < 15.0:
             continue
 
         # Only fit the data close to the profile so that we can assume a low order background
-        peak_window = np.abs(data_to_fit['y_order'] - profile_center) <= 6.0 * fwhm_to_sigma(default_fwhm)
+        peak_window = np.abs(data_to_fit['y_order'] - profile_center) <= 10.0 * fwhm_to_sigma(default_fwhm)
 
         # Mask out any bad pixels
         peak_window = np.logical_and(peak_window, data_to_fit['mask'] == 0)

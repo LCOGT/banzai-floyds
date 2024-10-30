@@ -70,17 +70,15 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     INITIAL_LINE_FWHMS = {1: 15.6, 2: 8.6}
     # DISPERSIONS = {1: 3.13, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
-    #INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    INITIAL_LINE_TILTS = {1: 0., 2: 0.}
+    INITIAL_LINE_TILTS = {1: 8., 2: 8.}
     profile_fwhm = 10.0
     order_height = 93
     read_noise = 6.5
     line_fwhms_angstroms = [15.6, 8.6]
     input_fringe_shift = fringe_offset
 
-    #order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1700))
-    order1 = Legendre((135,), domain=(0, 1700))
-    order2 = Legendre((410, 17, 63, -12), domain=(475, 1975))
+    order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1700))
+    order2 = Legendre((380, 17, 63, -12), domain=(475, 1975))
     data = np.zeros((ny, nx))
     orders = Orders([order1, order2], (ny, nx), [order_height, order_height])
     expanded_order_height = order_height + 20
@@ -88,11 +86,8 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
                                  domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    #trace1 = Legendre((5, 10, 4),
-    #                  domain=(wavelength_model1(0), wavelength_model1(1700)))
-    trace1 = Legendre((0, ), domain=(wavelength_model1(0), wavelength_model1(1700)))
-    trace2 = Legendre((-10, -8, -3),
-                      domain=(wavelength_model2(475), wavelength_model2(1975)))
+    trace1 = Legendre((5, 10, 4), domain=(wavelength_model1(0), wavelength_model1(1700)))
+    trace2 = Legendre((-10, -8, -3), domain=(wavelength_model2(475), wavelength_model2(1975)))
     profile_centers = [trace1, trace2]
 
     # Work out the wavelength solution for larger than the typical order size so that we
