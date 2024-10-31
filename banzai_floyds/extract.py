@@ -55,17 +55,22 @@ def extract(binned_data):
         order_id = data_to_sum['order'][0]
         # This should be equivalent to Horne 1986 optimal extraction
         flux = data_to_sum['data'] - data_to_sum['background']
-        flux *= data_to_sum['weights']
+        weights = data_to_sum['weights']
+        # If we are using uniform weights, the sum of the weights needs to be normalized
+        # i.e. the psf needs to sum to 1. We assume non-uniform weights are already normalized.
+        if np.all(weights == 0):
+            weights /= data_to_sum['extraction_window'].sum()
+        flux *= weights
         flux *= data_to_sum['uncertainty'] ** -2
         flux = np.sum(flux[data_to_sum['extraction_window']])
-        flux_normalization = data_to_sum['weights']**2 * data_to_sum['uncertainty']**-2
+        flux_normalization = weights**2 * data_to_sum['uncertainty']**-2
         flux_normalization = np.sum(flux_normalization[data_to_sum['extraction_window']])
-        background = data_to_sum['background'] * data_to_sum['weights']
+        background = data_to_sum['background'] * weights
         background *= data_to_sum['uncertainty'] ** -2
         background = np.sum(background[data_to_sum['extraction_window']])
         results['fluxraw'].append(flux / flux_normalization)
         results['background'].append(background / flux_normalization)
-        uncertainty = np.sqrt(np.sum(data_to_sum['weights'][data_to_sum['extraction_window']]) / flux_normalization)
+        uncertainty = np.sqrt(np.sum(weights[data_to_sum['extraction_window']]) / flux_normalization)
         results['fluxrawerr'].append(uncertainty)
         results['wavelength'].append(wavelength_bin)
         results['binwidth'].append(wavelength_bin_width)
