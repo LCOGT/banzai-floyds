@@ -16,7 +16,7 @@ def fit_profile_sigma(data, profile_fits, domains, poly_order=2, default_fwhm=6.
     profile_width_table = {'wavelength': [], 'sigma': [], 'order': []}
     fitter = fitting.LMLSQFitter()
     for data_to_fit in data.groups:
-        wavelength_bin = data_to_fit['wavelength_bin'][0]
+        wavelength_bin = data_to_fit['order_wavelength_bin'][0]
 
         # Skip pixels that don't fall into a normal bin
         if wavelength_bin == 0:
@@ -74,7 +74,7 @@ def fit_profile_centers(data, domains, polynomial_order=5, profile_fwhm=6):
     trace_points = Table({'wavelength': [], 'center': [], 'order': []})
     for data_to_fit in data.groups:
         # Skip pixels that don't fall into a normal bin
-        if data_to_fit['wavelength_bin'][0] == 0:
+        if data_to_fit['order_wavelength_bin'][0] == 0:
             continue
         # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
         # Find a rough estimate of the center by running across the whole slit (excluding 1-sigma on each side)

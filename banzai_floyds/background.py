@@ -18,16 +18,16 @@ def fit_background(data, background_order=3):
                                                                        data['y_profile'][in_order]]).T,
                                                               data['uncertainty'][in_order].ravel(), fill_value=0)
 
-        data['data_bin_center'][in_order] = data_interpolator(data['wavelength_bin'][in_order],
+        data['data_bin_center'][in_order] = data_interpolator(data['order_wavelength_bin'][in_order],
                                                               data['y_profile'][in_order])
-        data['uncertainty_bin_center'][in_order] = uncertainty_interpolator(data['wavelength_bin'][in_order],
+        data['uncertainty_bin_center'][in_order] = uncertainty_interpolator(data['order_wavelength_bin'][in_order],
                                                                             data['y_profile'][in_order])
 
     # Assume no wavelength dependence for the wavelength_bin = 0 and first and last bin in the order
     # which have funny edge effects
     background_bin_center = []
     for data_to_fit in data.groups:
-        if data_to_fit['wavelength_bin'][0] == 0:
+        if data_to_fit['order_wavelength_bin'][0] == 0:
             continue
         # Catch the case where we are an edge and fall outside the qhull interpolation surface
         if np.all(data_to_fit['data_bin_center'] == 0):
@@ -46,19 +46,19 @@ def fit_background(data, background_order=3):
         background_bin_center.append(polynomial(data_to_fit['y_profile']))
 
     data['background_bin_center'] = 0.0
-    data['background_bin_center'][data['wavelength_bin'] != 0] = np.hstack(background_bin_center)
+    data['background_bin_center'][data['order_wavelength_bin'] != 0] = np.hstack(background_bin_center)
 
     results = Table({'x': [], 'y': [], 'background': []})
     for order in [1, 2]:
-        in_order = np.logical_and(data['order'] == order, data['wavelength_bin'] != 0)
-        background_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength_bin'][in_order],
+        in_order = np.logical_and(data['order'] == order, data['order_wavelength_bin'] != 0)
+        background_interpolator = CloughTocher2DInterpolator(np.array([data['order_wavelength_bin'][in_order],
                                                                        data['y_profile'][in_order]]).T,
                                                              data['background_bin_center'][in_order], fill_value=0)
         background = background_interpolator(data['wavelength'][in_order], data['y_profile'][in_order])
         # Deal with the funniness at the wavelength bin edges
-        upper_edge = data['wavelength'][in_order] > np.max(data['wavelength_bin'][in_order])
+        upper_edge = data['wavelength'][in_order] > np.max(data['order_wavelength_bin'][in_order])
         background[upper_edge] = data[in_order]['background_bin_center'][upper_edge]
-        lower_edge = data['wavelength'][in_order] < np.min(data['wavelength_bin'][in_order])
+        lower_edge = data['wavelength'][in_order] < np.min(data['order_wavelength_bin'][in_order])
         background[lower_edge] = data['background_bin_center'][in_order][lower_edge]
         order_results = Table({'x': data['x'][in_order], 'y': data['y'][in_order], 'background': background})
         results = vstack([results, order_results])

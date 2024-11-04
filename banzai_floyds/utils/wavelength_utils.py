@@ -1,6 +1,7 @@
 from astropy.io import fits
 from numpy.polynomial.legendre import Legendre
 import numpy as np
+from scipy.optimize import root
 
 
 class WavelengthSolution:
@@ -79,6 +80,20 @@ class WavelengthSolution:
         # Here we take the bin edge between the first and second pixel as the beginning of our bins
         # This means that our bin positions are fully in the domain of the wavelength model
         return [model(np.arange(min(model.domain)+0.5, max(model.domain))) for model in self._polynomials]
+
+    @property
+    def combined_bin_edges(self):
+        # Find the overlapping point of the orders
+        red_order = np.argmax([model(min(model.domain)) for model in self._polynomials])
+        red_edges = self.bin_edges[red_order]
+        blue_order = np.argmin([model(max(model.domain)) for model in self._polynomials])
+        blue_switchover_pixel = root(lambda x: self._polynomials[blue_order](x) - np.min(red_edges),
+                                     np.max(self._polynomials[blue_order].domain)).x
+        blue_edge_pixels = np.arange(blue_switchover_pixel, min(self._polynomials[blue_order].domain), -1)
+        blue_edges = self._polynomials[blue_order](blue_edge_pixels)
+        # Remove the overlapping edge
+        combined_edges = np.hstack([blue_edges[1:], red_edges])
+        return np.sort(combined_edges)
 
 
 def tilt_coordinates(tilt_angle, x, y):
