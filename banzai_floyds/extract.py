@@ -109,7 +109,18 @@ class CombinedExtractor(Stage):
         # Scale the background in the same way we scaled the data so we can still subtract it cleanly
         image.binned_data['flux_background'] = image.binned_data['background'] * image.binned_data['flux']
         image.binned_data /= image.binned_data['data']
-        image.spectrum = extract(image.binned_data, data_keyword='flux', bin_key='wavelength_bin', data_keyword='flux',
+        # Normalize the orders to make sure they overlap
+        overlap_region = [max([domain[0] for domain in image.orders.wavelengths.domains]), 
+                          min([domain[1] for domain in image.orders.wavelengths.domains])]
+        order_2 = image.binned_data['order'] == 2
+        order_1 = image.binned_data['order'] == 1
+        in_overlap = np.logical_and(image.binned_data['wavelength'] > overlap_region[0],
+                                    image.binned_data['wavelength'] < overlap_region[1])
+        normalization = np.median(image.binned_data['flux'][np.logical_and(order_1, in_overlap)])
+        normalization /= np.median(image.binned_data['flux'][np.logical_and(order_2, in_overlap)])
+        for key in ['flux', 'fluxerror', 'flux_background']:
+            image.binned_data[key][order_2] *= normalization
+        image.spectrum = extract(image.binned_data, data_keyword='flux', bin_key='wavelength_bin',
                                  background_key='flux_background', background_out_key='background',
                                  uncertainty_key='fluxerror', include_order=False)
         return image
