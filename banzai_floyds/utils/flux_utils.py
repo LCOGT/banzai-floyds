@@ -34,11 +34,11 @@ def flux_calibrate(data, sensitivity, elevation, airmass, raw_key='fluxraw', err
         in_order = data['order'] == order_id
         sensitivity_order = sensitivity['order'] == order_id
         # Divide the spectrum by the sensitivity function, correcting for airmass
-        sensitivity = np.interp(data['wavelength'][in_order],
-                                sensitivity['wavelength'][sensitivity_order],
-                                sensitivity['sensitivity'][sensitivity_order])
-        data['flux'][in_order] = data[raw_key][in_order] * sensitivity
-        data['fluxerror'][in_order] = data[error_key][in_order] * sensitivity
+        sensitivity_model = np.interp(data['wavelength'][in_order],
+                                      sensitivity['wavelength'][sensitivity_order],
+                                      sensitivity['sensitivity'][sensitivity_order])
+        data['flux'][in_order] = data[raw_key][in_order] * sensitivity_model
+        data['fluxerror'][in_order] = data[error_key][in_order] * sensitivity_model
 
     airmass_correction = airmass_extinction(data['wavelength'], elevation, airmass)
     # Divide by the atmospheric extinction to get back to intrinsic flux

@@ -17,7 +17,6 @@ def fit_profile_sigma(data, profile_fits, domains, poly_order=2, default_fwhm=6.
     fitter = fitting.LMLSQFitter()
     for data_to_fit in data.groups:
         wavelength_bin = data_to_fit['order_wavelength_bin'][0]
-
         # Skip pixels that don't fall into a normal bin
         if wavelength_bin == 0:
             continue
@@ -62,6 +61,22 @@ def fit_profile_sigma(data, profile_fits, domains, poly_order=2, default_fwhm=6.
     # save the polynomial for the profile
     profile_widths = [Legendre.fit(order_data['wavelength'], order_data['sigma'], deg=poly_order, domain=domain)
                       for order_data, domain in zip(profile_width_table.group_by('order').groups, domains)]
+    if len(profile_widths) != len(set(data['order'])):
+        for order in set(data['order']):
+            if order not in profile_width_table['order']:
+                missing_order = order
+                break
+        logger.warning(f'Data is too low of signal to noise in order {missing_order} to fit a profile width')
+        overlap_region = [max([np.min(data['wavelength'][data['order'] == order]) for order in set(data['order'])]),
+                          min([np.max(data['wavelength'][data['order'] == order]) for order in set(data['order'])])]
+        in_overlap = np.logical_and(data['wavelength'] > overlap_region[0],
+                                    data['wavelength'] < overlap_region[1])
+        # This is always zero in the case of two orders because either the first or last is missing
+        average_sigma = profile_widths[0](np.mean(data['wavelength'][in_overlap]))
+        in_missing_order = data['order'] == missing_order
+        proxy_sigma_func = Legendre([average_sigma,], domain=[np.min(data['wavelength'][in_missing_order]),
+                                                              np.max(data['wavelength'][in_missing_order])])
+        profile_widths.insert(missing_order - 1, proxy_sigma_func)
     return profile_widths, profile_width_table
 
 
@@ -104,7 +119,7 @@ def fit_profile_centers(data, domains, polynomial_order=5, profile_fwhm=6):
                                                  args=(fwhm_to_sigma(profile_fwhm),),
                                                  bounds=[(lower_bound, upper_bound,),])
 
-        new_trace_table = Table({'wavelength': [data_to_fit['wavelength_bin'][0]],
+        new_trace_table = Table({'wavelength': [data_to_fit['order_wavelength_bin'][0]],
                                  'center': [best_fit_center],
                                  'order': [data_to_fit['order'][0]]})
         trace_points = vstack([trace_points, new_trace_table])
