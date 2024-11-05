@@ -135,9 +135,12 @@ dmypy.json
 
 # Directory to store test data
 test_data/
+lco_debug_data/
+manual_reduction/
 
 # VS Code
 .vscode
 
 test.db
-
+debug.db
+.DS_Store

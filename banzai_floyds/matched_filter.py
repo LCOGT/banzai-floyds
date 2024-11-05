@@ -350,7 +350,7 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x, weigh
                                      args=(data, error, weights_function,
                                            weights_jacobian_function,
                                            weights_hessian_function, x, *args),
-                                     method='Powell', bounds=bounds)
+                                     method='L-BFGS-B', bounds=bounds)
     elif weights_hessian_function is None:
         best_fit = optimize.minimize(lambda *params: sign * matched_filter_metric(*params), initial_guess,
                                      args=(data, error, weights_function, weights_jacobian_function,

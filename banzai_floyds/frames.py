@@ -1,4 +1,5 @@
-from banzai.lco import LCOObservationFrame, LCOFrameFactory, LCOCalibrationFrame
+from banzai.lco import LCOObservationFrame, LCOCalibrationFrame, LCOFrameFactory
+from banzai.frames import CalibrationFrame
 from banzai.data import DataProduct, HeaderOnly, ArrayData, DataTable
 from banzai_floyds.orders import orders_from_fits
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
@@ -8,21 +9,23 @@ from astropy.io import fits
 from banzai_floyds.utils.flux_utils import airmass_extinction
 from astropy.coordinates import SkyCoord
 from astropy import units
-from banzai.frames import CalibrationFrame
+from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
+from astropy.table import Table
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, hdu_order: list = None):
         self.orders = None
         self._wavelengths = None
-        self.profile_fits = None
+        self._profile_fits = None
         self._background_fits = None
-        self.wavelength_bins = None
-        self.binned_data = None
+        self._binned_data = None
         self._extracted = None
         self.fringe = None
         self._sensitivity = None
         self._telluric = None
+        self.background_windows = None
+        self.extraction_windows = None
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
         # Override ra and dec to use the RA and Dec values because the CRVAL keywords don't really
         # have a lot of meaning when the slitmask is in place
@@ -44,8 +47,11 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.orders = orders_from_fits(self['ORDER_COEFFS'].data, self['ORDER_COEFFS'].meta, self.shape)
         if 'WAVELENGTHS' in self:
             self.wavelengths = WavelengthSolution.from_header(self['WAVELENGTHS'].meta, self.orders)
-        if 'PROFILE' in self:
-            self.profile = self['PROFILE'].data
+        if 'PROFILEFITS' in self:
+            self.profile = load_profile_fits(self['PROFILEFITS'])
+        if 'BINNED2D' in self:
+            binned_data = Table(self['BINNED2D'].data)
+            self.binned_data = binned_data.group_by(('order', 'wavelength_bin'))
         if 'EXTRACTED' in self:
             self.extracted = self['EXTRACTED'].data
         if 'FRINGE' in self:
@@ -88,16 +94,67 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         else:
             return super().get_output_data_products(runtime_context)
 
+    def save_processing_metadata(self, context):
+        super().save_processing_metadata(context)
+        if 'REDUCER' not in self.meta:
+            self.meta['REDUCER'] = 'BANZAI'
+
     @property
     def profile(self):
         return self['PROFILE'].data
 
     @profile.setter
     def profile(self, value):
-        self.add_or_update(ArrayData(value, name='PROFILE', meta=fits.Header({})))
+        centers, sigmas, fitted_points = value
+        self._profile_fits = centers, sigmas
+        if fitted_points is None:
+            fitted_points = Table({'wavelength': [], 'center': [], 'order': []})
+        header = fits.Header()
+        for order, center, sigma in zip([1, 2], centers, sigmas):
+            for i, coef in enumerate(sigma.coef):
+                header[f'O{order}SIG{i:02}'] = coef, f'P_{i:02} coefficient for width for order {order}'
+            for i, coef in enumerate(center.coef):
+                header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
+
+            header[f'O{order}CTRO'] = center.degree(), f'Polynomial Order for the center in order {order}'
+            header[f'O{order}SIGO'] = sigma.degree(), f'Polynomial Order for the width in order {order}'
+
+            domain_str = '{0} domain value for {1} fit of the profile for order {2}'
+            header[f'O{order}SIGDM0'] = sigma.domain[0], domain_str.format('Min', 'sigma', order)
+            header[f'O{order}SIGDM1'] = sigma.domain[1], domain_str.format('Max', 'sigma', order)
+            header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', 'center', order)
+            header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', 'center', order)
+        self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
+
+        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, sigmas,
+                                                     self.orders, self.wavelengths.data),
+                                name='PROFILE', meta=fits.Header({}))
+        self.add_or_update(profile_hdu)
         if self.binned_data is not None:
+            profile_centers = np.zeros(len(self.binned_data))
+            profile_sigma = np.zeros(len(self.binned_data))
+            for order in [1, 2]:
+                in_order = self.binned_data['order'] == order
+                profile_centers[in_order] = centers[order - 1](self.binned_data['wavelength'][in_order])
+                profile_sigma[in_order] = sigmas[order - 1](self.binned_data['wavelength'][in_order])
+
+            self.binned_data['y_profile'] = self.binned_data['y_order'] - profile_centers
+            self.binned_data['profile_sigma'] = profile_sigma
             x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
             self.binned_data['weights'] = self['PROFILE'].data[y, x]
+
+    @property
+    def profile_fits(self):
+        return self._profile_fits
+
+    @property
+    def binned_data(self):
+        return self._binned_data
+
+    @binned_data.setter
+    def binned_data(self, value):
+        self._binned_data = value
+        self.add_or_update(DataTable(value, name='BINNED2D', meta=fits.Header({})))
 
     @property
     def obstype(self):

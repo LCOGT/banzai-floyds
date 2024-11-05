@@ -5,9 +5,10 @@ from banzai.utils.file_utils import make_calibration_filename_function
 from datetime import datetime
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.matched_filter import optimize_match_filter
-
-
+from banzai.logs import get_logger
 import numpy as np
+
+logger = get_logger()
 
 
 def fringe_weights(theta, x, spline):
@@ -97,13 +98,16 @@ class FringeCorrector(Stage):
     def do_stage(self, image):
         # Only divide the fringe out where the divisor is > 0.1 so we don't amplify
         # artifacts due to the edge of the slit
+        logger.info('Interpolating super fringe', image=image)
         fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0.1)
+        logger.info('Fitting fringe offset', image=image)
         fringe_offset = find_fringe_offset(image, fringe_spline)
+        logger.info('Correcting for fringing', image=image)
         x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
         in_order = image.orders.data == 1
         fringe_correction = fringe_spline(np.array([x[in_order], y[in_order] - fringe_offset]).T)
         to_correct = in_order.copy()
-        to_correct[in_order] *= fringe_correction > 0.1
+        to_correct[in_order] = fringe_correction > 0.1
         image.data[to_correct] /= fringe_correction[fringe_correction > 0.1]
         image.uncertainty[to_correct] /= fringe_correction[fringe_correction > 0.1]
         image.meta['L1FRNGOF'] = (fringe_offset, 'Fringe offset (pixels)')

@@ -404,7 +404,9 @@ class OrderSolver(Stage):
     ORDER_HEIGHT = 93
     CENTER_CUT_WIDTH = 31
     POLYNOMIAL_ORDER = 3
-    ORDER_REGIONS = [(0, 1700), (630, 1975)]
+
+    ORDER_REGIONS = {'ogg': [(0, 1550), (500, 1835)],
+                     'coj': [(0, 1600), (615, 1920)]}
 
     def do_stage(self, image):
         if image.orders is None:
@@ -422,13 +424,14 @@ class OrderSolver(Stage):
                                                  self.ORDER_HEIGHT,
                                                  order_center,
                                                  image.data.shape[1] // 2)
-                good_region = np.logical_and(x >= self.ORDER_REGIONS[i][0],
-                                             x <= self.ORDER_REGIONS[i][1])
+                order_region = self.ORDER_REGIONS[image.site]
+                good_region = np.logical_and(x >= order_region[i][0],
+                                             x <= order_region[i][1])
                 initial_model = Legendre.fit(deg=self.POLYNOMIAL_ORDER,
                                              x=x[good_region],
                                              y=order_locations[good_region],
-                                             domain=(self.ORDER_REGIONS[i][0],
-                                                     self.ORDER_REGIONS[i][1]))
+                                             domain=(order_region[i][0],
+                                                     order_region[i][1]))
                 order_estimates.append((initial_model.coef, self.ORDER_HEIGHT, initial_model.domain))
         else:
             # Load from previous solve

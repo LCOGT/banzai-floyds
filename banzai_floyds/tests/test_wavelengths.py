@@ -45,24 +45,24 @@ def test_linear_wavelength_solution():
     np.random.seed(890154)
     min_wavelength = 3200
     dispersion = 2.5
-    line_width = 3
+    line_sigma = 3
     input_spectrum, lines, test_lines = build_random_spectrum(min_wavelength=min_wavelength, dispersion=dispersion,
-                                                              line_sigma=line_width)
+                                                              line_sigma=line_sigma)
 
     linear_model = linear_wavelength_solution(input_spectrum, 0.01 * np.ones_like(input_spectrum), lines,
-                                              dispersion, sigma_to_fwhm(line_width), np.arange(4000, 5001))
+                                              dispersion, sigma_to_fwhm(line_sigma), np.arange(4000, 5001))
     assert linear_model(0) == min_wavelength
 
 
 def test_identify_peaks():
     # use well-behaved seed
     seed = 76856
-    line_width = 3
+    line_sigma = 3
     line_sep = 10
-    input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_width, nlines=6)
+    input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_sigma, nlines=6)
 
     recovered_peaks = identify_peaks(input_spectrum, 0.01 * np.ones_like(input_spectrum),
-                                     sigma_to_fwhm(line_width), line_sep)
+                                     sigma_to_fwhm(line_sigma), line_sep)
 
     # Need to figure out how to handle blurred lines and combined peaks
     for peak in recovered_peaks:
@@ -74,13 +74,13 @@ def test_correlate_peaks():
 
     min_wavelength = 3200
     dispersion = 2.5
-    line_width = 3
+    line_sigma = 3
     used_lines = 6
     input_spectrum, lines, test_peaks = build_random_spectrum(min_wavelength=min_wavelength, dispersion=dispersion,
-                                                              line_sigma=line_width)
+                                                              line_sigma=line_sigma)
 
     linear_model = linear_wavelength_solution(input_spectrum, 0.01 * np.ones_like(input_spectrum), lines,
-                                              dispersion, sigma_to_fwhm(line_width), np.arange(4000, 5001))
+                                              dispersion, sigma_to_fwhm(line_sigma), np.arange(4000, 5001))
 
     # find corresponding lines with lines missing
     match_threshold = 5
@@ -106,19 +106,45 @@ def test_correlate_peaks():
 def test_refine_peak_centers():
     # use well-behaved seed
     seed = 75827
-    line_width = 3
+    line_sigma = 3
     line_sep = 10
-    input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_width)
+    input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_sigma)
 
     recovered_peaks = identify_peaks(input_spectrum, 0.01 * np.ones_like(input_spectrum),
-                                     sigma_to_fwhm(line_width), line_sep)
+                                     sigma_to_fwhm(line_sigma), line_sep)
 
     fit_list = refine_peak_centers(input_spectrum, 0.01 * np.ones_like(input_spectrum),
-                                   recovered_peaks, sigma_to_fwhm(line_width))
+                                   recovered_peaks, sigma_to_fwhm(line_sigma))
 
     # Need to figure out how to handle blurred lines and overlapping peaks.
     for fit in fit_list:
         assert np.min(abs(test_lines - fit)) < 0.2
+
+
+def test_refine_peak_centers_with_background():
+    x = np.arange(2500.0, dtype=float)
+    flux = np.zeros_like(x, dtype=float)
+    lines = []
+    line_sigma = 2.5
+    read_noise = 10.0
+    np.random.seed(2193457)
+
+    # Only choose 10 lines here. 20 basically guaruntees that the peaks will overlap
+    # Thanks birthday problem in statistics
+    for line in np.random.uniform(10, 2490, size=10):
+        lines.append(line)
+        flux += gauss(x, line, line_sigma) * np.random.uniform(1000, 10000)
+    lines = np.array(lines)
+    background_poly = Legendre([100.0, 5.0, 10.0, -6], domain=(0, 2501))
+    flux += background_poly(x)
+    flux = np.random.poisson(flux).astype(float)
+    flux += np.random.normal(0, read_noise, size=flux.shape)
+    flux_error = np.sqrt(read_noise ** 2 + np.sqrt(np.abs(flux)))
+
+    fit_list = refine_peak_centers(flux, flux_error, lines, sigma_to_fwhm(line_sigma) * 0.7)
+
+    for fit_line in fit_list:
+        assert np.min(np.abs(lines - fit_line)) < 0.2
 
 
 def test_2d_wavelength_solution():
@@ -131,12 +157,14 @@ def test_2d_wavelength_solution():
     trace_center = Legendre(input_center_params, domain=(0, data.shape[1] - 1))
     input_order_region = order_region(order_height, trace_center, data.shape)
 
+    bkg_order_x = 4
+    bkg_order_y = 2
     min_wavelength = 3200.0
     seed = 76856
-    line_width = 3 * (2 * np.sqrt(2 * np.log(2)))
+    line_sigma = 3
     dispersion = 2.5
     tilt = 15  # degrees
-    input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=3,
+    input_spectrum, lines, test_lines = build_random_spectrum(seed=seed, line_sigma=line_sigma,
                                                               dispersion=dispersion, nlines=6, nx=nx)
     x1d = np.arange(data.shape[1], dtype=float)
     x2d, y2d = np.meshgrid(x1d, np.arange(data.shape[0], dtype=float))
@@ -144,19 +172,23 @@ def test_2d_wavelength_solution():
     data[input_order_region] = np.interp(tilted_x[input_order_region], x1d, input_spectrum)
     error[data >= 1.0] = 0.01 * data[data >= 1.0]
 
-    # Convert between poly1d and legendre conventions
-    converted_input_polynomial = Legendre((min_wavelength, dispersion), domain=(0, data.shape[1] - 1),
-                                          window=(0, data.shape[1] - 1)).convert(domain=(0, data.shape[1] - 1))
+    initial_slope = dispersion * (np.max(x2d) - np.min(x2d)) / 2.0
+    # c0 for the Legendre polynomials is in the center of the domain
+    # Ineresting that the extra offset you need is the same as the slope
+    initial_offset = min_wavelength + dispersion * (np.max(x2d) - np.min(x2d)) / 2.0
     # Note that weight function has the line width in angstroms whereas our line width here is in pixels
     params = full_wavelength_solution(data[input_order_region], error[input_order_region], x2d[input_order_region],
-                                      (y2d - trace_center(x1d))[input_order_region], converted_input_polynomial.coef,
-                                      tilt, dispersion * line_width, lines)
+                                      (y2d - trace_center(x1d))[input_order_region], (initial_offset, initial_slope),
+                                      tilt, sigma_to_fwhm(line_sigma), lines,
+                                      background_order_x=bkg_order_x,
+                                      background_order_y=bkg_order_y)
 
     fit_tilt, fit_line_width, *fit_polynomial_coefficients = params
     # Assert that the best fit parameters are close to the inputs
     np.testing.assert_allclose(tilt, fit_tilt, atol=0.1)
-    np.testing.assert_allclose(dispersion * line_width, fit_line_width, atol=0.3)
-    np.testing.assert_allclose(converted_input_polynomial.coef, fit_polynomial_coefficients, atol=0.1)
+    np.testing.assert_allclose(line_sigma, fwhm_to_sigma(fit_line_width), atol=0.3)
+    np.testing.assert_allclose((initial_offset, initial_slope), fit_polynomial_coefficients[:2],
+                               atol=0.1)
 
 
 def generate_fake_arc_frame():
@@ -172,7 +204,7 @@ def generate_fake_arc_frame():
     # make a reasonable wavelength model
     wavelength_model1 = Legendre((7425, 2950.5, 20., -5., 1.), domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    line_widths = [CalibrateWavelengths.INITIAL_LINE_WIDTHS[i] for i in range(1, 3)]
+    line_fwhms = [CalibrateWavelengths.INITIAL_LINE_FWHMS['ogg'][i] for i in range(1, 3)]
     line_tilts = [CalibrateWavelengths.INITIAL_LINE_TILTS[i] for i in range(1, 3)]
     dispersions = [CalibrateWavelengths.INITIAL_DISPERSIONS[i] for i in range(1, 3)]
     flux_scale = 80000.0
@@ -180,11 +212,11 @@ def generate_fake_arc_frame():
 
     # Calculate the tilted coordinates
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
-    for order_center, wavelength_model, tilt, line_width, dispersion in \
+    for order_center, wavelength_model, tilt, line_fwhm, dispersion in \
             zip((order1, order2),
                 (wavelength_model1, wavelength_model2),
                 line_tilts,
-                line_widths,
+                line_fwhms,
                 dispersions):
         input_order_region = order_region(order_height, order_center, (ny, nx))
         tilted_x = tilt_coordinates(tilt, x2d[input_order_region],
@@ -196,9 +228,10 @@ def generate_fake_arc_frame():
             if line['line_strength'] == 'nan':
                 continue
             wavelengths = wavelength_model(tilted_x)
-            line_sigma = fwhm_to_sigma(line_width)
-            data[input_order_region] += line['line_strength'] * gauss(wavelengths,
-                                                                      line['wavelength'], line_sigma) * flux_scale
+            line_sigma = fwhm_to_sigma(line_fwhm)
+            line_data = gauss(wavelengths, line['wavelength'], dispersion * line_sigma) * flux_scale
+            line_data *= line['line_strength'] * flux_scale
+            data[input_order_region] += line_data
     # Add poisson noise
     errors += np.sqrt(data)
     data = np.random.poisson(data).astype(float)
@@ -207,10 +240,10 @@ def generate_fake_arc_frame():
     errors = np.sqrt(errors * errors + read_noise)
     data += np.random.normal(0.0, read_noise, size=(ny, nx))
     # save the data, errors, and orders to a floyds frame
-    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({}), uncertainty=errors)], 'foo.fits')
+    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({'SITEID': 'ogg'}), uncertainty=errors)], 'foo.fits')
     frame.orders = orders
     # return the test frame and the input wavelength solution
-    return frame, {'models': [wavelength_model1, wavelength_model2], 'tilts': line_tilts, 'widths': line_widths}
+    return frame, {'models': [wavelength_model1, wavelength_model2], 'tilts': line_tilts, 'fwhms': line_fwhms}
 
 
 def test_full_wavelength_solution():
@@ -219,8 +252,8 @@ def test_full_wavelength_solution():
     frame, input_wavelength_solution = generate_fake_arc_frame()
     stage = CalibrateWavelengths(input_context)
     frame = stage.do_stage(frame)
-    for fit_width, input_width in zip(frame.wavelengths.line_widths, input_wavelength_solution['widths']):
-        np.testing.assert_allclose(fit_width, input_width, atol=0.1)
+    for fit_fwhm, input_fwhm in zip(frame.wavelengths.line_fwhms, input_wavelength_solution['fwhms']):
+        np.testing.assert_allclose(fit_fwhm, input_fwhm, atol=0.1)
     for fit_tilt, input_tilt, in zip(frame.wavelengths.line_tilts, input_wavelength_solution['tilts']):
         np.testing.assert_allclose(fit_tilt, input_tilt, atol=0.1)
 
@@ -255,7 +288,7 @@ def test_empty_calibrate_wavelengths_stage():
     errors = np.sqrt(errors * errors + read_noise)
     data += np.random.normal(0.0, read_noise, size=(ny, nx))
     # save the data, errors, and orders to a floyds Calibration frame
-    frame = FLOYDSCalibrationFrame([CCDData(data, fits.Header({}), uncertainty=errors)], 'foo.fits')
+    frame = FLOYDSCalibrationFrame([CCDData(data, fits.Header({'SITEID': 'ogg'}), uncertainty=errors)], 'foo.fits')
     frame.orders = orders
 
     calibrate_wavelengths = CalibrateWavelengths(input_context)

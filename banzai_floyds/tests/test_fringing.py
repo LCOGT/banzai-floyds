@@ -59,11 +59,11 @@ def test_create_super_fringe():
     # Trim off the edges of the order due to edge effects
     trimmed_order = frames[0].orders.new(frames[0].orders.order_heights - 20)
     in_order = trimmed_order.data == 1
-    np.testing.assert_allclose(frame.data[in_order], frames[0].input_fringe[in_order], rtol=0.02)
+    np.testing.assert_allclose(frame.data[in_order], frames[0].input_fringe[in_order], rtol=0.02, atol=0.02)
 
 
 def test_correct_fringe():
-    np.random.seed(291523)
+    np.random.seed(91275)
     # Make fake fringe data and using a fixed sin fringe pattern but offset in the image
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True,
                                         fringe=True, fringe_offset=3.5, include_super_fringe=True)

@@ -21,12 +21,6 @@ used_lines = [
         'line_notes': ''
     },
     {
-        'wavelength': 4077.837,
-        'line_strength': 0.031,
-        'line_source': 'Hg',
-        'line_notes': ''
-    },
-    {
         'wavelength': 4358.335,
         'line_strength': 1.577,
         'line_source': 'Hg',
@@ -47,12 +41,6 @@ used_lines = [
     {
         'wavelength': 7067.2175,
         'line_strength': 0.079,
-        'line_source': 'ArI',
-        'line_notes': ''
-    },
-    {
-        'wavelength': 7147.0416,
-        'line_strength': 0.011,
         'line_source': 'ArI',
         'line_notes': ''
     },
@@ -116,12 +104,6 @@ used_lines = [
         'line_source': 'ArI',
         'line_notes': ''
     },
-    {
-        'wavelength': 10139.75,
-        'line_strength': 0.019,
-        'line_source': 'Hg',
-        'line_notes': ''
-    },
 ]
 
 unused_lines = [{
@@ -139,6 +121,11 @@ unused_lines = [{
     'line_strength': 0.0064,
     'line_source': 'Hg',
     'line_notes': 'blend'
+}, {
+    'wavelength': 4077.837,
+    'line_strength': 0.031,
+    'line_source': 'Hg',
+    'line_notes': 'weak'
 }, {
     'wavelength': 4339.2232,
     'line_strength': 'nan',
@@ -174,6 +161,11 @@ unused_lines = [{
     'line_strength': 'nan',
     'line_source': 'Hg',
     'line_notes': 'Weak'
+}, {
+    'wavelength': 7147.0416,
+    'line_strength': 0.011,
+    'line_source': 'ArI',
+    'line_notes': 'Too close to previous line'
 }, {
     'wavelength':
     4680.1359,
@@ -360,6 +352,11 @@ unused_lines = [{
     'line_strength': 'nan',
     'line_source': 'ArI',
     'line_notes': 'No flux in FLOYDS'
+}, {
+    'wavelength': 10139.75,
+    'line_strength': 0.019,
+    'line_source': 'Hg',
+    'line_notes': 'Too close to the chip edge at COJ'
 }, {
     'wavelength': 11078.87,
     'line_strength': 'nan',

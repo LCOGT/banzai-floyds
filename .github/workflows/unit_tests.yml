@@ -44,11 +44,6 @@ jobs:
             python: '3.9'
             toxenv: py39-test-alldeps-cov
 
-          - name: OS X - Python 3.9 with all optional dependencies
-            os: macos-latest
-            python: '3.9'
-            toxenv: py39-test-alldeps
-
           - name: Windows - Python 3.9 with all optional dependencies
             os: windows-latest
             python: '3.9'

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from astropy.table import Table
 from banzai.data import HeaderOnly
 from astropy.modeling.models import Polynomial1D
+import json
 
 
 SKYLINE_LIST = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/skylines.dat'))
@@ -66,18 +67,18 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     """
     nx = 2048
     ny = 512
-    INITIAL_LINE_WIDTHS = {1: 15.6, 2: 8.6}
+    INITIAL_LINE_FWHMS = {1: 15.6, 2: 8.6}
     # DISPERSIONS = {1: 3.13, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    profile_width = 4
+    profile_fwhm = 10.0
     order_height = 93
     read_noise = 6.5
-    line_widths = [15.6, 8.6]
+    line_fwhms_angstroms = [15.6, 8.6]
     input_fringe_shift = fringe_offset
 
     order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1700))
-    order2 = Legendre((410, 17, 63, -12), domain=(475, 1975))
+    order2 = Legendre((380, 17, 63, -12), domain=(475, 1975))
     data = np.zeros((ny, nx))
     orders = Orders([order1, order2], (ny, nx), [order_height, order_height])
     expanded_order_height = order_height + 20
@@ -85,21 +86,19 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
                                  domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    trace1 = Legendre((5, 10, 4),
-                      domain=(wavelength_model1(0), wavelength_model1(1700)))
-    trace2 = Legendre((-10, -8, -3),
-                      domain=(wavelength_model2(475), wavelength_model2(1975)))
+    trace1 = Legendre((5, 10, 4), domain=(wavelength_model1(0), wavelength_model1(1700)))
+    trace2 = Legendre((-10, -8, -3), domain=(wavelength_model2(475), wavelength_model2(1975)))
     profile_centers = [trace1, trace2]
 
     # Work out the wavelength solution for larger than the typical order size so that we
     # can shift the fringe pattern up and down
     orders.order_heights = np.ones(2) * (order_height + 5)
     wavelengths = WavelengthSolution([wavelength_model1, wavelength_model2],
-                                     [INITIAL_LINE_WIDTHS[i + 1] for i in range(2)],
+                                     [INITIAL_LINE_FWHMS[i + 1] for i in range(2)],
                                      [INITIAL_LINE_TILTS[i + 1] for i in range(2)],
                                      orders=orders.new(expanded_order_height))
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
-    profile_sigma = fwhm_to_sigma(profile_width)
+    profile_sigma = fwhm_to_sigma(profile_fwhm)
     flux_normalization = 10000.0
 
     sky_continuum = 800.0
@@ -108,7 +107,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     input_sky = np.zeros_like(data)
     input_lines = np.random.uniform(3200, 9500, size=10)
     input_line_strengths = np.random.uniform(20000.0, 200000.0, size=10)
-    input_line_widths = np.random.uniform(8, 30, size=10)
+    emission_line_fwhms = np.random.uniform(8, 30, size=10)
     continuum_polynomial = Legendre((1.0, 0.3, -0.2), domain=(3000.0, 12000.0))
     # normalize out the polynomial so it is close to 1
     continuum_polynomial /= np.mean(
@@ -128,12 +127,10 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                 input_spectrum = flux_normalization
                 input_spectrum *= continuum_polynomial(wavelengths.data[in_order])
                 input_spectrum *= profile
-                for input_line, strength, width in zip(input_lines,
-                                                       input_line_strengths,
-                                                       input_line_widths):
+                for input_line, strength, fhwm in zip(input_lines, input_line_strengths, emission_line_fwhms):
                     # add some random emission lines
                     input_spectrum += strength * gauss(wavelengths.data[in_order],
-                                                       input_line, width) * profile
+                                                       input_line, fwhm_to_sigma(fhwm)) * profile
                 data[in_order] += input_spectrum
 
         data[in_order] += background
@@ -143,7 +140,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
             sky_spectrum = np.zeros_like(sky_wavelengths) + sky_continuum
             for line in SKYLINE_LIST:
                 line_spread = gauss(sky_wavelengths, line['wavelength'],
-                                    fwhm_to_sigma(line_widths[i]))
+                                    fwhm_to_sigma(line_fwhms_angstroms[i]))
                 sky_spectrum += line['line_strength'] * line_spread * sky_normalization
             # Make a slow illumination gradient to make sure things work even if the sky is not flat
             illumination = 100 * gauss(slit_coordinates[in_order], 0.0, 48)
@@ -175,7 +172,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                             uncertainty=errors)],
                                    'foo.fits')
     frame.input_profile_centers = profile_centers
-    frame.input_profile_width = profile_width
+    frame.input_profile_sigma = profile_sigma
     frame.wavelengths = wavelengths
     frame.orders = orders
     frame.instrument = SimpleNamespace(site='ogg', camera='en02')
@@ -189,14 +186,11 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         frame.fringe = super_fringe_frame
     if not flat_spectrum:
         frame.input_spectrum_wavelengths = np.arange(3000.0, 12000.0, 0.1)
-        frame.input_spectrum = flux_normalization * continuum_polynomial(
-            frame.input_spectrum_wavelengths)
-        for input_line, strength, width in zip(input_lines,
-                                               input_line_strengths,
-                                               input_line_widths):
+        frame.input_spectrum = flux_normalization * continuum_polynomial(frame.input_spectrum_wavelengths)
+        for input_line, strength, fhwm in zip(input_lines, input_line_strengths, emission_line_fwhms):
             # add some random emission lines
             frame.input_spectrum += strength * gauss(frame.input_spectrum_wavelengths,
-                                                     input_line, width)
+                                                     input_line, fwhm_to_sigma(fhwm))
     return frame
 
 
@@ -252,6 +246,23 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     frame.extracted = data   # Use the elevation of CTIO which is what the telluric correction is scaled to
     frame.elevation = 2198.0
     return frame
+
+
+def load_manual_region(region_filename, site_id, order_id, shape, order_height):
+    with open(region_filename) as region_file:
+        region_fits = json.load(region_file)
+
+    # Ensure that overlap is 99% between the manual fits and the automatic order fits
+    manual_order_region = np.zeros(shape, dtype=bool)
+    x2d, y2d = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+    order_fit = Legendre(coef=region_fits[site_id][order_id]['coef'],
+                         domain=region_fits[site_id][order_id]['domain'],
+                         window=region_fits[site_id][order_id]['window'])
+    order_center = np.round(order_fit(x2d)).astype(int)
+    manual_order_region = np.logical_and(x2d >= order_fit.domain[0], x2d <= order_fit.domain[1])
+    manual_order_region = np.logical_and(manual_order_region, y2d >= order_center - order_height // 2)
+    manual_order_region = np.logical_and(manual_order_region, y2d <= order_center + order_height // 2)
+    return manual_order_region
 
 
 class TestCalibrationFrame(FLOYDSCalibrationFrame):
