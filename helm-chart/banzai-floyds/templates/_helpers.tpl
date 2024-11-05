@@ -174,6 +174,8 @@ Celery task queue configuration
   value: {{ .Values.banzaiFloyds.queueName | quote }}
 - name: CELERY_TASK_QUEUE_NAME
   value: {{ .Values.banzaiFloyds.celeryTaskQueueName | quote }}
+- name: CELERY_LARGE_TASK_QUEUE_NAME
+  value: {{ .Values.banzaiFloyds.celeryTaskQueueName | quote }}
 - name: BANZAI_WORKER_LOGLEVEL
   value: {{ .Values.banzaiFloyds.banzaiWorkerLogLevel | quote }}
 - name: REFERENCE_CATALOG_URL

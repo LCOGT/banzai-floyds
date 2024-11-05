@@ -6,6 +6,15 @@ from numpy.polynomial.legendre import Legendre
 
 
 def fit_background(data, background_order=3):
+    # I tried a wide variety of bsplines and two fits here without success.
+    # The scipy bplines either had significant issues with the number of points we are fitting in the whole 2d frame or
+    # could not capture the variation near sky line edges (the key reason to use 2d fits from Kelson 2003).
+    # I also tried using 2d polynomials, but to get the order high enough to capture the variation in the skyline edges,
+    # I was introducing significant ringing in the fits (to the point of oscillating between positive and
+    # negative values in the data).
+    # This is now doing something closer to what IRAF did, interpolating the background regions onto the wavelength
+    # bin centers, fitting a 1d polynomial, and interpolating back on the original wavelengths to subtract per pixel.
+    # In this way, it is only the background model that is interpolated and not the pixel values themselves.
     data['data_bin_center'] = 0.0
     data['uncertainty_bin_center'] = 0.0
     for order in [1, 2]:
