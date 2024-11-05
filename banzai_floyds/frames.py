@@ -6,7 +6,6 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 import numpy as np
 import os
 from astropy.io import fits
-from banzai_floyds.utils.flux_utils import airmass_extinction
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
