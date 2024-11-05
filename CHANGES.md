@@ -1,3 +1,9 @@
+0.10.0 (2024-11-05)
+-------------------
+- Numerous fixes based on commissioning experience
+- Added/refactored the necessary logic to re-extract
+  the data via the UI
+
 0.9.0 (2024-04-02)
 ------------------
 - Fixes based on Joey's comments
