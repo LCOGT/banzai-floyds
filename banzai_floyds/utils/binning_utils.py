@@ -21,43 +21,25 @@ def bin_data(data, uncertainty, wavelengths, orders, mask=None):
         bin_centers = np.hstack([0, bin_centers, 0])
         bin_widths = (order_bins[1:] - order_bins[:-1])
         bin_widths = np.hstack([0, bin_widths, 0])
-        data_table['wavelength_bin'] = bin_centers[bin_number]
-        data_table['wavelength_bin_width'] = bin_widths[bin_number]
+        data_table['order_wavelength_bin'] = bin_centers[bin_number]
+        data_table['order_wavelength_bin_width'] = bin_widths[bin_number]
         data_table['order'] = order_id
         if binned_data is None:
             binned_data = data_table
         else:
             binned_data = vstack([binned_data, data_table])
-    return binned_data.group_by(('order', 'wavelength_bin'))
+    return binned_data.group_by(('order', 'order_wavelength_bin'))
 
 
-def combine_wavelength_bins(wavelength_bins):
-    """
-    Combine wavelength bins, taking the small delta (higher resolution) bins
-    """
-    # Find the overlapping bins
-    # Assume that the orders are basically contiguous and monotonically increasing
-    wavelength_regions = [(min(order_bins['center']), max(order_bins['center'])) for order_bins in wavelength_bins]
-
-    # Assume the smaller of the bin widths are from the blue order
-    # We assume here we only have 2 orders and that one order does not fully encompass the other
-    min_wavelength = min(np.array(wavelength_regions).ravel())
-    blue_order_index = 0 if min_wavelength in wavelength_regions[0]['center'] else 1
-    red_order_index = 0 if blue_order_index else 1
-
-    overlap_end_index = np.min(np.argwhere(wavelength_bins[red_order_index]['center'] >
-                                           np.max(wavelength_regions[blue_order_index]['center'])))
-    # clean up the middle partial overlaps
-    middle_bin_upper = wavelength_bins[red_order_index]['center'][overlap_end_index + 1]
-    middle_bin_upper -= wavelength_bins[red_order_index]['width'][overlap_end_index] / 2.0
-    middle_bin_lower = wavelength_bins[blue_order_index]['center'][-1]
-    middle_bin_lower += wavelength_bins[blue_order_index]['width'] / 2.0
-    middle_bin_center = (middle_bin_upper + middle_bin_lower) / 2.0
-    middle_bin_width = middle_bin_upper - middle_bin_lower
-    overlap_end_index += 1
-    new_bins = {'center': np.hstack([wavelength_bins[blue_order_index]['center'], [middle_bin_center],
-                                     wavelength_bins[red_order_index][overlap_end_index:]['center']]),
-                'width': np.hstack([wavelength_bins[blue_order_index]['center'],
-                                    [middle_bin_width],
-                                    wavelength_bins[red_order_index][overlap_end_index:]['center']])}
-    return Table(new_bins)
+def rebin_data_combined(binned_data, wavelengths):
+    bins = wavelengths.combined_bin_edges
+    bin_number = np.digitize(binned_data['wavelength'], bins)
+    bin_centers = (bins[1:] + bins[:-1]) / 2.0
+    # Append the first and last bin centers as zero to flag that the
+    # edge pixels aren't in a bin
+    bin_centers = np.hstack([0, bin_centers, 0])
+    bin_widths = (bins[1:] - bins[:-1])
+    bin_widths = np.hstack([0, bin_widths, 0])
+    binned_data['wavelength_bin'] = bin_centers[bin_number]
+    binned_data['wavelength_bin_width'] = bin_widths[bin_number]
+    return binned_data.group_by('wavelength_bin')

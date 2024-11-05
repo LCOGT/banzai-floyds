@@ -21,7 +21,8 @@ ORDERED_STAGES = [
     'banzai_floyds.flux.FluxSensitivity',
     'banzai_floyds.flux.FluxCalibrator',
     'banzai_floyds.telluric.TelluricMaker',
-    'banzai_floyds.telluric.TelluricCorrector'
+    'banzai_floyds.telluric.TelluricCorrector',
+    'banzai_floyds.extract.CombinedExtractor',
 ]
 
 FRAME_SELECTION_CRITERIA = [('type', 'contains', 'FLOYDS')]

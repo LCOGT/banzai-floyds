@@ -1,6 +1,7 @@
 from banzai.stages import Stage
 from banzai.calibrations import CalibrationUser
 from banzai_floyds.dbs import get_standard
+from banzai_floyds.utils.flux_utils import flux_calibrate
 from banzai_floyds.utils import telluric_utils
 import numpy as np
 from scipy.signal import savgol_filter
@@ -90,5 +91,5 @@ class StandardLoader(CalibrationUser):
 
 class FluxCalibrator(Stage):
     def do_stage(self, image):
-        image.apply_sensitivity()
+        image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass, 'fluxraw')
         return image

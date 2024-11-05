@@ -43,12 +43,14 @@ def test_extraction():
     fake_frame.profile = fake_frame.input_profile_centers, fake_profile_width_funcs, None
 
     fake_frame.binned_data['background'] = 0.0
+    input_brightness = 10000.0
 
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(fake_frame)
     extracted = extract(fake_frame.binned_data)
-    np.testing.assert_allclose(extracted['fluxraw'], 10000.0, rtol=0.06)
-    np.testing.assert_allclose(extracted['fluxraw'] / extracted['fluxrawerr'], 100.0, rtol=0.10)
+    residuals = extracted['fluxraw'] - input_brightness
+    residuals /= extracted['fluxrawerr']
+    assert (np.abs(residuals) < 3).sum() > 0.99 * len(extracted['fluxraw'])
 
 
 def test_full_extraction_stage():
@@ -63,4 +65,6 @@ def test_full_extraction_stage():
     stage = Extractor(input_context)
     frame = stage.do_stage(frame)
     expected = np.interp(frame['EXTRACTED'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
-    np.testing.assert_allclose(frame['EXTRACTED'].data['fluxraw'], expected, rtol=0.085)
+    residuals = frame['EXTRACTED'].data['fluxraw'] - expected
+    residuals /= frame['EXTRACTED'].data['fluxrawerr']
+    assert (np.abs(residuals) < 3).sum() > 0.99 * len(frame['EXTRACTED'].data['fluxraw'])

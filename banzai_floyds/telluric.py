@@ -49,5 +49,6 @@ class TelluricCorrector(Stage):
         # but the fits did not converge well and the correction is fine without. Need to revist.
         # telluric_model = telluric_utils.scale_transmission(telluric_model, image.airmass)
         image.extracted['flux'][in_order] /= telluric_model
+        image.extracted['fluxerror'][in_order] /= telluric_model
         image.telluric = Table({'wavelength': data['wavelength'], 'telluric': telluric_model})
         return image

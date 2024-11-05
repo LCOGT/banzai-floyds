@@ -2,6 +2,8 @@ from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table
 from banzai.logs import get_logger
+from banzai_floyds.utils.binning_utils import rebin_data_combined
+from banzai_floyds.utils.flux_utils import flux_calibrate
 
 
 logger = get_logger()
@@ -31,15 +33,19 @@ def set_extraction_region(image):
         )
 
 
-def extract(binned_data):
+def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', background_key='background',
+            background_out_key='background', uncertainty_key='uncertainty', flux_keyword='fluxraw',
+            flux_error_key='fluxrawerr', weights_key='weights', include_order=True):
     # Each pixel is the integral of the flux over the full area of the pixel.
     # We want the average at the center of the pixel (where the wavelength is well-defined).
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
 
-    results = {'fluxraw': [], 'fluxrawerr': [], 'wavelength': [], 'binwidth': [], 'order': [], 'background': []}
+    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [], background_out_key: []}
+    if include_order:
+        results['order'] = []
     for data_to_sum in binned_data.groups:
-        wavelength_bin = data_to_sum['wavelength_bin'][0]
+        wavelength_bin = data_to_sum[bin_key][0]
         # Skip pixels that don't fall into a bin we are going to extract
         if wavelength_bin == 0:
             continue
@@ -48,33 +54,32 @@ def extract(binned_data):
         # Cut any bins that don't include the profile center. If the weights are small (i.e. we only caught the edge
         # of the profile), this blows up numerically. The threshold here is a little arbitrary. It needs to be small
         # enough to not have numerical artifacts but large enough to not reject broad profiles.
-        if np.max(data_to_sum['weights'][data_to_sum['extraction_window']]) < 5e-3:
+        if np.max(data_to_sum[weights_key][data_to_sum['extraction_window']]) < 5e-3:
             continue
 
-        wavelength_bin_width = data_to_sum['wavelength_bin_width'][0]
-        order_id = data_to_sum['order'][0]
+        wavelength_bin_width = data_to_sum[bin_key + '_width'][0]
         # This should be equivalent to Horne 1986 optimal extraction
-        flux = data_to_sum['data'] - data_to_sum['background']
-        weights = data_to_sum['weights']
-        # If we are using uniform weights, the sum of the weights needs to be normalized
-        # i.e. the psf needs to sum to 1. We assume non-uniform weights are already normalized.
-        if np.all(weights == 0):
-            weights /= data_to_sum['extraction_window'].sum()
+        flux = data_to_sum[data_keyword] - data_to_sum[background_key]
+        # We need the weights to be normalized to sum to 1 or fluxes don't match for standard unweighted extractions
+        weights = data_to_sum[weights_key]
+        if np.all(weights == 1):
+            weights /= data_to_sum[weights_key].sum()
         flux *= weights
-        flux *= data_to_sum['uncertainty'] ** -2
+        flux *= data_to_sum[uncertainty_key] ** -2
         flux = np.sum(flux[data_to_sum['extraction_window']])
-        flux_normalization = weights**2 * data_to_sum['uncertainty']**-2
+        flux_normalization = weights**2 * data_to_sum[uncertainty_key]**-2
         flux_normalization = np.sum(flux_normalization[data_to_sum['extraction_window']])
-        background = data_to_sum['background'] * weights
-        background *= data_to_sum['uncertainty'] ** -2
+        background = data_to_sum[background_key] * weights
+        background *= data_to_sum[uncertainty_key] ** -2
         background = np.sum(background[data_to_sum['extraction_window']])
-        results['fluxraw'].append(flux / flux_normalization)
-        results['background'].append(background / flux_normalization)
+        results[flux_keyword].append(flux / flux_normalization)
+        results[background_out_key].append(background / flux_normalization)
         uncertainty = np.sqrt(np.sum(weights[data_to_sum['extraction_window']]) / flux_normalization)
-        results['fluxrawerr'].append(uncertainty)
+        results[flux_error_key].append(uncertainty)
         results['wavelength'].append(wavelength_bin)
         results['binwidth'].append(wavelength_bin_width)
-        results['order'].append(order_id)
+        if include_order:
+            results['order'].append(data_to_sum['order'][0])
     return Table(results)
 
 
@@ -90,5 +95,37 @@ class Extractor(Stage):
         image.extracted = extract(image.binned_data)
         return image
 
-# TODO: Stitching together the orders is going to require flux calibration and probably
-# a scaling due to aperture corrections
+
+class CombinedExtractor(Stage):
+    def do_stage(self, image):
+        # rebin the data without order using the new wavelength bins
+        image.binned_data = rebin_data_combined(image.binned_data, image.wavelengths)
+        # multiply the input flux by the sensitivity and telluric corrections
+        image.binned_data = flux_calibrate(image.binned_data, image.sensitivity, image.elevation, image.airmass,
+                                           raw_key='data', error_key='uncertainty')
+        telluric_model = np.interp(image.binned_data['wavelength'], image.telluric['wavelength'],
+                                   image.telluric['telluric'], left=1.0, right=1.0)
+        image.binned_data['flux'] /= telluric_model
+        image.binned_data['fluxerror'] /= telluric_model
+        # Scale the background in the same way we scaled the data so we can still subtract it cleanly
+        image.binned_data['flux_background'] = image.binned_data['background'] * image.binned_data['flux']
+        image.binned_data['flux_background'] /= image.binned_data['data']
+        overlap_region = [max([domain[0] for domain in image.wavelengths.domains]),
+                          min([domain[1] for domain in image.wavelengths.domains])]
+        order_2 = image.binned_data['order'] == 2
+        order_1 = image.binned_data['order'] == 1
+        in_overlap = np.logical_and(image.binned_data['wavelength'] > overlap_region[0],
+                                    image.binned_data['wavelength'] < overlap_region[1])
+
+        # Since we are now combining two orders, we need to divide the weights by 2 in the overlap region
+        image.binned_data['combined_weights'] = image.binned_data['weights']
+        image.binned_data['combined_weights'][in_overlap] /= 2
+        # Normalize the orders to make sure they overlap
+        normalization = np.median(image.binned_data['flux'][np.logical_and(order_1, in_overlap)])
+        normalization /= np.median(image.binned_data['flux'][np.logical_and(order_2, in_overlap)])
+        for key in ['flux', 'fluxerror', 'flux_background']:
+            image.binned_data[key][order_2] *= normalization
+        image.spectrum = extract(image.binned_data, data_keyword='flux', bin_key='wavelength_bin',
+                                 background_key='flux_background', background_out_key='background',
+                                 uncertainty_key='fluxerror', weights_key='combined_weights', include_order=False)
+        return image

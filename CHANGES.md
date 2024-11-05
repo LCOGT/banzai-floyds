@@ -1,3 +1,7 @@
+0.11.0 (2024-11-05)
+-------------------
+- Added the ability to combine the extraction from both orders into a single spectrum
+
 0.10.0 (2024-11-05)
 -------------------
 - Numerous fixes based on commissioning experience

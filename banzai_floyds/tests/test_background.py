@@ -57,7 +57,7 @@ def test_background_stage():
     in_extract_region = np.zeros_like(frame.data, dtype=bool)
     x, y = frame.binned_data['x'], frame.binned_data['y']
     in_extract_region[y, x] = np.logical_and(frame.binned_data['extraction_window'],
-                                             frame.binned_data['wavelength_bin'] > 0)
+                                             frame.binned_data['order_wavelength_bin'] > 0)
     in_order = frame.orders.data > 0
     residuals = frame.background[in_order] - frame.input_sky[in_order]
     residuals /= frame.uncertainty[in_order]

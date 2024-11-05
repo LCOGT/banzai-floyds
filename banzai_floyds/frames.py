@@ -6,7 +6,6 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 import numpy as np
 import os
 from astropy.io import fits
-from banzai_floyds.utils.flux_utils import airmass_extinction
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
@@ -21,6 +20,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self._background_fits = None
         self._binned_data = None
         self._extracted = None
+        self._spectrum = None
         self.fringe = None
         self._sensitivity = None
         self._telluric = None
@@ -51,7 +51,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.profile = load_profile_fits(self['PROFILEFITS'])
         if 'BINNED2D' in self:
             binned_data = Table(self['BINNED2D'].data)
-            self.binned_data = binned_data.group_by(('order', 'wavelength_bin'))
+            self.binned_data = binned_data.group_by(('order', 'order_wavelength_bin'))
         if 'EXTRACTED' in self:
             self.extracted = self['EXTRACTED'].data
         if 'FRINGE' in self:
@@ -60,18 +60,20 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.telluric = self['TELLURIC'].data
         if 'SENSITIVITY' in self:
             self.sensitivity = self['SENSITIVITY'].data
+        if 'SPECTRUM' in self:
+            self.spectrum = self['SPECTRUM'].data
 
     def get_1d_and_2d_spectra_products(self, runtime_context):
         filename_1d = self.get_output_filename(runtime_context).replace('.fits', '-1d.fits')
         self.meta.pop('EXTNAME')
         hdus_1d = list(filter(None, [HeaderOnly(self.meta.copy(), name='SCI'),
+                                     self['SPECTRUM'],
                                      self['EXTRACTED'],
                                      self['SENSITIVITY'],
                                      self['TELLURIC']]))
         frame_1d = LCOObservationFrame(hdus_1d, os.path.join(self.get_output_directory(runtime_context), filename_1d))
         fits_1d = frame_1d.to_fits(runtime_context)
-        if 'EXTRACTED' in fits_1d:
-            fits_1d['EXTRACTED'].name = 'SPECTRUM'
+
         # TODO: Save telluric and sensitivity corrections that were applied
 
         filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')
@@ -81,7 +83,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
         # TODO consider saving the background coeffs or the profile coeffs?
         frame_2d = LCOObservationFrame([hdu for hdu in self._hdus
-                                        if hdu.name not in ['EXTRACTED', 'SENSITIVITY', 'TELLURIC']],
+                                        if hdu.name not in ['SPECTRUM', 'EXTRACTED', 'SENSITIVITY', 'TELLURIC']],
                                        os.path.join(self.get_output_directory(runtime_context), filename_2d))
         frame_2d.meta['L1ID1D'] = filename_1d
         fits_2d = frame_2d.to_fits(runtime_context)
@@ -191,6 +193,15 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.add_or_update(DataTable(value, name='EXTRACTED', meta=fits.Header({})))
 
     @property
+    def spectrum(self):
+        return self._spectrum
+
+    @spectrum.setter
+    def spectrum(self, value):
+        self._spectrum = value
+        self.add_or_update(DataTable(value, name='SPECTRUM', meta=fits.Header({})))
+
+    @property
     def telluric(self):
         return self._telluric
 
@@ -216,25 +227,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def wavelengths(self, value):
         self._wavelengths = value
         self.add_or_update(HeaderOnly(value.to_header(), name='WAVELENGTHS'))
-
-    def apply_sensitivity(self):
-        self.extracted['flux'] = np.zeros_like(self.extracted['fluxraw'])
-        self.extracted['fluxerror'] = np.zeros_like(self.extracted['fluxraw'])
-
-        for order_id in [1, 2]:
-            in_order = self.extracted['order'] == order_id
-            sensitivity_order = self.sensitivity['order'] == order_id
-            # Divide the spectrum by the sensitivity function, correcting for airmass
-            sensitivity = np.interp(self.extracted['wavelength'][in_order],
-                                    self.sensitivity['wavelength'][sensitivity_order],
-                                    self.sensitivity['sensitivity'][sensitivity_order])
-            self.extracted['flux'][in_order] = self.extracted['fluxraw'][in_order] * sensitivity
-            self.extracted['fluxerror'][in_order] = self.extracted['fluxrawerr'][in_order] * sensitivity
-
-        airmass_correction = airmass_extinction(self.extracted['wavelength'], self.elevation, self.airmass)
-        # Divide by the atmospheric extinction to get back to intrinsic flux
-        self.extracted['flux'] /= airmass_correction
-        self.extracted['fluxerror'] /= airmass_correction
 
     @property
     def elevation(self):
