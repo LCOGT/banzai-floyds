@@ -86,7 +86,7 @@ def test_combined_extraction():
     extracted_waves = np.arange(3000.0, 10000.0)
     flux = np.ones(len(extracted_waves) * 2)
     orders = np.hstack([np.ones(len(extracted_waves)), np.ones(len(extracted_waves)) * 2])
-    frame.extracted = Table({'wavelength': np.hstack([extracted_waves, extracted_waves]), 'flux': flux, 
+    frame.extracted = Table({'wavelength': np.hstack([extracted_waves, extracted_waves]), 'flux': flux,
                              'order': orders})
     stage = CombinedExtractor(input_context)
     frame = stage.do_stage(frame)
