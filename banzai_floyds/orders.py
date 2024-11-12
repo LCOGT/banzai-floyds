@@ -406,7 +406,7 @@ class OrderSolver(Stage):
     POLYNOMIAL_ORDER = 3
 
     ORDER_REGIONS = {'ogg': [(0, 1550), (500, 1835)],
-                     'coj': [(0, 1600), (615, 1920)]}
+                     'coj': [(55, 1600), (615, 1920)]}
 
     def do_stage(self, image):
         if image.orders is None:

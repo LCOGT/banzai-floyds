@@ -16,7 +16,7 @@ ORDERED_STAGES = [
     'banzai_floyds.profile.ProfileFitter',
     'banzai_floyds.background.BackgroundFitter',
     'banzai_floyds.extract.Extractor',
-    # 'banzai_floyds.trim.Trimmer',
+    'banzai_floyds.trim.Trimmer',
     'banzai_floyds.flux.StandardLoader',
     'banzai_floyds.flux.FluxSensitivity',
     'banzai_floyds.flux.FluxCalibrator',
