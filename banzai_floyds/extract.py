@@ -57,6 +57,9 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         if np.max(data_to_sum[weights_key][data_to_sum['extraction_window']]) < 5e-3:
             continue
 
+        data_to_sum = data_to_sum[data_to_sum['mask'] == 0]
+        if len(data_to_sum) == 0:
+            continue
         wavelength_bin_width = data_to_sum[bin_key + '_width'][0]
         # This should be equivalent to Horne 1986 optimal extraction
         flux = data_to_sum[data_keyword] - data_to_sum[background_key]
@@ -110,22 +113,26 @@ class CombinedExtractor(Stage):
         # Scale the background in the same way we scaled the data so we can still subtract it cleanly
         image.binned_data['flux_background'] = image.binned_data['background'] * image.binned_data['flux']
         image.binned_data['flux_background'] /= image.binned_data['data']
-        overlap_region = [max([domain[0] for domain in image.wavelengths.domains]),
-                          min([domain[1] for domain in image.wavelengths.domains])]
-        order_2 = image.binned_data['order'] == 2
-        order_1 = image.binned_data['order'] == 1
-        in_overlap = np.logical_and(image.binned_data['wavelength'] > overlap_region[0],
-                                    image.binned_data['wavelength'] < overlap_region[1])
-
-        # Since we are now combining two orders, we need to divide the weights by 2 in the overlap region
-        image.binned_data['combined_weights'] = image.binned_data['weights']
-        image.binned_data['combined_weights'][in_overlap] /= 2
+        overlap_region = [max([domain[0] for domain in image.wavelengths.wavelength_domains]),
+                          min([domain[1] for domain in image.wavelengths.wavelength_domains])]
         # Normalize the orders to make sure they overlap
-        normalization = np.median(image.binned_data['flux'][np.logical_and(order_1, in_overlap)])
-        normalization /= np.median(image.binned_data['flux'][np.logical_and(order_2, in_overlap)])
+        # order_1 onto order_2 because order_1 has higher resolution
+        extracted_order1 = image.extracted['order'] == 1
+        extracted_order2 = image.extracted['order'] == 2
+        in_extracted_overlap = np.logical_and(image.extracted['wavelength'] > overlap_region[0],
+                                              image.extracted['wavelength'] < overlap_region[1])
+        waves_to_interp = image.extracted['wavelength'][np.logical_and(extracted_order1, in_extracted_overlap)]
+        overlap_order2 = np.logical_and(extracted_order2, in_extracted_overlap)
+        flux_to_ratio = np.interp(waves_to_interp, image.extracted['wavelength'][overlap_order2],
+                                  image.extracted['flux'][overlap_order2])
+        order_ratio = image.extracted['flux'][np.logical_and(extracted_order1, in_extracted_overlap)]
+        order_ratio /= flux_to_ratio
+        normalization = np.median(order_ratio)
+        order_2 = image.binned_data['order'] == 2
         for key in ['flux', 'fluxerror', 'flux_background']:
             image.binned_data[key][order_2] *= normalization
         image.spectrum = extract(image.binned_data, data_keyword='flux', bin_key='wavelength_bin',
-                                 background_key='flux_background', background_out_key='background',
-                                 uncertainty_key='fluxerror', weights_key='combined_weights', include_order=False)
+                                 background_key='flux_background', background_out_key='background', flux_keyword='flux',
+                                 flux_error_key='fluxerror', uncertainty_key='fluxerror',
+                                 weights_key='weights', include_order=False)
         return image
