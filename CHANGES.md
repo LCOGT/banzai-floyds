@@ -1,3 +1,8 @@
+0.11.2 (2024-11-18)
+-------------------
+- Simplified the fitting for refining the peak centers. We no longer try to fit them all simultaneously
+- Updated the used the line list to remove a less isolated arc line
+
 0.11.1 (2024-11-12)
 -------------------
 - Fixes to the quality of the reductions

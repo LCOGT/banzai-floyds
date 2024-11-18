@@ -105,9 +105,7 @@ def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=
 
 
 def centroiding_weights(theta, x, line_sigma):
-    n_lines = len(theta) // 2
-    centers = theta[:n_lines]
-    strengths = theta[n_lines:]
+    center = theta[0]
 
     # Originally we just used the gaussian, but we really need the gaussian integrated over pixels
     # which is what this is. This should be more numerically stable without being too much slower
@@ -120,12 +118,9 @@ def centroiding_weights(theta, x, line_sigma):
     lower_pixel_limits[1:] = (x[:-1] + x[1:]) / 2.0
     lower_pixel_limits[0] = x[0] - (lower_pixel_limits[1] - x[0])
 
-    weights = np.zeros(len(x))
-    for center, strength in zip(centers, strengths):
-        integrated_gauss = -erf((-upper_pixel_limits + center) / (np.sqrt(2) * line_sigma))
-        integrated_gauss += erf((center - lower_pixel_limits) / (np.sqrt(2) * line_sigma))
-        integrated_gauss /= 2.0
-        weights += integrated_gauss * strength
+    weights = -erf((-upper_pixel_limits + center) / (np.sqrt(2) * line_sigma))
+    weights += erf((center - lower_pixel_limits) / (np.sqrt(2) * line_sigma))
+    weights /= 2.0
     return weights
 
 
@@ -150,10 +145,13 @@ def refine_peak_centers(data, error, peaks, line_fwhm, domain=None):
     line_sigma = fwhm_to_sigma(line_fwhm)
 
     x = np.arange(len(data)) + min(domain)
-    best_fits_parameters = optimize_match_filter(np.hstack([peaks, np.ones(len(peaks))]), data, error,
-                                                 centroiding_weights, x, args=(line_sigma,))
-    centers = best_fits_parameters[:len(peaks)]
-    return centers
+    best_fit_peaks = []
+    for peak in peaks:
+        window = np.logical_and(x > peak - 2 * line_sigma, x < peak + 2 * line_sigma)
+        best_fit_peak, = optimize_match_filter([peak], data[window], error[window],
+                                               centroiding_weights, x[window], args=(line_sigma,))
+        best_fit_peaks.append(best_fit_peak)
+    return best_fit_peaks
 
 
 def correlate_peaks(peaks, linear_model, lines, match_threshold):
@@ -456,11 +454,11 @@ class CalibrateWavelengths(Stage):
                 image.is_bad = True
                 return image
 
-            peaks = refine_peak_centers(flux_1d, flux_1d_error, peaks,
+            peaks = refine_peak_centers(flux_1d, flux_1d_error, peaks[successful_matches],
                                         self.INITIAL_LINE_FWHMS[image.site][order],
                                         domain=image.orders.domains[i])
 
-            initial_solution = estimate_distortion(peaks[successful_matches],
+            initial_solution = estimate_distortion(peaks,
                                                    corresponding_lines[successful_matches],
                                                    image.orders.domains[i],
                                                    order=self.FIT_ORDERS[order])
