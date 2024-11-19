@@ -57,12 +57,6 @@ used_lines = [
         'line_notes': ''
     },
     {
-        'wavelength': 7948.1764,
-        'line_strength': 0.272,
-        'line_source': 'ArI',
-        'line_notes': ''
-    },
-    {
         'wavelength': 8264.5225,
         'line_strength': 0.355,
         'line_source': 'ArI',
@@ -277,6 +271,11 @@ unused_lines = [{
     'line_strength': 0.3542,
     'line_source': 'ArI',
     'line_notes': 'Blend'
+}, {
+    'wavelength': 7948.1764,
+    'line_strength': 0.272,
+    'line_source': 'ArI',
+    'line_notes': ''
 }, {
     'wavelength': 8006.1567,
     'line_strength': 'nan',
