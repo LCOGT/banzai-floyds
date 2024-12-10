@@ -6,7 +6,7 @@ BANZAI-FLOYDS is the Las Cumbres Observatory pipeline to process FLOYDS data.
 
 Sky flats
 =========
-To estimate an initial position of the of the orders on the detector, we use a twilight sky flat. This 
+To estimate an initial position of the orders on the detector, we use a twilight sky flat. This 
 is required to start the reduction process. We use a sky flat instead of a lamp flat because of the dichroic
 that blocks the lamp light in the blue order.
 
@@ -20,7 +20,8 @@ Fringe Correction
 =================
 We have found that the fringe pattern shifts on the chip likely due to flexure. Oddly though, the fringe pattern
 movement is not correlated with the position of the orders on the chip. We stack all lampflat frames taken in the 
-past three days, shifting them to achieve more coverage of the fringe pattern than any single frame alone. We then
+past three days, shifting them to achieve more coverage of the fringe pattern than any s
+ingle frame alone. We then
 use a match filter to find the best fringe pattern removal of the science frame, dividing out the stacked frame.
 
 Extraction
