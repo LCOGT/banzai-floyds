@@ -33,3 +33,10 @@ sphinx:
 # python:
 #   install:
 #     - requirements: docs/requirements.txt
+# Declare the Python requirements required to build your documentation
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs
