@@ -1,3 +1,7 @@
+0.12.0 (2024-12-13)
+-------------------
+- Updated how we fit the profile center/width to better fit faint traces
+
 0.11.2 (2024-11-18)
 -------------------
 - Simplified the fitting for refining the peak centers. We no longer try to fit them all simultaneously
