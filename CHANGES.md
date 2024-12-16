@@ -1,3 +1,7 @@
+0.13.0 (2024-12-13)
+-------------------
+- Updated how we fit the profile center/width to better fit faint traces
+
 0.12.0 (2024-12-11)
 -------------------
 - We now have prefer calibrations in the following order: same block, same proposal, any public calibration.

@@ -304,7 +304,7 @@ def matched_filter_hessian(theta, data, error, weights_function, weights_jacobia
 
 
 def optimize_match_filter(initial_guess, data, error, weights_function, x, weights_jacobian_function=None,
-                          weights_hessian_function=None, args=None, minimize=False, bounds=None):
+                          weights_hessian_function=None, args=None, minimize=False, bounds=None, covariance=False):
     """
     Find the best fit parameters for a match filter model
 
@@ -329,6 +329,8 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x, weigh
         Any other static arguments that should be passed to the weights function.
     minimize: Boolean
         Minimize instead of maximize match filter signal?
+    covariance: Boolean
+        Return the covariance matrix of the fit?
 
     Returns
     -------
@@ -365,4 +367,8 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x, weigh
                                      hess=lambda *params: sign * matched_filter_hessian(*params),
                                      jac=lambda *params: sign * matched_filter_jacobian(*params),
                                      options={'eps': 1e-5}, bounds=bounds)
-    return best_fit.x
+
+    if covariance:
+        return best_fit.x, best_fit.hess_inv.todense()
+    else:
+        return best_fit.x
