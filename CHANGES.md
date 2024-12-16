@@ -1,6 +1,13 @@
-0.12.0 (2024-12-13)
+0.13.0 (2024-12-13)
 -------------------
 - Updated how we fit the profile center/width to better fit faint traces
+
+0.12.0 (2024-12-11)
+-------------------
+- We now have prefer calibrations in the following order: same block, same proposal, any public calibration.
+- If a block is still going, we delay the processing in case there is a calibration taken at
+  at the end of the block that we can use for processing
+- We now only use arcs and flats taken with the same slit width as the science data
 
 0.11.2 (2024-11-18)
 -------------------

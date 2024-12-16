@@ -236,6 +236,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def elevation(self, value):
         self.meta['HEIGHT'] = value
 
+    @property
+    def slit_width(self):
+        return self.meta['APERWID']
+
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, grouping_criteria: list = None,
