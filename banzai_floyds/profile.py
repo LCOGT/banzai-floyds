@@ -1,5 +1,4 @@
 import numpy as np
-from astropy.modeling import fitting, models
 from astropy.table import Table, vstack, join, Column
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.matched_filter import matched_filter_metric, optimize_match_filter
