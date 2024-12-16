@@ -112,6 +112,7 @@ class FringeCorrector(Stage):
         image.uncertainty[to_correct] /= fringe_correction[fringe_correction > 0.1]
         image.meta['L1FRNGOF'] = (fringe_offset, 'Fringe offset (pixels)')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
+        image.public_date = datetime.now()
         return image
 
 

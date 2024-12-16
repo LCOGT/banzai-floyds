@@ -52,3 +52,8 @@ CALIBRATION_FRAME_CLASS = 'banzai_floyds.frames.FLOYDSCalibrationFrame'
 CALIBRATION_IMAGE_TYPES = ['BIAS', 'DARK', 'SKYFLAT', 'BPM', 'LAMPFLAT', 'ARC', 'STANDARD']
 
 CALIBRATION_LOOKBACK = {'LAMPFLAT': 2.5}
+
+CALIBRATION_SET_CRITERIA = {'SKYFLAT': [], 'LAMPFLAT': ['slit_width'], 'ARC': ['slit_width'],
+                            'FRINGE': ['slit_width']}
+
+OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']
