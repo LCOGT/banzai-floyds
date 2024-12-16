@@ -1,7 +1,6 @@
 0.12.0 (2024-12-11)
 -------------------
-- We now prefer using calibrations, specifically arcs, from the same block or the same proposal
-- We only use public calibrations now
+- We now have prefer calibrations in the following order: same block, same proposal, any public calibration.
 - If a block is still going, we delay the processing in case there is a calibration taken at
   at the end of the block that we can use for processing
 - We now only use arcs and flats taken with the same slit width as the science data
