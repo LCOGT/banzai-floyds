@@ -23,7 +23,7 @@ def test_profile_width_fitting():
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders)
     domains = [center.domain for center in fake_frame.input_profile_centers]
-    fitted_widths = fit_profile_sigma(binned_data, fake_frame.input_profile_centers, domains)
+    fitted_widths, fitted_points = fit_profile_sigma(binned_data, fake_frame.input_profile_centers, domains)
     for fitted_width in fitted_widths:
         x = np.arange(fitted_width.domain[0], fitted_width.domain[1] + 1)
         np.testing.assert_allclose(fitted_width(x), fake_frame.input_profile_sigma, rtol=0.03)
