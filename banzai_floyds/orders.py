@@ -7,7 +7,7 @@ from banzai.data import ArrayData, DataTable
 from astropy.table import Table
 from astropy.io import fits
 from scipy.special import expit
-
+from banzai_floyds.dbs import get_order_locations
 from banzai_floyds.matched_filter import optimize_match_filter
 from copy import deepcopy
 
@@ -405,9 +405,6 @@ class OrderSolver(Stage):
     CENTER_CUT_WIDTH = 31
     POLYNOMIAL_ORDER = 3
 
-    ORDER_REGIONS = {'ogg': [(0, 1550), (500, 1835)],
-                     'coj': [(55, 1600), (615, 1920)]}
-
     def do_stage(self, image):
         if image.orders is None:
             # Try a blind solve if orders doesn't exist
@@ -424,14 +421,16 @@ class OrderSolver(Stage):
                                                  self.ORDER_HEIGHT,
                                                  order_center,
                                                  image.data.shape[1] // 2)
+                order_region = get_order_locations(image.dateobs, i + 1, image.instrument,
+                                                   self.runtime_context.db_address)
                 order_region = self.ORDER_REGIONS[image.site]
-                good_region = np.logical_and(x >= order_region[i][0],
-                                             x <= order_region[i][1])
+                good_region = np.logical_and(x >= order_region[0],
+                                             x <= order_region[1])
                 initial_model = Legendre.fit(deg=self.POLYNOMIAL_ORDER,
                                              x=x[good_region],
                                              y=order_locations[good_region],
-                                             domain=(order_region[i][0],
-                                                     order_region[i][1]))
+                                             domain=(order_region[0],
+                                                     order_region[1]))
                 order_estimates.append((initial_model.coef, self.ORDER_HEIGHT, initial_model.domain))
         else:
             # Load from previous solve
