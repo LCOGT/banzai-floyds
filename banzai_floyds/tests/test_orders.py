@@ -8,6 +8,7 @@ from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
 from banzai import context
 from astropy.io import fits
+import mock
 
 
 def test_blind_center_search():
@@ -45,10 +46,12 @@ def test_fit_orders():
     assert (input_order_region != fitted_order_region).sum() < 150
 
 
-def test_order_solver_stage():
+@mock.patch('banzai_floyds.orders.get_order_location')
+def test_order_solver_stage(mock_location):
     np.random.seed(1923142)
     ny, nx = 516, 503
     data = np.zeros((ny, nx))
+    mock_location.return_value = (0, nx)
     input_centers = 145, 371
     input_center_params = [[input_centers[0], 15, 15], [input_centers[1], 17, 12]]
     order_height = 87
@@ -64,9 +67,10 @@ def test_order_solver_stage():
     order_solver = OrderSolver(FakeContext())
     order_solver.ORDER_HEIGHT = order_height
     order_solver.CENTER_CUT_WIDTH = 21
-    order_solver.ORDER_REGIONS = {'ogg': [(0, nx), (0, nx)]}
     image = FLOYDSObservationFrame([CCDData(data=data, uncertainty=error,
-                                            meta=fits.Header({'SITEID': 'ogg'}))], 'foo.fits')
+                                            meta=fits.Header({'SITEID': 'ogg',
+                                                              'DATE-OBS': '2024-10-01T00:00:00.000000'}))],
+                                   'foo.fits')
     image = order_solver.do_stage(image)
 
     for i, input_region in enumerate(input_order_regions):
