@@ -77,7 +77,7 @@ def add_order_location():
                         help='Use this order domain for frames only taken after this date')
     parser.add_argument('--good-until', dest='good_until', default='3000-01-01T00:00:00',
                         help='Use this order domain for frames only taken before this date')
-    banzai_floyds.dbs.add_order_location(vars(parser.parse_args()))
+    banzai_floyds.dbs.add_order_location(**vars(parser.parse_args()))
 
 
 @app.task(name='celery.stack_flats', reject_on_worker_lost=True, max_retries=5)

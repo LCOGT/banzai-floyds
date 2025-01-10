@@ -58,7 +58,7 @@ class FluxStandard(Base):
 
 
 class OrderLocation(Base):
-    __tablesname__ = 'orderlocations'
+    __tablename__ = 'orderlocations'
     id = Column(Integer, primary_key=True, autoincrement=True)
     instrument_id = Column(Integer, ForeignKey("instruments.id"), index=True)
     good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
@@ -88,7 +88,7 @@ def ingest_standards(db_address):
             add_or_update_record(db_session, FluxStandard, attributes, attributes)
 
 
-def get_order_locations(dateobs, order_id, instrument, db_address):
+def get_order_location(dateobs, order_id, instrument, db_address):
     with get_session(db_address) as db_session:
         location_query = db_session.query(OrderLocation).filter(OrderLocation.instrument_id == instrument.id)
         location_query = location_query.filter(OrderLocation.order_id == order_id)
