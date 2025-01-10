@@ -1,6 +1,6 @@
 from banzai.dbs import Base, add_or_update_record
 from sqlalchemy import Column, Integer, String, Float, create_engine, ForeignKey, DateTime, desc
-from banzai.dbs import get_session, add_or_update_record
+from banzai.dbs import get_session
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
