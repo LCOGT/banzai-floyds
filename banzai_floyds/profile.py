@@ -87,9 +87,14 @@ def fit_profile_sigma(data, profile_centers, domains, poly_order=2, default_fwhm
             initial_guess[0] = fwhm_to_sigma(default_fwhm)
             initial_guess[1] = profile[np.argmin(np.abs(grid_interp))] - np.median(profile)
             initial_guess[2] = np.median(profile)
-            best_fit, covariance = curve_fit(profile_fixed_center_model, grid_interp, profile, initial_guess,
-                                             sigma=profile_errors)
-
+            try:
+                best_fit, covariance = curve_fit(profile_fixed_center_model, grid_interp, profile, initial_guess,
+                                                 sigma=profile_errors)
+            except RuntimeError as e:
+                if 'Optimal parameters not found' in str(e):
+                    continue
+                else:
+                    raise
             # Do a weighted sum of the wavelengths to get central wavelength
             wavelength_point = np.sum(data_to_fit['wavelength'] * data_to_fit['uncertainty'] ** -2)
             wavelength_point /= np.sum(data_to_fit['uncertainty'] ** -2)
@@ -114,7 +119,7 @@ def profile_fixed_width_full_order(params, x, sigma, y_order, domain):
     return gauss(y_order, polynomial(x), sigma)
 
 
-def fit_profile_centers(data, domains, polynomial_order=5, profile_fwhm=6, step_size=25):
+def fit_profile_centers(data, domains, polynomial_order=7, profile_fwhm=6, step_size=25):
     trace_points = Table({'wavelength': [], 'center': [], 'order': [], 'center_error': []})
     trace_centers = []
     for order_id, domain in zip([1, 2], domains):
@@ -191,7 +196,7 @@ def fit_profile_centers(data, domains, polynomial_order=5, profile_fwhm=6, step_
 
 
 class ProfileFitter(Stage):
-    POLYNOMIAL_ORDER = 5
+    POLYNOMIAL_ORDER = 7
 
     def do_stage(self, image):
         logger.info('Fitting profile centers', image=image)
