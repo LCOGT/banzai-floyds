@@ -67,9 +67,9 @@ def add_order_location():
                         help='Database address: Should be in SQLAlchemy form')
     parser.add_argument('--instrument-id', dest='instrument_id', type=int, required=True,
                         help='Instrument ID from the database to add a new order location for')
-    parser.add_argument('--xmin', dest='xmin', type=int, required=True,
-                        help='Minimum x value in the order domain.Zero indexed')
-    parser.add_argument('--xmax', dest='xmax', type=int, required=True,
+    parser.add_argument('--xdomainmin', dest='xdomainmin', type=int, required=True,
+                        help='Minimum x value in the order domain. Zero indexed')
+    parser.add_argument('--xdomainmax', dest='xdomainmax', type=int, required=True,
                         help='Maximum x value in the order domain. Zero indexed')
     parser.add_argument('--order-id', dest='order_id', type=int, required=True,
                         help='Order ID to update in the database. 1 indexed, ordered bottom to top')

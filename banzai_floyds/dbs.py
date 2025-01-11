@@ -64,8 +64,8 @@ class OrderLocation(Base):
     good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
     good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
     order_id = Column(Integer)
-    xmin = Column(Integer)
-    xmax = Column(Integer)
+    xdomainmin = Column(Integer)
+    xdomainmax = Column(Integer)
 
 
 def create_db(db_address):
@@ -96,11 +96,12 @@ def get_order_location(dateobs, order_id, instrument, db_address):
         location_query = location_query.filter(OrderLocation.good_until >= dateobs)
         location_query.order_by(desc(OrderLocation.id))
         order_location = location_query.first()
-        order_location = [order_location.xmin, order_location.xmax]
+        order_location = [order_location.xdominmin, order_location.xdomainmax]
     return order_location
 
 
-def add_order_location(db_address, instrument_id, xmin, xmax, order_id, good_after, good_until):
+def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
+                       order_id, good_after, good_until):
     """ Add the x range (location) to use for a given order/instrument.
 
     We cover 4 cases:
@@ -138,7 +139,8 @@ def add_order_location(db_address, instrument_id, xmin, xmax, order_id, good_aft
             overlapping_locations = overlapping_locations.filter(OrderLocation.good_until >= good_until)
             overlapping_locations = overlapping_locations.all()
             for location in overlapping_locations:
-                split_location = OrderLocation(instrument_id=instrument_id, xmin=location.xmin, xmax=location.xmax,
+                split_location = OrderLocation(instrument_id=instrument_id,
+                                               xdomainmin=location.xdomainmin, xdomainmax=location.xdomainmax,
                                                order_id=order_id, good_after=good_until, good_until=location.good_until)
                 db_session.add(split_location)
                 location.good_until = good_after
@@ -166,7 +168,8 @@ def add_order_location(db_address, instrument_id, xmin, xmax, order_id, good_aft
                 db_session.commit()
 
         # After all that create the new location record
-        new_location = OrderLocation(instrument_id=instrument_id, xmin=xmin, xmax=xmax, order_id=order_id,
+        new_location = OrderLocation(instrument_id=instrument_id, xdomainmin=xdomainmin,
+                                     xdomainmax=xdomainmax, order_id=order_id,
                                      good_after=good_after, good_until=good_until)
         db_session.add(new_location)
         db_session.commit()
