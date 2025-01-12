@@ -10,6 +10,4 @@ RUN apt-get -y update && apt-get -y install gcc && \
         apt-get autoclean && \
         rm -rf /var/lib/apt/lists/*
 
-RUN chown -R archive /home/archive
-
 USER archive
