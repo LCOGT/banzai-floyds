@@ -96,7 +96,7 @@ def get_order_location(dateobs, order_id, instrument, db_address):
         location_query = location_query.filter(OrderLocation.good_until >= dateobs)
         location_query.order_by(desc(OrderLocation.id))
         order_location = location_query.first()
-        order_location = [order_location.xdominmin, order_location.xdomainmax]
+        order_location = [order_location.xdomainmin, order_location.xdomainmax]
     return order_location
 
 
