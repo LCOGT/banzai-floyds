@@ -1,9 +1,14 @@
-BANZAI Data Reduction for FLOYDS spectra
+BANZAI-FLOYDS: Data Reduction for FLOYDS spectra
 ----------------------------------------
 
 .. image:: http://img.shields.io/badge/powered%20by-AstroPy-orange.svg?style=flat
     :target: http://www.astropy.org
     :alt: Powered by Astropy Badge
+
+BANZAI-FLOYDS is the Las Cumbres Observatory pipeline to process `FLOYDS <https://lco.global/observatory/instruments/floyds/>` data. We currently have two FLOYDS insturments in operation: one on Haleakala in Hawaii and one at Siding Springs in Australia. The FLOYDS spectrographs are low-resolution, workhorse spectrographs for supernovae and other explosive transients. FLOYDS has a resolution of R~500 and covers from 320nm - 1000nm. FLOYDS is double dispersed so the images of the slit are curved on the detector (similar to eschelle spectrographs). The sky lines are also tilted to better sample the line spread funciton to enable better sky subtraction.
+ 
+The dataflow and infrastructure of this pipeline relies heavily on `BANZAI
+<https://github.com/lcogt/banzai>`_, enabling this repo to focus on analysis that is specific to slit spectroscopy.
 
 Installation
 ------------
