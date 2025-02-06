@@ -1,83 +1,112 @@
 import numpy as np
-from astropy.modeling import fitting, models
-from astropy.table import Table, vstack, join
+from astropy.table import Table, vstack, join, Column
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.matched_filter import matched_filter_metric, optimize_match_filter
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai.stages import Stage
 from banzai.logs import get_logger
+from scipy.optimize import curve_fit
+
 
 logger = get_logger()
 
 
-def fit_profile_sigma(data, profile_fits, domains, poly_order=2, default_fwhm=6.0):
-    # In principle, this should be some big 2d fit where we fit the profile center, the profile width,
-    #   and the background in one go
-    profile_width_table = {'wavelength': [], 'sigma': [], 'order': []}
-    fitter = fitting.LMLSQFitter()
-    for data_to_fit in data.groups:
-        wavelength_bin = data_to_fit['order_wavelength_bin'][0]
-        # Skip pixels that don't fall into a normal bin
-        if wavelength_bin == 0:
-            continue
-        order_id = data_to_fit['order'][0]
-        profile_center = profile_fits[order_id - 1](wavelength_bin)
+def profile_sigma_model(params, x, center_polynomial, order, domain, bkg_order, bin_indexes):
+    wavelength_bin, y_order = x
+    center = center_polynomial(wavelength_bin)
+    sigma_polynomial = Legendre(params[:order + 1], domain=domain)
+    sigma = sigma_polynomial(wavelength_bin)
+    model = np.zeros(len(wavelength_bin))
+    for i, bin_index in enumerate(bin_indexes[:-1]):
+        start_ind = order + 1 + i * (bkg_order + 2)
+        bin_y_order = y_order[bin_index: bin_indexes[i + 1]]
+        model[bin_index: bin_indexes[i + 1]] += params[start_ind] * gauss(bin_y_order, center[bin_index],
+                                                                          sigma[bin_index])
+        background_polynomial = Legendre(params[start_ind + 1:start_ind + 1 + (i + 1) * (bkg_order + 2)],
+                                         domain=[np.min(bin_y_order), np.max(bin_y_order)])
+        model[bin_index: bin_indexes[i + 1]] += background_polynomial(bin_y_order)
+    return model
 
-        peak = np.argmin(np.abs(profile_center - data_to_fit['y_order']))
-        peak_snr = (data_to_fit['data'][peak] - np.median(data_to_fit['data'])) / data_to_fit['uncertainty'][peak]
-        # Short circuit if the trace is not significantly brighter than the background in this bin
-        if peak_snr < 15.0:
-            continue
 
-        # Only fit the data close to the profile so that we can assume a low order background
-        peak_window = np.abs(data_to_fit['y_order'] - profile_center) <= 10.0 * fwhm_to_sigma(default_fwhm)
+def profile_fixed_center_model(x, *params):
+    # Assume a center of zero
+    sigma, amplitude, *background_coeffs = params
+    backgound_poly = Legendre(background_coeffs, domain=[np.min(x), np.max(x)])
+    return amplitude * gauss(x, 0, sigma) + backgound_poly(x)
 
-        # Mask out any bad pixels
-        peak_window = np.logical_and(peak_window, data_to_fit['mask'] == 0)
-        # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
-        initial_amplitude = np.max(data_to_fit['data'][peak_window])
-        initial_amplitude -= np.median(data_to_fit['data'][peak_window])
 
-        model = models.Gaussian1D(amplitude=initial_amplitude, mean=profile_center,
-                                  stddev=fwhm_to_sigma(default_fwhm))
-        model += models.Legendre1D(degree=2, domain=(np.min(data_to_fit['y_order'][peak_window]),
-                                                     np.max(data_to_fit['y_order'][peak_window])),
-                                   c0=np.median(data_to_fit['data'][peak_window]))
-        # Force the profile center to be on the chip...(add 0.3 to pad the edge)
-        model.mean_0.min = np.min(data_to_fit['y_order'][peak_window]) + 0.3
-        model.mean_0.max = np.max(data_to_fit['y_order'][peak_window]) - 0.3
+def interp_with_errors(x, y, yerr, x_new):
+    if np.min(x_new) < np.min(x) or np.max(x_new) > np.max(x):
+        raise ValueError('X for interpolation must be within the input range')
+    y_new = np.interp(x_new, x, y)
 
-        inv_variance = data_to_fit['uncertainty'][peak_window] ** -2.0
+    # This is a cute way to find the two bracketing indices for each new x value
+    left_indices = np.searchsorted(x, x_new, side='right') - 1
 
-        best_fit_model = fitter(model, x=data_to_fit['y_order'][peak_window],
-                                y=data_to_fit['data'][peak_window], weights=inv_variance, maxiter=400,
-                                acc=1e-4)
-        best_fit_sigma = best_fit_model.stddev_0.value
+    # Calculate the fractional distance between the bracketing x-values
+    # This is the term that shows up in the propogation of uncertatinty
+    alpha = (x_new - x[left_indices]) / (x[left_indices + 1] - x[left_indices])
 
-        profile_width_table['wavelength'].append(wavelength_bin)
-        profile_width_table['sigma'].append(best_fit_sigma)
-        profile_width_table['order'].append(order_id)
-    profile_width_table = Table(profile_width_table)
-    # save the polynomial for the profile
-    profile_widths = [Legendre.fit(order_data['wavelength'], order_data['sigma'], deg=poly_order, domain=domain)
-                      for order_data, domain in zip(profile_width_table.group_by('order').groups, domains)]
-    if len(profile_widths) != len(set(data['order'])):
-        for order in set(data['order']):
-            if order not in profile_width_table['order']:
-                missing_order = order
-                break
-        logger.warning(f'Data is too low of signal to noise in order {missing_order} to fit a profile width')
-        overlap_region = [max([np.min(data['wavelength'][data['order'] == order]) for order in set(data['order'])]),
-                          min([np.max(data['wavelength'][data['order'] == order]) for order in set(data['order'])])]
-        in_overlap = np.logical_and(data['wavelength'] > overlap_region[0],
-                                    data['wavelength'] < overlap_region[1])
-        # This is always zero in the case of two orders because either the first or last is missing
-        average_sigma = profile_widths[0](np.mean(data['wavelength'][in_overlap]))
-        in_missing_order = data['order'] == missing_order
-        proxy_sigma_func = Legendre([average_sigma,], domain=[np.min(data['wavelength'][in_missing_order]),
-                                                              np.max(data['wavelength'][in_missing_order])])
-        profile_widths.insert(missing_order - 1, proxy_sigma_func)
-    return profile_widths, profile_width_table
+    yerr_new = np.sqrt((1 - alpha)**2 * yerr[left_indices]**2 + alpha**2 * yerr[left_indices + 1]**2)
+
+    return y_new, yerr_new
+
+
+def fit_profile_sigma(data, profile_centers, domains, poly_order=2, default_fwhm=6.0, bkg_order=3, step_size=25):
+    profile_sigmas = []
+    sigma_points = Table({'wavelength': [], 'sigma': [], 'sigma_error': [], 'order': []})
+    for order_id, center, domain in zip([1, 2], profile_centers, domains):
+        order_data = data[np.logical_and(data['order'] == order_id, data['order_wavelength_bin'] != 0)]
+        order_data = order_data.group_by('order_wavelength_bin')
+
+        # Group the data in bins of 25 columns (25 is big enough to increase the s/n by a factor of 5 but small enough
+        # to keep decent resolution for the fit accross the detector)
+        for left_index, right_index in zip(order_data.groups.indices[0:-step_size + 1:step_size],
+                                           order_data.groups.indices[step_size::step_size]):
+            data_to_fit = order_data[left_index: right_index]
+            data_to_fit.group_by('order_wavelength_bin')
+            # Grid the data onto a fixed set of y_order values (relative to the center of the trace)
+
+            # Grid the range +- 10 default sigma which should be enough to get to the background level, but
+            # small enough the background is still low order
+            # Prefer to not get within 5 pixels of either of the slit edges
+
+            y = data_to_fit['y_order'] - center(data_to_fit['order_wavelength_bin'])
+            grid_min = int(np.ceil(np.max([np.min(y) + 5, -10.0 * fwhm_to_sigma(default_fwhm)])))
+            grid_max = int(np.floor(np.min([np.max(y) - 5, 10.0 * fwhm_to_sigma(default_fwhm)])))
+            grid_interp = np.arange(grid_min, grid_max + 1)
+
+            profile, profile_errors = np.zeros(len(grid_interp)), np.zeros(len(grid_interp))
+            for data_bin in data_to_fit.groups:
+                y = data_bin['y_order'] - center(data_bin['order_wavelength_bin'])
+                bin_data, bin_errors = interp_with_errors(y, data_bin['data'], data_bin['uncertainty'], grid_interp)
+                profile += bin_data
+                profile_errors += bin_errors ** 2
+            profile_errors = np.sqrt(profile_errors)
+            initial_guess = np.zeros(2 + bkg_order + 1)
+            initial_guess[0] = fwhm_to_sigma(default_fwhm)
+            initial_guess[1] = profile[np.argmin(np.abs(grid_interp))] - np.median(profile)
+            initial_guess[2] = np.median(profile)
+            try:
+                best_fit, covariance = curve_fit(profile_fixed_center_model, grid_interp, profile, initial_guess,
+                                                 sigma=profile_errors)
+            except RuntimeError as e:
+                if 'Optimal parameters not found' in str(e):
+                    continue
+                else:
+                    raise
+            # Do a weighted sum of the wavelengths to get central wavelength
+            wavelength_point = np.sum(data_to_fit['wavelength'] * data_to_fit['uncertainty'] ** -2)
+            wavelength_point /= np.sum(data_to_fit['uncertainty'] ** -2)
+
+            sigma_row = Table({'wavelength': [wavelength_point],
+                               'sigma': [best_fit[0]],
+                               'order': [order_id],
+                               'sigma_error': [np.sqrt(covariance[0, 0])]})
+            sigma_points = vstack([sigma_points, sigma_row])
+        profile_sigmas.append(Legendre.fit(sigma_points['wavelength'], sigma_points['sigma'],
+                                           w=sigma_points['sigma_error'] ** -2, deg=poly_order, domain=domain))
+    return profile_sigmas, sigma_points
 
 
 def profile_gauss_fixed_width(params, x, sigma):
@@ -85,65 +114,101 @@ def profile_gauss_fixed_width(params, x, sigma):
     return gauss(x, center, sigma)
 
 
-def fit_profile_centers(data, domains, polynomial_order=5, profile_fwhm=6):
-    trace_points = Table({'wavelength': [], 'center': [], 'order': []})
-    for data_to_fit in data.groups:
-        # Skip pixels that don't fall into a normal bin
-        if data_to_fit['order_wavelength_bin'][0] == 0:
-            continue
-        # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
-        # Find a rough estimate of the center by running across the whole slit (excluding 1-sigma on each side)
-        sigma = fwhm_to_sigma(profile_fwhm)
-        # Remove the edges of the slit because they do funny things numerically
-        upper_bound = np.max(data_to_fit['y_order']) - sigma
-        lower_bound = np.min(data_to_fit['y_order']) + sigma
-        non_edge = np.logical_and(data_to_fit['y_order'] > lower_bound, data_to_fit['y_order'] < upper_bound)
-        # Run a matched filter (don't fit yet) over all the centers
-        snrs = [matched_filter_metric([center,], data_to_fit['data'] - np.median(data_to_fit['data']),
-                                      data_to_fit['uncertainty'], profile_gauss_fixed_width, None, None,
-                                      data_to_fit['y_order'], sigma)
-                for center in data_to_fit['y_order'][non_edge]]
+def profile_fixed_width_full_order(params, x, sigma, y_order, domain):
+    polynomial = Legendre(params, domain=domain)
+    return gauss(y_order, polynomial(x), sigma)
 
-        # If the peak pixel of the match filter is < 2 times the median (ish) move on
-        if np.max(snrs) < 2.0 * np.median(snrs):
-            continue
 
-        initial_guess = (data_to_fit['y_order'][non_edge][np.argmax(snrs)],)
+def fit_profile_centers(data, domains, polynomial_order=7, profile_fwhm=6, step_size=25):
+    trace_points = Table({'wavelength': [], 'center': [], 'order': [], 'center_error': []})
+    trace_centers = []
+    for order_id, domain in zip([1, 2], domains):
+        order_data = data[np.logical_and(data['order'] == order_id, data['order_wavelength_bin'] != 0)]
+        order_data = order_data.group_by('order_wavelength_bin')
+        # Group the data in bins of 25 columns
+        for left_index, right_index in zip(order_data.groups.indices[0:-step_size + 1:step_size],
+                                           order_data.groups.indices[step_size::step_size]):
+            data_to_fit = order_data[left_index: right_index]
 
-        # Put s/n check first
-        # stay at least 1 sigma away from the edges using fitting bounds
+            # Pass a match filter (with correct s/n scaling) with a gaussian with a default width
+            # Find a rough estimate of the center by running across the whole slit (excluding 1-sigma on each side)
+            sigma = fwhm_to_sigma(profile_fwhm)
+            # Remove the edges of the slit because they do funny things numerically
+            upper_bound = np.max(data_to_fit['y_order']) - sigma
+            lower_bound = np.min(data_to_fit['y_order']) + sigma
+            non_edge = np.logical_and(data_to_fit['y_order'] > lower_bound, data_to_fit['y_order'] < upper_bound)
+            # Run a matched filter (don't fit yet) over all the centers
+            snrs = []
+            centers = np.arange(int(np.min(data_to_fit['y_order'][non_edge])),
+                                int(np.max(data_to_fit['y_order'][non_edge])))
+            for center in centers:
+                metric = matched_filter_metric([center,],
+                                               data_to_fit['data'] - np.median(data_to_fit['data']),
+                                               data_to_fit['uncertainty'],
+                                               profile_gauss_fixed_width,
+                                               None,
+                                               None,
+                                               data_to_fit['y_order'], sigma)
+                snrs.append(metric)
 
-        best_fit_center, = optimize_match_filter(initial_guess, data_to_fit['data'] - np.median(data_to_fit['data']),
-                                                 data_to_fit['uncertainty'],
-                                                 profile_gauss_fixed_width, data_to_fit['y_order'],
-                                                 args=(fwhm_to_sigma(profile_fwhm),),
-                                                 bounds=[(lower_bound, upper_bound,),])
+            initial_guess = (centers[np.argmax(snrs)],)
 
-        new_trace_table = Table({'wavelength': [data_to_fit['order_wavelength_bin'][0]],
-                                 'center': [best_fit_center],
-                                 'order': [data_to_fit['order'][0]]})
-        trace_points = vstack([trace_points, new_trace_table])
+            (best_fit_center,), covariance = optimize_match_filter(
+                initial_guess,
+                data_to_fit['data'] - np.median(data_to_fit['data']),
+                data_to_fit['uncertainty'],
+                profile_gauss_fixed_width,
+                data_to_fit['y_order'],
+                args=(fwhm_to_sigma(profile_fwhm),),
+                bounds=[(lower_bound, upper_bound,),],
+                covariance=True,
+            )
+            # Do an weighted sum that mirrors the fit to use for our wavelength
+            wavelength_point = np.sum(data_to_fit['wavelength'] * data_to_fit['uncertainty'] ** -2)
+            wavelength_point /= np.sum(data_to_fit['uncertainty'] ** -2)
+            new_trace_table = Table({'wavelength': [wavelength_point],
+                                     'center': [best_fit_center],
+                                     'order': [order_id],
+                                     'center_error': [np.sqrt(covariance[0, 0])]})
+            trace_points = vstack([trace_points, new_trace_table])
+        this_order = trace_points['order'] == order_id
+        initial_order_polynomial = Legendre.fit(trace_points['wavelength'][this_order],
+                                                trace_points['center'][this_order],
+                                                w=trace_points['center_error'][this_order] ** -2,
+                                                deg=polynomial_order, domain=domain)
 
-    # save the polynomial for the profile
-    trace_centers = [Legendre.fit(order_data['wavelength'], order_data['center'],
-                                  deg=polynomial_order, domain=domain)
-                     for order_data, domain in zip(trace_points.group_by('order').groups, domains)]
-
+        # refine the fit using a continuous fit for the whole detector
+        simple_background = order_data['data'].groups.aggregate(np.median)
+        simple_background.name = 'background'
+        wavelength_column = Column(order_data['order_wavelength_bin'][order_data.groups.indices[:-1]],
+                                   name='order_wavelength_bin')
+        order_data = join(order_data, Table([simple_background, wavelength_column]), keys='order_wavelength_bin')
+        best_fit = optimize_match_filter(
+                initial_order_polynomial.coef,
+                order_data['data'] - order_data['background'],
+                order_data['uncertainty'],
+                profile_fixed_width_full_order,
+                order_data['wavelength'],
+                args=(fwhm_to_sigma(profile_fwhm), order_data['y_order'], domain),
+            )
+        trace_centers.append(Legendre(best_fit, domain=domain))
     return trace_centers, trace_points
 
 
 class ProfileFitter(Stage):
-    POLYNOMIAL_ORDER = 5
+    POLYNOMIAL_ORDER = 7
 
     def do_stage(self, image):
         logger.info('Fitting profile centers', image=image)
-        profile_centers, center_fitted_points = fit_profile_centers(image.binned_data,
-                                                                    image.wavelengths.wavelength_domains,
-                                                                    polynomial_order=self.POLYNOMIAL_ORDER)
+        # Note that the step_size parameters for both the center and sigma of the profile need to be
+        # the same for the tables to join nicely
+        profile_centers, center_points = fit_profile_centers(image.binned_data,
+                                                             image.wavelengths.wavelength_domains,
+                                                             polynomial_order=self.POLYNOMIAL_ORDER)
         logger.info('Fitting profile widths', image=image)
-        profile_widths, width_fitted_points = fit_profile_sigma(image.binned_data, profile_centers,
-                                                                image.wavelengths.wavelength_domains)
+        profile_widths, profile_width_points = fit_profile_sigma(image.binned_data, profile_centers,
+                                                                 image.wavelengths.wavelength_domains)
+        fitted_points = join(center_points, profile_width_points, join_type='inner', keys=['wavelength', 'order'])
         logger.info('Storing profile fits', image=image)
-        fitted_points = join(center_fitted_points, width_fitted_points, join_type='inner')
         image.profile = profile_centers, profile_widths, fitted_points
         return image
