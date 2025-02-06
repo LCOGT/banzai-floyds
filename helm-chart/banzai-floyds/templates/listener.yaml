@@ -38,6 +38,10 @@ spec:
             - "--broker-url=$(FITS_BROKER)"
             - "--queue-name=$(QUEUE_NAME)"
             - "--no-file-cache"
+            - "--delay-to-block-end"
+            - "--prefer-same-block-cals"
+            - "--check-public-cals"
+            - "--prefer-same-proposal-cals"
           env:
             {{- include "banzaiFloyds.Env" . | nindent 12}}
           resources:

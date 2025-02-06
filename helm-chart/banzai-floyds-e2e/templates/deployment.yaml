@@ -155,6 +155,9 @@ spec:
             - "--broker-url=localhost"
             - "--log-level=debug"
             - "--rlevel=91"
+            - "--prefer-same-block-cals"
+            - "--check-public-cals"
+            - "--prefer-same-proposal-cals"
           resources:
             requests:
               cpu: "0.1"
