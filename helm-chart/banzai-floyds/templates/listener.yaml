@@ -39,9 +39,9 @@ spec:
             - "--queue-name=$(QUEUE_NAME)"
             - "--no-file-cache"
             - "--delay-to-block-end"
-            - "--same-block-cals"
+            - "--prefer-same-block-cals"
             - "--check-public-cals"
-            - "--prefer-same-proposal"
+            - "--prefer-same-proposal-cals"
           env:
             {{- include "banzaiFloyds.Env" . | nindent 12}}
           resources:
