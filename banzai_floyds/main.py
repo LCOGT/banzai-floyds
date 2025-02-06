@@ -11,6 +11,7 @@ from banzai.utils.date_utils import TIMESTAMP_FORMAT
 import datetime
 from astropy.time import Time
 from banzai.context import Context
+import inspect
 
 
 logger = logging.getLogger('banzai')
@@ -57,6 +58,26 @@ def populate_photometric_standards():
                         help='Database address: Should be in SQLAlchemy form')
     args = parser.parse_args()
     banzai_floyds.dbs.ingest_standards(args.db_address)
+
+
+def add_order_location():
+    parser = argparse.ArgumentParser(inspect.getdoc(banzai_floyds.dbs.add_order_location))
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    parser.add_argument('--instrument-id', dest='instrument_id', type=int, required=True,
+                        help='Instrument ID from the database to add a new order location for')
+    parser.add_argument('--xdomainmin', dest='xdomainmin', type=int, required=True,
+                        help='Minimum x value in the order domain. Zero indexed')
+    parser.add_argument('--xdomainmax', dest='xdomainmax', type=int, required=True,
+                        help='Maximum x value in the order domain. Zero indexed')
+    parser.add_argument('--order-id', dest='order_id', type=int, required=True,
+                        help='Order ID to update in the database. 1 indexed, ordered bottom to top')
+    parser.add_argument('--good-after', dest='good_after', default='1000-01-01T00:00:00',
+                        help='Use this order domain for frames only taken after this date')
+    parser.add_argument('--good-until', dest='good_until', default='3000-01-01T00:00:00',
+                        help='Use this order domain for frames only taken before this date')
+    banzai_floyds.dbs.add_order_location(**vars(parser.parse_args()))
 
 
 @app.task(name='celery.stack_flats', reject_on_worker_lost=True, max_retries=5)
