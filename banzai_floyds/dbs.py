@@ -1,6 +1,5 @@
-from banzai.dbs import Base, add_or_update_record
+from banzai.dbs import Base, add_or_update_record, get_session
 from sqlalchemy import Column, Integer, String, Float, create_engine, ForeignKey, DateTime, desc
-from banzai.dbs import get_session
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
@@ -108,12 +107,12 @@ def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
     - Replace the current running location (good until = inf):
         - The new location will become the current running location
         - The old location will retain its good after date and set its good until to the good after of the new location
-    - The new range dates fall within a an exisiting range (good until != inf):
-        - We split the exisiting location, one with good after being the original good after and good until being the
+    - The new range dates fall within an existing range (good until != inf):
+        - We split the existing location, one with good after being the original good after and good until being the
           start of the new location, and the other with good after being the end of the new location and good until
           the original value.
     - The new location starts and ends before an overlapping location:
-        - The exisiting location record has good after set to good until from the new location
+        - The existing location record has good after set to good until from the new location
     - The new location starts and ends after an overlapping location:
         - The existing location's good until is set to the good after of the new location
     """

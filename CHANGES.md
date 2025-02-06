@@ -1,3 +1,8 @@
+0.14.0 (2025-02-06)
+-------------------
+- Initial order x-positions are now dynamic and stored in the db rather
+  than being hard coded.
+
 0.13.0 (2024-12-13)
 -------------------
 - Updated how we fit the profile center/width to better fit faint traces
