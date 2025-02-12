@@ -91,6 +91,11 @@ class FringeMaker(CalibrationMaker):
                                                            grouping_criteria=grouping, hdu_order=hdu_order)
         super_frame.primary_hdu.data[:, :] = super_fringe[:, :]
         super_frame.primary_hdu.name = 'FRINGE'
+        super_frame.proposal = self.runtime_context.CALIBRATE_PROPOSAL_ID
+        super_frame.ra = None
+        super_frame.dec = None
+        super_frame.object = 'LAMP'
+        super_frame.public_date = datetime.now()
         return super_frame
 
 
@@ -112,7 +117,6 @@ class FringeCorrector(Stage):
         image.uncertainty[to_correct] /= fringe_correction[fringe_correction > 0.1]
         image.meta['L1FRNGOF'] = (fringe_offset, 'Fringe offset (pixels)')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
-        image.public_date = datetime.now()
         return image
 
 
