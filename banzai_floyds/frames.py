@@ -97,6 +97,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             return super().get_output_data_products(runtime_context)
 
     def save_processing_metadata(self, context):
+        import pdb; pdb.set_trace()
         super().save_processing_metadata(context)
         if 'REDUCER' not in self.meta:
             self.meta['REDUCER'] = 'BANZAI'
