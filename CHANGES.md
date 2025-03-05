@@ -1,3 +1,7 @@
+0.14.2 (2025-03-05)
+-------------------
+- Migrated setup infrastructure to poetry
+
 0.14.1 (2025-02-12)
 -------------------
 - Bugfix to not override L1PUBDAT for all frames
