@@ -70,7 +70,7 @@ def test_correct_fringe():
                                         fringe=True, fringe_offset=3.5, include_super_fringe=True)
     original_data = frame.data.copy()
     # Run the image through the fringing correction stage
-    stage = FringeCorrector(context.Context())
+    stage = FringeCorrector(context.Context({}))
     output_frame = stage.do_stage(frame)
     # Assert that the fringe pattern is removed and the image matches the input
     in_order = frame.orders.data == 1
