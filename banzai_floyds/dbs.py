@@ -4,12 +4,12 @@ from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
 from astropy.table import Table
-import pkg_resources
 from glob import glob
 import os
 from astropy.io import fits
 import datetime
 from banzai.utils.date_utils import parse_date_obs
+import importlib.resources
 
 
 def get_standard(ra, dec, runtime_context, offset_threshold=5):
@@ -35,10 +35,7 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
                 found_standard = standard
     if found_standard is not None:
         found_standard = open_fits_file(
-            {'path': pkg_resources.resource_filename('banzai_floyds',
-                                                     os.path.join('data',
-                                                                  'standards',
-                                                                  found_standard.filename)),
+            {'path': os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'standards', found_standard.filename),
              'frameid': found_standard.frameid,
              'filename': found_standard.filename},
             runtime_context)
@@ -77,7 +74,7 @@ def create_db(db_address):
 
 
 def ingest_standards(db_address):
-    standard_files = glob(pkg_resources.resource_filename('banzai_floyds', 'data/standards/*.fits'))
+    standard_files = glob(os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'standards', '*.fits'))
     for standard_file in standard_files:
         standard_hdu = fits.open(standard_file)
         with get_session(db_address) as db_session:

@@ -1,9 +1,10 @@
 import numpy as np
-import pkg_resources
+import importlib.resources
 from astropy.io import ascii
 from banzai.logs import get_logger
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
 from scipy.ndimage import gaussian_filter1d
+import os
 
 
 logger = get_logger()
@@ -68,7 +69,7 @@ def scale_telluric(telluric_transmission, wavelength, o2_scale, h2o_scale, h2o_r
 def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resolution_fwhm=17.5):
     if telluric_model is None:
         # Load the default telluric absorption model from Matheson 2000
-        telluric_model = ascii.read(pkg_resources.resource_filename('banzai_floyds', 'data/telluric.dat'))
+        telluric_model = ascii.read(os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'telluric.dat'))
         # Convolve with the resolution of FLOYDS
         # The default value of 5 pixels is picked for the 2" slit. This only needs to be roughly correct.
         # The telluric model from Matheson 2000 is sampled at 1 Angstrom per pixel so use a resolution of 17.5

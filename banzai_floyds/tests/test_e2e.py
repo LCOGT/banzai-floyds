@@ -5,7 +5,7 @@ from banzai.tests.utils import FakeResponse
 from banzai_floyds.tests.utils import load_manual_region
 import banzai.dbs
 import os
-import pkg_resources
+import importlib.resources
 from kombu import Connection, Exchange
 import mock
 import requests
@@ -27,8 +27,8 @@ logger = logging.getLogger('banzai')
 
 app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 
-DATA_FILELIST = pkg_resources.resource_filename('banzai_floyds.tests', 'data/test_data.dat')
-CONFIGDB_FILENAME = pkg_resources.resource_filename('banzai_floyds.tests', 'data/configdb.json')
+DATA_FILELIST = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_data.dat')
+CONFIGDB_FILENAME = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'configdb.json')
 
 ORDER_HEIGHT = 95
 
@@ -83,7 +83,7 @@ class TestOrderDetection:
     @pytest.fixture(autouse=True)
     def process_skyflat(self, init):
         # Pull down our experimental skyflat
-        skyflat_files = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/test_skyflat.dat'))
+        skyflat_files = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
         for skyflat in skyflat_files:
             skyflat_info = dict(skyflat)
             context = banzai.main.parse_args(settings, parse_system_args=False)
@@ -102,7 +102,7 @@ class TestOrderDetection:
         celery_join()
 
     def test_that_order_mask_exists(self):
-        test_data = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/test_skyflat.dat'))
+        test_data = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
         for row in test_data:
             row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
         filenames = expected_filenames(test_data)
@@ -115,12 +115,12 @@ class TestOrderDetection:
 
     def test_that_order_mask_overlaps_manual_reducion(self):
         # This uses the by hand measurements in chacterization_testing/ManualReduction.ipynb
-        test_data = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/test_skyflat.dat'))
+        test_data = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
         for row in test_data:
             row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
 
         filenames = expected_filenames(test_data)
-        manual_fits_filename = pkg_resources.resource_filename('banzai.tests', 'data/orders_e2e_fits.dat')
+        manual_fits_filename = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'orders_e2e_fits.dat')
         for filename in filenames:
             hdu = fits.open(filename)
             site_id = hdu['SCI'].header['SITEID']
@@ -164,7 +164,7 @@ class TestWavelengthSolutionCreation:
 
         with open(pkg_resources.resource_filename('banzai.tests', 'data/wavelength_e2e_fits.dat')) as solution_file:
             solution_params = json.load(solution_file)
-        order_fits_file = pkg_resources.filename('banzai.tests', 'data/orders_e2e_fits.dat')
+        order_fits_file = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'orders_e2e_fits.dat')
         test_data = ascii.read(DATA_FILELIST)
         for expected_file in expected_filenames(test_data):
             if 'a91' not in expected_file:
