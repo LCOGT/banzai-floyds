@@ -29,13 +29,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
         # Override ra and dec to use the RA and Dec values because the CRVAL keywords don't really
         # have a lot of meaning when the slitmask is in place
-        try:
-            coord = SkyCoord(self.meta.get('CAT-RA'), self.meta.get('CAT-DEC'),
-                             unit=(units.hourangle, units.degree))
-            self.ra = coord.ra.deg
-            self.dec = coord.dec.deg
-        except (ValueError, TypeError):
-            self.ra, self.dec = np.nan, np.nan
 
         # Set a default BIASSEC and TRIMSEC if they are unknown
         if self.meta.get('BIASSEC', 'UNKNOWN').lower() in ['unknown', 'n/a']:
@@ -97,7 +90,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             return super().get_output_data_products(runtime_context)
 
     def save_processing_metadata(self, context):
-        import pdb; pdb.set_trace()
         super().save_processing_metadata(context)
         if 'REDUCER' not in self.meta:
             self.meta['REDUCER'] = 'BANZAI'

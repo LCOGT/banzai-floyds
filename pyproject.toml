@@ -30,7 +30,8 @@ test = [
     "mock"
 ]
 docs = [
-    "sphinx-astropy"
+    "sphinx-astropy", 
+    "sphinx-pyproject"
 ]
 cpu  = ["torch"]
 cuda = ["torch"]

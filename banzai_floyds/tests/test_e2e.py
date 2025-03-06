@@ -162,7 +162,7 @@ class TestWavelengthSolutionCreation:
 
     def test_if_arc_solution_is_sensible(self):
 
-        with open(pkg_resources.resource_filename('banzai.tests', 'data/wavelength_e2e_fits.dat')) as solution_file:
+        with open(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'wavelength_e2e_fits.dat')) as solution_file:
             solution_params = json.load(solution_file)
         order_fits_file = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'orders_e2e_fits.dat')
         test_data = ascii.read(DATA_FILELIST)

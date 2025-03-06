@@ -51,7 +51,8 @@ def test_create_super_fringe():
         'CALIBRATION_FILENAME_FUNCTIONS': {'LAMPFLAT': ()},
         'CALIBRATION_SET_CRITERIA': {'LAMPFLAT': []},
         'CALIBRATION_FRAME_CLASS': 'banzai_floyds.frames.FLOYDSCalibrationFrame',
-        'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']}
+        'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']},
+        'CALIBRATE_PROPOSAL_ID': 'calibrate'
     })
     stage = FringeMaker(input_context)
     frame = stage.do_stage(frames)
@@ -69,7 +70,7 @@ def test_correct_fringe():
                                         fringe=True, fringe_offset=3.5, include_super_fringe=True)
     original_data = frame.data.copy()
     # Run the image through the fringing correction stage
-    stage = FringeCorrector(context.Context({}))
+    stage = FringeCorrector(context.Context())
     output_frame = stage.do_stage(frame)
     # Assert that the fringe pattern is removed and the image matches the input
     in_order = frame.orders.data == 1
