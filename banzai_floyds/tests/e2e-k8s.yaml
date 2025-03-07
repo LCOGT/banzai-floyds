@@ -64,7 +64,7 @@ spec:
             timeoutSeconds: 5
             periodSeconds: 3
         - name: banzai-floyds-e2e-celery-workers
-          image: banzai-floyds-test:latest
+          image: banzai-floyds:test-latest
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: banzai-floyds-e2e-tmp
@@ -124,7 +124,7 @@ spec:
             timeoutSeconds: 15
             periodSeconds: 3
         - name: banzai-floyds-e2e-listener
-          image: banzai-floyds-test:latest
+          image: banzai-floyds:test-latest
           imagePullPolicy: "IfNotPresent"
           volumeMounts:
             - name: banzai-floyds-e2e-tmp
