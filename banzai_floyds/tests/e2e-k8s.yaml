@@ -46,7 +46,7 @@ spec:
             timeoutSeconds: 5
             periodSeconds: 3
         - name: banzai-floyds-e2e-fits-exchange
-          image: rabbitmq:3.7.9-alpine
+          image: rabbitmq:3.12.3
           imagePullPolicy: IfNotPresent
           resources:
             requests:
