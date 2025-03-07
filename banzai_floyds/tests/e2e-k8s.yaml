@@ -32,7 +32,7 @@ spec:
           resources:
             requests:
               cpu: "0.1"
-              memory: "128M"
+              memory: "1Gi"
             limits:
               cpu: "1"
               memory: "1Gi"
@@ -51,7 +51,7 @@ spec:
           resources:
             requests:
               cpu: "0.1"
-              memory: "128M"
+              memory: "1Gi"
             limits:
               cpu: "1"
               memory: "1Gi"
@@ -108,7 +108,7 @@ spec:
           resources:
             requests:
               cpu: "0.1"
-              memory: "2Gi"
+              memory: "8Gi"
             limits:
               cpu: "4"
               memory: "8Gi"
@@ -161,7 +161,7 @@ spec:
           resources:
             requests:
               cpu: "0.1"
-              memory: "128M"
+              memory: "2Gi"
             limits:
               cpu: "1"
               memory: "2Gi"
