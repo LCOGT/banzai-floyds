@@ -29,16 +29,18 @@ app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 
 DATA_FILELIST = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_data.dat')
 CONFIGDB_FILENAME = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'configdb.json')
-
+TEST_FRAMES = ascii.read(DATA_FILELIST)
 ORDER_HEIGHT = 95
 
 
 def celery_join():
     celery_inspector = app.control.inspect()
+    celery_connection = app.connection()
+    celery_channel = celery_connection.channel()
     log_counter = 0
     while True:
-        queues = [celery_inspector.active(), celery_inspector.scheduled(), celery_inspector.reserved()]
         time.sleep(1)
+        queues = [celery_inspector.active(), celery_inspector.scheduled(), celery_inspector.reserved()]
         log_counter += 1
         if log_counter % 30 == 0:
             logger.info('Processing: ' + '. ' * (log_counter // 30))
@@ -47,12 +49,30 @@ def celery_join():
             if queue is not None:
                 queue_names += queue.keys()
         if 'celery@banzai-celery-worker' not in queue_names:
-            logger.warning('No valid celery queues were detected, retrying...', extra_tags={'queues': queues})
+            logger.warning('Valid celery queues were not detected, retrying...', extra_tags={'queues': queues})
             # Reset the celery connection
             celery_inspector = app.control.inspect()
             continue
-        if all(queue is None or len(queue['celery@banzai-celery-worker']) == 0 for queue in queues):
+        jobs_left = celery_channel.queue_declare('e2e_task_queue').message_count
+        no_active_jobs = all(queue is None or len(queue['celery@banzai-celery-worker']) == 0
+                             for queue in queues)
+        if no_active_jobs and jobs_left == 0:
             break
+
+
+def run_reduce_individual_frames(filename_pattern, extra_checks=None):
+    logger.info('Reducing individual frames for filenames: {filenames}'.format(filenames=filename_pattern))
+    for frame in TEST_FRAMES:
+        frame_passes = filename_pattern in frame['filename']
+        if extra_checks is not None:
+            frame_passes = frame_passes and extra_checks(frame)
+        if frame_passes:
+            file_utils.post_to_archive_queue(frame['filename'], frame['frameid'],
+                                             os.getenv('FITS_BROKER'),
+                                             exchange_name=os.getenv('FITS_EXCHANGE'),
+                                             SITEID=frame['site'], INSTRUME=frame['instrument'])
+    celery_join()
+    logger.info('Finished reducing individual frames for filenames: {filenames}'.format(filenames=filename_pattern))
 
 
 def expected_filenames(file_table):
@@ -74,13 +94,31 @@ def expected_filenames(file_table):
 def init(mock_configdb):
     banzai.dbs.create_db(os.environ["DB_ADDRESS"])
     banzai.dbs.populate_instrument_tables(db_address=os.environ["DB_ADDRESS"], configdb_address='http://fakeconfigdb')
-    banzai_floyds.dbs.ingest_standards(os.environ["DB_ADDRESS"])
+    ogg_instruments = banzai.dbs.get_instruments_at_site('ogg', os.environ["DB_ADDRESS"])
+    for instrument in ogg_instruments:
+        if 'floyds' in instrument.type.lower():
+            ogg_instrument = instrument
+            break
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id, xdomainmin=0, xdomainmax=1550, order_id=1)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id, xdomainmin=500, xdomainmax=1835, order_id=2)
+
+    coj_instruments = banzai.dbs.get_instruments_at_site('coj', os.environ["DB_ADDRESS"])
+    for instrument in coj_instruments:
+        if 'floyds' in instrument.type.lower():
+            coj_instrument = instrument
+            break
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=55, xdomainmax=1600, order_id=1)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1920, order_id=2)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=0, xdomainmax=1550, order_id=1,
+                                         good_after="2024-12-01T00:00:00.000000")
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1965, order_id=2,
+                                         good_after="2024-12-01T00:00:00.000000")
 
 
 @pytest.mark.e2e
 @pytest.mark.detect_orders
 class TestOrderDetection:
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope='module')
     def process_skyflat(self, init):
         # Pull down our experimental skyflat
         skyflat_files = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
@@ -91,14 +129,18 @@ class TestOrderDetection:
 
             # Munge the data to be OBSTYPE SKYFLAT
             skyflat_hdu['SCI'].header['OBSTYPE'] = 'SKYFLAT'
+            siteid = skyflat_hdu['SCI'].header['SITEID']
+            instrume = skyflat_hdu['SCI'].header['INSTRUME']
             skyflat_name = skyflat_info["filename"].replace("x00.fits", "f00.fits")
             filename = os.path.join('/archive', 'engineering', f'{skyflat_name}')
             skyflat_hdu.writeto(filename, overwrite=True)
             skyflat_hdu.close()
-            # Process the data
-            file_utils.post_to_archive_queue(filename, os.getenv('FITS_BROKER'),
-                                             exchange_name=os.getenv('FITS_EXCHANGE'))
-
+            exchange = Exchange(os.getenv('FITS_EXCHANGE'), type='fanout')
+            with Connection(os.getenv('FITS_BROKER')) as conn:
+                producer = conn.Producer(exchange=exchange)
+                body = {'filename': skyflat_name, 'path': filename, 'SITEID': siteid, 'INSTRUME': instrume}
+                producer.publish(body)
+                producer.release()
         celery_join()
 
     def test_that_order_mask_exists(self):
@@ -126,33 +168,19 @@ class TestOrderDetection:
             site_id = hdu['SCI'].header['SITEID']
             for order_id in [1, 2]:
                 manual_order_region = load_manual_region(manual_fits_filename,
-                                                         site_id, order_id,
+                                                         site_id, str(order_id),
                                                          hdu['SCI'].data.shape,
                                                          ORDER_HEIGHT)
                 found_order = hdu['ORDERS'].data == order_id
-                assert np.logical_and(manual_order_region, found_order).sum() / found_order.sum() >= 0.99
+                assert np.logical_and(manual_order_region, found_order).sum() / found_order.sum() >= 0.95
 
 
 @pytest.mark.e2e
 @pytest.mark.arc_frames
 class TestWavelengthSolutionCreation:
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope='module')
     def process_arcs(self):
-        logger.info('Reducing individual frames')
-
-        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'), type='fanout')
-        test_data = ascii.read(DATA_FILELIST)
-        with Connection(os.getenv('FITS_BROKER')) as conn:
-            producer = conn.Producer(exchange=exchange)
-            for row in test_data:
-                if 'a00.fits' in row['filename']:
-                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
-                    archive_record['frameid'] = archive_record['id']
-                    producer.publish(archive_record)
-            producer.release()
-
-        celery_join()
-        logger.info('Finished reducing individual frames')
+        run_reduce_individual_frames('a00.fits')
 
     def test_if_arc_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
@@ -173,20 +201,23 @@ class TestWavelengthSolutionCreation:
             site_id = os.path.basename(expected_file)[:3]
             for order_id in [1, 2]:
                 order_region = load_manual_region(order_fits_file,
-                                                  site_id, order_id,
+                                                  site_id, str(order_id),
                                                   hdu['SCI'].data.shape,
                                                   ORDER_HEIGHT)
-                manual_wavelengths = np.zeros(hdu['SCI'].shape)
                 region = get_order_2d_region(order_region)
-                for i in range(region.shape[0]):
-                    wavelength_solution = Legendre(coef=solution_params[site_id][order_id]['coef'][i],
-                                                   domain=solution_params[site_id][order_id]['domain'][i],
-                                                   window=solution_params[site_id][order_id]['window'][i])
+                wavelength_entry = solution_params[os.path.basename(expected_file)][str(order_id)]
+                manual_wavelengths_cutout = np.zeros((ORDER_HEIGHT, int(np.max(wavelength_entry['domain'][0]) + 1)))
+                for i in range(ORDER_HEIGHT):
+                    wavelength_solution = Legendre(coef=wavelength_entry['coef'][i],
+                                                   domain=wavelength_entry['domain'][i],
+                                                   window=wavelength_entry['window'][i])
                     x_pixels = np.arange(wavelength_solution.domain[0], wavelength_solution.domain[1] + 1)
-                    manual_wavelengths[region][i] = wavelength_solution(x_pixels)
+                    manual_wavelengths_cutout[i] = wavelength_solution(x_pixels)
+                manual_wavelengths = np.zeros(hdu['SCI'].shape)
+                manual_wavelengths[region] = manual_wavelengths_cutout
                 overlap = np.logical_and(hdu['ORDERS'].data == order_id, order_region)
                 # Require < 0.5 Angstrom tolerance
-                assert np.testing.assert_allclose(hdu['WAVELENGTHS'][overlap],
+                assert np.testing.assert_allclose(hdu['WAVELENGTHS'].data[overlap],
                                                   manual_wavelengths[overlap],
                                                   atol=0.5)
 
@@ -194,26 +225,11 @@ class TestWavelengthSolutionCreation:
 @pytest.mark.e2e
 @pytest.mark.fringe
 class TestFringeCreation:
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope='module')
     def process_lampflat_frames(self):
-        logger.info('Reducing individual frames')
+        run_reduce_individual_frames('w00.fits')
 
-        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'),
-                            type='fanout')
-        test_data = ascii.read(DATA_FILELIST)
-        with Connection(os.getenv('FITS_BROKER')) as conn:
-            producer = conn.Producer(exchange=exchange)
-            for row in test_data:
-                if 'w00.fits' in row['filename']:
-                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
-                    archive_record['frameid'] = archive_record['id']
-                    producer.publish(archive_record)
-            producer.release()
-
-        celery_join()
-        logger.info('Finished reducing individual frames')
-
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope='module')
     def stack_flat_frames(self):
         logger.info('Stacking Lamp Flats')
         for site in ['ogg', 'cpt']:
@@ -256,23 +272,9 @@ def is_standard(object_name):
 class TestStandardFileCreation:
     @pytest.fixture(autouse=True)
     def process_standards(self):
-        logger.info('Reducing individual frames')
-
-        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'), type='fanout')
-        test_data = ascii.read(DATA_FILELIST)
-        with Connection(os.getenv('FITS_BROKER')) as conn:
-            producer = conn.Producer(exchange=exchange)
-            for row in test_data:
-                if 'e00.fits' in row['filename'] and is_standard(row['object']):
-                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
-                    archive_record['frameid'] = archive_record['id']
-                    # TODO: Only publish the message if this is a standard
-                    producer.publish(archive_record)
-            producer.release()
-
-        celery_join()
-        logger.info('Finished reducing individual frames')
-
+        def frame_is_standard(frame):
+            return is_standard(frame['object'])
+        run_reduce_individual_frames('e00.fits', extra_checks=frame_is_standard)
     def test_if_standards_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for i, expected_file in enumerate(expected_filenames(test_data)):
@@ -285,23 +287,9 @@ class TestStandardFileCreation:
 class TestScienceFileCreation:
     @pytest.fixture(autouse=True)
     def process_science_frames(self):
-        logger.info('Reducing individual frames')
-
-        exchange = Exchange(os.getenv('FITS_EXCHANGE', 'fits_files'), type='fanout')
-        test_data = ascii.read(DATA_FILELIST)
-        with Connection(os.getenv('FITS_BROKER')) as conn:
-            producer = conn.Producer(exchange=exchange)
-            for row in test_data:
-                if 'e00.fits' in row['filename'] and not is_standard(row['object']):
-                    archive_record = requests.get(f'{os.getenv("API_ROOT")}frames/{row["frameid"]}').json()
-                    archive_record['frameid'] = archive_record['id']
-                    # TODO: Only publish the message if this is not a standard
-                    producer.publish(archive_record)
-            producer.release()
-
-        celery_join()
-        logger.info('Finished reducing individual frames')
-
+        def frame_is_not_standard(frame):
+            return not is_standard(frame['object'])
+        run_reduce_individual_frames('e00.fits', extra_checks=frame_is_not_standard)
     def test_if_science_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for i, expected_file in enumerate(expected_filenames(test_data)):

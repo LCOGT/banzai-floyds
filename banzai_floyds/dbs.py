@@ -97,7 +97,7 @@ def get_order_location(dateobs, order_id, instrument, db_address):
 
 
 def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
-                       order_id, good_after, good_until):
+                       order_id, good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
     """ Add the x range (location) to use for a given order/instrument.
 
     We cover 4 cases:

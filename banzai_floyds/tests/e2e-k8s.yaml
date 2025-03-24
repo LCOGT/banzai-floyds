@@ -36,15 +36,16 @@ spec:
             limits:
               cpu: "1"
               memory: "1Gi"
-          readinessProbe:
+          startupProbe:
             exec:
               command:
                 - sh
                 - -c
                 - 'response=$(redis-cli -h localhost ping); if [ "$response" != "PONG" ]; then exit 1; fi;'
             initialDelaySeconds: 3
-            timeoutSeconds: 5
-            periodSeconds: 3
+            timeoutSeconds: 120
+            periodSeconds: 5
+            failureThreshold: 120
         - name: banzai-floyds-e2e-fits-exchange
           image: rabbitmq:3.12.3
           imagePullPolicy: IfNotPresent
@@ -55,14 +56,16 @@ spec:
             limits:
               cpu: "1"
               memory: "1Gi"
-          readinessProbe:
+          startupProbe:
             exec:
               command:
                 - rabbitmq-diagnostics
+                - "-q"
                 - ping
-            initialDelaySeconds: 3
-            timeoutSeconds: 5
-            periodSeconds: 3
+            initialDelaySeconds: 5
+            timeoutSeconds: 120
+            periodSeconds: 5
+            failureThreshold: 120
         - name: banzai-floyds-e2e-celery-workers
           image: banzai-floyds:test-latest
           imagePullPolicy: IfNotPresent
@@ -112,7 +115,7 @@ spec:
             limits:
               cpu: "4"
               memory: "8Gi"
-          readinessProbe:
+          startupProbe:
             exec:
               command:
                 - celery
@@ -121,8 +124,9 @@ spec:
                 - inspect
                 - ping
             initialDelaySeconds: 8
-            timeoutSeconds: 15
-            periodSeconds: 3
+            timeoutSeconds: 120
+            periodSeconds: 5
+            failureThreshold: 120
         - name: banzai-floyds-e2e-listener
           image: banzai-floyds:test-latest
           imagePullPolicy: "IfNotPresent"
@@ -155,9 +159,6 @@ spec:
             - "--broker-url=localhost"
             - "--log-level=debug"
             - "--rlevel=91"
-            - "--prefer-same-block-cals"
-            - "--check-public-cals"
-            - "--prefer-same-proposal-cals"
           resources:
             requests:
               cpu: "0.1"
@@ -165,7 +166,7 @@ spec:
             limits:
               cpu: "1"
               memory: "2Gi"
-          readinessProbe:
+          startupProbe:
             exec:
               command:
                 - celery
@@ -174,5 +175,6 @@ spec:
                 - inspect
                 - ping
             initialDelaySeconds: 8
-            timeoutSeconds: 15
-            periodSeconds: 3
+            timeoutSeconds: 120
+            periodSeconds: 5
+            failureThreshold: 120

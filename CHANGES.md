@@ -1,4 +1,4 @@
-0.14.2 (2025-03-05)
+0.15.0 (2025-03-05)
 -------------------
 - Migrated setup infrastructure to poetry
 

@@ -373,6 +373,7 @@ class OrderLoader(CalibrationUser):
     def apply_master_calibration(self, image, master_calibration_image):
         image.orders = master_calibration_image.orders
         image.add_or_update(master_calibration_image['ORDER_COEFFS'])
+        image.add_or_update(master_calibration_image['ORDERS'])
         return image
 
 
