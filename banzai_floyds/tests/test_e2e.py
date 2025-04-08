@@ -113,7 +113,7 @@ def init(mock_configdb):
                                          good_after="2024-12-01T00:00:00.000000")
     banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1965, order_id=2,
                                          good_after="2024-12-01T00:00:00.000000")
-
+    banzai_floyds.dbs.ingest_standards(db_address=os.environ["DB_ADDRESS"])
 
 @pytest.mark.e2e
 @pytest.mark.detect_orders
