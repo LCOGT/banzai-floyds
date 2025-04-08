@@ -244,7 +244,7 @@ class TestFringeCreation:
                 if '__' != setting[:2] and not isinstance(getattr(settings, setting), ModuleType):
                     runtime_context[setting] = getattr(settings, setting)
 
-            observations = {'request': {'configuration': {'LAMPFLAT': {'instrument_configs': {'exposure_count': 1}}}}}
+            observations = [{'request': {'configurations': [{'type': 'LAMPFLAT', 'instrument_configs': [{'exposure_count': 1}]}]}}]
             instruments = banzai.dbs.get_instruments_at_site(site, runtime_context['db_address'])
             for instrument in instruments:
                 if 'FLOYDS' in instrument.type:
