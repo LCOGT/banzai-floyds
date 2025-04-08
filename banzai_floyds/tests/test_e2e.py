@@ -232,7 +232,7 @@ class TestFringeCreation:
     @pytest.fixture(autouse=True, scope='module')
     def stack_flat_frames(self):
         logger.info('Stacking Lamp Flats')
-        for site in ['ogg', 'cpt']:
+        for site in ['ogg', 'coj']:
             runtime_context = dict(processed_path='/archive/engineering', log_level='debug', post_to_archive=False,
                                    post_to_opensearch=False, fpack=True, reduction_level=91,
                                    db_address=os.environ['DB_ADDRESS'], opensearch_qc_index='banzai_qc',
@@ -250,15 +250,15 @@ class TestFringeCreation:
                 if 'FLOYDS' in instrument.type:
                     instrument_id = instrument.id
                     break
-            stack_calibrations('2000-01-01', '2100-01-01', instrument_id, 'LAMPFLAT',
-                               runtime_context, observations)
+            stack_calibrations.apply_async(args=('2000-01-01', '2100-01-01', instrument_id, 'LAMPFLAT', runtime_context, observations), 
+                                           queue=os.environ['CELERY_TASK_QUEUE_NAME'])
         celery_join()
         logger.info('Finished stacking LAMPFLATs')
 
     def test_if_fringe_frames_were_created(self):
         with banzai.dbs.get_session(os.environ['DB_ADDRESS']) as db_session:
             calibrations_in_db = db_session.query(banzai.dbs.CalibrationImage)
-            calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.type == 'FRINGE')
+            calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.type == 'LAMPFLAT')
             calibrations_in_db = calibrations_in_db.filter(banzai.dbs.CalibrationImage.is_master).all()
         assert len(calibrations_in_db) == 2
 
