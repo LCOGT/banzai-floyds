@@ -245,7 +245,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             except (ValueError, TypeError):
                 # Fallback to CRVAL1 and CRVAL2
                 try:
-                    coord = Angle(self.meta.get('CRVAl1'), unit='degree').deg
+                    coord = Angle(self.meta.get('CRVAL1'), unit='degree').deg
                 except (ValueError, TypeError) as e:
                     coord = np.nan
         return coord
@@ -275,7 +275,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             except (ValueError, TypeError):
                 # Fallback to CRVAL1 and CRVAL2
                 try:
-                    coord = Angle(self.meta.get('CRVAl2'), unit='degree').deg
+                    coord = Angle(self.meta.get('CRVAL2'), unit='degree').deg
                 except (ValueError, TypeError) as e:
                     coord = np.nan
         return coord
