@@ -6,7 +6,7 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 import numpy as np
 import os
 from astropy.io import fits
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, Angle
 from astropy import units
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from astropy.table import Table
@@ -232,6 +232,40 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     @property
     def slit_width(self):
         return self.meta['APERWID']
+
+    @property
+    def ra(self):
+        # We use CAT-RA as the default since that is the object requested by the user
+        try:
+            coord = Angle(self.meta.get('CAT-RA'), unit='hourangle').deg
+        except (ValueError, TypeError):
+            # Fallback to RA and DEC
+            try:
+                coord = Angle(self.meta.get('RA'), unit='hourangle').deg
+            except (ValueError, TypeError):
+                # Fallback to CRVAL1 and CRVAL2
+                try:
+                    coord = Angle(self.meta.get('CRVAl1'), unit='degree').deg
+                except (ValueError, TypeError) as e:
+                    coord = np.nan
+        return coord
+
+    @property
+    def dec(self):
+        # We use CAT-DEC as the default since that is the object requested by the user
+        try:
+            coord = Angle(self.meta.get('CAT-DEC'), unit='degree').deg
+        except (ValueError, TypeError):
+            # Fallback to RA and DEC
+            try:
+                coord = Angle(self.meta.get('DEC'), unit='degree').deg
+            except (ValueError, TypeError):
+                # Fallback to CRVAL1 and CRVAL2
+                try:
+                    coord = Angle(self.meta.get('CRVAl2'), unit='degree').deg
+                except (ValueError, TypeError) as e:
+                    coord = np.nan
+        return coord
 
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
