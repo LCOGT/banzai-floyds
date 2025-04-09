@@ -1,8 +1,70 @@
 [build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0",
+            "cython", "extension-helpers",
+            "numpy>=1.24"]
+build-backend = "poetry.core.masonry.api"
 
-requires = ["setuptools",
-            "setuptools_scm",
-            "wheel",
-            "extension_helpers"]
+[project]
+name = "banzai-floyds"
+version = "0.15.0"
+requires-python = ">=3.10,<4"
+description = "BANZAI Data Reduction for FLOYDS spectra"
+readme = "README.rst"
+authors = [
+    { name = "Curtis McCully", email = "cmccully@lco.global" }
+]
+license = {text="GPL-3.0-or-later"}
+keywords = ["astronomy", "spectroscopy", "data reduction", "Las Cumbres Observatory"]
+urls = { "Documentation" = "https://banzai-floyds.readthedocs.io/", "Source" = "https://github.com/lcogt/banzai-floyds" }
 
-build-backend = 'setuptools.build_meta'
+dependencies = [
+    "astropy>=6.0",
+    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.22.0",
+    "matplotlib",
+    "torch",
+    "ipython"
+]
+[project.optional-dependencies]
+test = [
+    "pytest>=4.0",
+    "coverage",
+    "pytest-astropy",
+    "mock"
+]
+docs = [
+    "sphinx-astropy", 
+    "sphinx-pyproject"
+]
+cpu  = ["torch"]
+cuda = ["torch"]
+style = ["pycodestyle"]
+
+[tool.poetry]
+packages = [
+  { include = "banzai_floyds" }
+]
+
+[tool.poetry.dependencies]
+torch = [
+    { version = "^2.3", source = "pypi", markers = "sys_platform=='darwin'" },
+    { version = "^2.3", source = "pytorch-cpu", markers = "sys_platform!='darwin' and extra!='cuda'" },
+    { version = "^2.3", source = "pytorch-cuda", markers = "sys_platform!='darwin' and extra=='cuda'" }
+]
+
+
+[[tool.poetry.source]]
+    name     = "pytorch-cuda"
+    priority = "explicit"
+    url      = "https://download.pytorch.org/whl/cu121"
+
+[[tool.poetry.source]]
+    name     = "pytorch-cpu"
+    priority = "explicit"
+    url      = "https://download.pytorch.org/whl/cpu"
+
+[project.scripts]
+banzai_floyds_run_realtime_pipeline = "banzai_floyds.main:floyds_run_realtime_pipeline"
+banzai_floyds_create_db = "banzai_floyds.main:create_db"
+banzai_floyds_populate_standards = "banzai_floyds.main:populate_photometric_standards"
+banzai_floyds_stack_flats = "banzai_floyds.main:banzai_floyds_stack_flats"
+banzai_floyds_add_order_location = "banzai_floyds.main:add_order_location"

@@ -13,15 +13,16 @@ from astropy.io import fits
 from banzai.data import CCDData
 from numpy.polynomial.legendre import Legendre
 from astropy.io import ascii
-import pkg_resources
+import importlib.resources
 from types import SimpleNamespace
 from astropy.table import Table
 from banzai.data import HeaderOnly
 from astropy.modeling.models import Polynomial1D
 import json
+import os
 
 
-SKYLINE_LIST = ascii.read(pkg_resources.resource_filename('banzai_floyds.tests', 'data/skylines.dat'))
+SKYLINE_LIST = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data/skylines.dat'))
 
 
 def plot_array(data, overlays=None):

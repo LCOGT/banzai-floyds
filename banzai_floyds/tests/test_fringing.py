@@ -51,7 +51,8 @@ def test_create_super_fringe():
         'CALIBRATION_FILENAME_FUNCTIONS': {'LAMPFLAT': ()},
         'CALIBRATION_SET_CRITERIA': {'LAMPFLAT': []},
         'CALIBRATION_FRAME_CLASS': 'banzai_floyds.frames.FLOYDSCalibrationFrame',
-        'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']}
+        'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']},
+        'CALIBRATE_PROPOSAL_ID': 'calibrate'
     })
     stage = FringeMaker(input_context)
     frame = stage.do_stage(frames)

@@ -1,13 +1,21 @@
-FROM ghcr.io/lcogt/banzai:1.20.1
+FROM ghcr.io/lcogt/banzai:1.22.0
 
 USER root
 
-COPY --chown=10087:10000 . /lco/banzai-floyds
+RUN poetry config virtualenvs.create false
 
-RUN apt-get -y update && apt-get -y install gcc && \
-        pip install --no-cache-dir /lco/banzai-floyds/ && \
-        apt-get -y remove gcc && \
-        apt-get autoclean && \
-        rm -rf /var/lib/apt/lists/*
+COPY pytest.ini /home/archive/pytest.ini
+
+RUN mkdir -p /home/archive/.cache/matplotlib
+
+RUN chown -R archive:domainusers /home/archive
+
+COPY pyproject.toml poetry.lock /lco/banzai-floyds/
+
+RUN poetry install --directory=/lco/banzai-floyds -E cpu --no-root --no-cache
+
+COPY . /lco/banzai-floyds
+
+RUN poetry install --directory /lco/banzai-floyds -E cpu --no-cache
 
 USER archive

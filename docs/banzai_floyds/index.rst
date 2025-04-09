@@ -35,8 +35,3 @@ Flux standards are observed periodically and are calibrated with known reference
 banzai_floyds/data/standards directory provides more details. The telluric features are treated as a multiplicative 
 correction and are based on the same flux standard observations. The initial sensitivity function to disenangle the 
 telluric and QE effects are estimated using the telluric spectrum from Matheson 2000, AJ, 120, 1499.
-
-Reference/API
-=============
-
-.. automodapi:: banzai_floyds
