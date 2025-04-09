@@ -75,14 +75,18 @@ def run_reduce_individual_frames(filename_pattern, extra_checks=None):
     logger.info('Finished reducing individual frames for filenames: {filenames}'.format(filenames=filename_pattern))
 
 
-def expected_filenames(file_table):
+def expected_filenames(file_table, one_d=False):
     filenames = []
     for row in file_table:
         site = row['filename'][:3]
         camera = row['filename'].split('-')[1]
         dayobs = row['filename'].split('-')[2]
+        if one_d:
+            filename = row['filename'].replace('00.fits', '91-1d.fits')
+        else:
+            filename = row['filename'].replace('00.fits', '91.fits')
         expected_file = os.path.join('/archive', 'engineering', site, camera, dayobs, 'processed',
-                                     row['filename'].replace('00.fits', '91.fits'))
+                                     filename)
         filenames.append(expected_file)
     return filenames
 
@@ -277,8 +281,8 @@ class TestStandardFileCreation:
         run_reduce_individual_frames('e00.fits', extra_checks=frame_is_standard)
     def test_if_standards_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
-        for i, expected_file in enumerate(expected_filenames(test_data)):
-            if 'e91.fits' in expected_file and is_standard(test_data['object'][i]):
+        for i, expected_file in enumerate(expected_filenames(test_data, one_d=True)):
+            if 'e91-1d' in expected_file and is_standard(test_data['object'][i]):
                 assert os.path.exists(expected_file)
 
 
@@ -292,6 +296,6 @@ class TestScienceFileCreation:
         run_reduce_individual_frames('e00.fits', extra_checks=frame_is_not_standard)
     def test_if_science_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
-        for i, expected_file in enumerate(expected_filenames(test_data)):
-            if 'e91.fits' in expected_file and not is_standard(test_data['object'][i]):
+        for i, expected_file in enumerate(expected_filenames(test_data, one_d=True)):
+            if 'e91-1d.fits' in expected_file and not is_standard(test_data['object'][i]):
                 assert os.path.exists(expected_file)
