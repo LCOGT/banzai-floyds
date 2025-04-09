@@ -250,6 +250,19 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                     coord = np.nan
         return coord
 
+    @ra.setter
+    def ra(self, value):
+        if value is None:
+            coord = 'N/A'
+            if 'CRVAL1' in self.meta:
+                self.meta.pop('CRVAL1')
+        else:
+            self.meta['CRVAL1'] = float(value)
+            coord = Angle(value, unit='degree')
+            coord = coord.to('hourangle').to_string(sep=':', pad=True)
+        self.meta['RA'] = coord
+        self.meta['CAT-RA'] = coord
+
     @property
     def dec(self):
         # We use CAT-DEC as the default since that is the object requested by the user
@@ -266,6 +279,19 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                 except (ValueError, TypeError) as e:
                     coord = np.nan
         return coord
+
+    @dec.setter
+    def dec(self, value):
+        if value is None:
+            coord = 'N/A'
+            if 'CRVAL2' in self.meta:
+                self.meta.pop('CRVAL2')
+        else:
+            self.meta['CRVAL2'] = float(value)
+            coord = Angle(value, unit='degree')
+            coord = coord.to_string(sep=':', pad=True)
+        self.meta['DEC'] = coord
+        self.meta['CAT-DEC'] = coord
 
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
