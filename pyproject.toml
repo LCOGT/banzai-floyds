@@ -9,7 +9,7 @@ name = "banzai-floyds"
 version = "0.15.0"
 requires-python = ">=3.10,<4"
 description = "BANZAI Data Reduction for FLOYDS spectra"
-readme = "README.rst"
+readme = "docs/README.rst"
 authors = [
     { name = "Curtis McCully", email = "cmccully@lco.global" }
 ]
@@ -33,7 +33,9 @@ test = [
 ]
 docs = [
     "sphinx-astropy", 
-    "sphinx-pyproject"
+    "sphinx-pyproject",
+    "nbsphinx",
+    "ipykernel"
 ]
 cpu  = ["torch"]
 cuda = ["torch"]

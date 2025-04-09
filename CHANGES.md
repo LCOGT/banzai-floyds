@@ -1,3 +1,7 @@
+0.15.1 (2025-04-09)
+-------------------
+- Added documenetation about data products
+
 0.15.0 (2025-03-05)
 -------------------
 - Migrated setup infrastructure to poetry

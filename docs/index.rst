@@ -8,7 +8,7 @@ This is the documentation for banzai-floyds.
   :titlesonly:
 
   banzai_floyds/processing.rst
-  banzai_floyds/ExampleReductions.ipynb
+  banzai_floyds/ExampleReduction.ipynb
   banzai_floyds/data-products.rst
 
 .. include:: README.rst
