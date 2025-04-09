@@ -1,20 +1,36 @@
-BANZAI Data Reduction for FLOYDS spectra
-----------------------------------------
+BANZAI-FLOYDS: Data Reduction for FLOYDS spectra
+------------------------------------------------
 
 .. image:: http://img.shields.io/badge/powered%20by-AstroPy-orange.svg?style=flat
     :target: http://www.astropy.org
     :alt: Powered by Astropy Badge
 
+BANZAI-FLOYDS is the Las Cumbres Observatory pipeline to process `FLOYDS <https://lco.global/observatory/instruments/floyds/>`_ data. We currently have two FLOYDS instruments in operation: one on Haleakala in Hawaii and one at Siding Springs in Australia. The FLOYDS spectrographs are low-resolution, workhorse spectrographs for time-domain astronomy (e.g. explosive transients, AGN, near-Earth objects, microlensing events). FLOYDS has a resolution of R~500 and covers from 320nm - 1000nm. FLOYDS is double dispersed so the images of the slit are curved on the detector (similar to eschelle spectrographs). The sky lines are also tilted to better sample the line spread function to enable better sky subtraction.
+ 
+The dataflow and infrastructure of this pipeline relies heavily on `BANZAI
+<https://github.com/lcogt/banzai>`_, enabling this repo to focus on analysis that is specific to slit spectroscopy.
+
 Installation
 ------------
-```
-pip install .
-```
+.. code-block:: sh
+
+    poetry install
+
+
+Building Documentation
+----------------------
+.. code-block:: sh
+
+    poetry install -E docs
+    # Install pandoc via apt-get or equivalent
+    sphinx-build -W -b html docs docs/_build/html
 
 License
 -------
 
-This project is Copyright (c) cmccully and licensed under
+.. |copy| unicode:: 0xA9 .. copyright sign
+
+This project is Copyright |copy| cmccully and licensed under
 the terms of the GNU GPL v3+ license. This package is based upon
 the `Astropy package template <https://github.com/astropy/package-template>`_
 which is licensed under the BSD 3-clause license. See the licenses folder for

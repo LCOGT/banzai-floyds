@@ -4,11 +4,11 @@ Documentation
 This is the documentation for banzai-floyds.
 
 .. toctree::
-  :maxdepth: 2
+  :maxdepth: 1
+  :titlesonly:
 
-  banzai_floyds/index.rst
+  banzai_floyds/processing.rst
+  banzai_floyds/ExampleReduction.ipynb
+  banzai_floyds/data-products.rst
 
-.. note:: The layout of this directory is simply a suggestion.  To follow
-          traditional practice, do *not* edit this page, but instead place
-          all documentation for the package inside ``banzai_floyds/``.
-          You can follow this practice or choose your own layout.
+.. include:: README.rst
