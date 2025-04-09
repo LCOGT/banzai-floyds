@@ -1,10 +1,11 @@
 import numpy as np
-import pkg_resources
-
+import importlib.resources
 from astropy.io import ascii
 from banzai_floyds.utils import telluric_utils
+import os
 
-EXTINCTION_FILE = pkg_resources.resource_filename('banzai_floyds', 'data/extinction.dat')
+
+EXTINCTION_FILE = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'extinction.dat')
 
 
 def airmass_extinction(wavelength, elevation, airmass):

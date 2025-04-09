@@ -6,7 +6,7 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 import numpy as np
 import os
 from astropy.io import fits
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, Angle
 from astropy import units
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from astropy.table import Table
@@ -29,13 +29,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         LCOObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
         # Override ra and dec to use the RA and Dec values because the CRVAL keywords don't really
         # have a lot of meaning when the slitmask is in place
-        try:
-            coord = SkyCoord(self.meta.get('CAT-RA'), self.meta.get('CAT-DEC'),
-                             unit=(units.hourangle, units.degree))
-            self.ra = coord.ra.deg
-            self.dec = coord.dec.deg
-        except (ValueError, TypeError):
-            self.ra, self.dec = np.nan, np.nan
 
         # Set a default BIASSEC and TRIMSEC if they are unknown
         if self.meta.get('BIASSEC', 'UNKNOWN').lower() in ['unknown', 'n/a']:
@@ -239,6 +232,66 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     @property
     def slit_width(self):
         return self.meta['APERWID']
+
+    @property
+    def ra(self):
+        # We use CAT-RA as the default since that is the object requested by the user
+        try:
+            coord = Angle(self.meta.get('CAT-RA'), unit='hourangle').deg
+        except (ValueError, TypeError):
+            # Fallback to RA and DEC
+            try:
+                coord = Angle(self.meta.get('RA'), unit='hourangle').deg
+            except (ValueError, TypeError):
+                # Fallback to CRVAL1 and CRVAL2
+                try:
+                    coord = Angle(self.meta.get('CRVAL1'), unit='degree').deg
+                except (ValueError, TypeError) as e:
+                    coord = np.nan
+        return coord
+
+    @ra.setter
+    def ra(self, value):
+        if value is None:
+            coord = 'N/A'
+            if 'CRVAL1' in self.meta:
+                self.meta.pop('CRVAL1')
+        else:
+            self.meta['CRVAL1'] = float(value)
+            coord = Angle(value, unit='degree')
+            coord = coord.to('hourangle').to_string(sep=':', pad=True)
+        self.meta['RA'] = coord
+        self.meta['CAT-RA'] = coord
+
+    @property
+    def dec(self):
+        # We use CAT-DEC as the default since that is the object requested by the user
+        try:
+            coord = Angle(self.meta.get('CAT-DEC'), unit='degree').deg
+        except (ValueError, TypeError):
+            # Fallback to RA and DEC
+            try:
+                coord = Angle(self.meta.get('DEC'), unit='degree').deg
+            except (ValueError, TypeError):
+                # Fallback to CRVAL1 and CRVAL2
+                try:
+                    coord = Angle(self.meta.get('CRVAL2'), unit='degree').deg
+                except (ValueError, TypeError) as e:
+                    coord = np.nan
+        return coord
+
+    @dec.setter
+    def dec(self, value):
+        if value is None:
+            coord = 'N/A'
+            if 'CRVAL2' in self.meta:
+                self.meta.pop('CRVAL2')
+        else:
+            self.meta['CRVAL2'] = float(value)
+            coord = Angle(value, unit='degree')
+            coord = coord.to_string(sep=':', pad=True)
+        self.meta['DEC'] = coord
+        self.meta['CAT-DEC'] = coord
 
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):

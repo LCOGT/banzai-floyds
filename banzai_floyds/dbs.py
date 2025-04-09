@@ -1,16 +1,15 @@
-from banzai.dbs import Base, add_or_update_record
+from banzai.dbs import Base, add_or_update_record, get_session
 from sqlalchemy import Column, Integer, String, Float, create_engine, ForeignKey, DateTime, desc
-from banzai.dbs import get_session
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
 from astropy.table import Table
-import pkg_resources
 from glob import glob
 import os
 from astropy.io import fits
 import datetime
 from banzai.utils.date_utils import parse_date_obs
+import importlib.resources
 
 
 def get_standard(ra, dec, runtime_context, offset_threshold=5):
@@ -36,10 +35,7 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
                 found_standard = standard
     if found_standard is not None:
         found_standard = open_fits_file(
-            {'path': pkg_resources.resource_filename('banzai_floyds',
-                                                     os.path.join('data',
-                                                                  'standards',
-                                                                  found_standard.filename)),
+            {'path': os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'standards', found_standard.filename),
              'frameid': found_standard.frameid,
              'filename': found_standard.filename},
             runtime_context)
@@ -78,7 +74,7 @@ def create_db(db_address):
 
 
 def ingest_standards(db_address):
-    standard_files = glob(pkg_resources.resource_filename('banzai_floyds', 'data/standards/*.fits'))
+    standard_files = glob(os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'standards', '*.fits'))
     for standard_file in standard_files:
         standard_hdu = fits.open(standard_file)
         with get_session(db_address) as db_session:
@@ -101,19 +97,19 @@ def get_order_location(dateobs, order_id, instrument, db_address):
 
 
 def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
-                       order_id, good_after, good_until):
+                       order_id, good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
     """ Add the x range (location) to use for a given order/instrument.
 
     We cover 4 cases:
     - Replace the current running location (good until = inf):
         - The new location will become the current running location
         - The old location will retain its good after date and set its good until to the good after of the new location
-    - The new range dates fall within a an exisiting range (good until != inf):
-        - We split the exisiting location, one with good after being the original good after and good until being the
+    - The new range dates fall within an existing range (good until != inf):
+        - We split the existing location, one with good after being the original good after and good until being the
           start of the new location, and the other with good after being the end of the new location and good until
           the original value.
     - The new location starts and ends before an overlapping location:
-        - The exisiting location record has good after set to good until from the new location
+        - The existing location record has good after set to good until from the new location
     - The new location starts and ends after an overlapping location:
         - The existing location's good until is set to the good after of the new location
     """
