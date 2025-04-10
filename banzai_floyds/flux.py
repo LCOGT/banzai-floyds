@@ -1,5 +1,5 @@
 from banzai.stages import Stage
-from banzai.calibrations import CalibrationUser
+from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai_floyds.dbs import get_standard
 from banzai_floyds.utils.flux_utils import flux_calibrate
 from banzai_floyds.utils import telluric_utils
@@ -70,7 +70,7 @@ class FluxSensitivity(Stage):
         return cal_frame
 
 
-class StandardLoader(CalibrationUser):
+class StandardLoader(FLOYDSCalibrationUser):
     def apply_master_calibration(self, image, master_calibration_image):
         image.sensitivity = master_calibration_image.sensitivity
         image.telluric = master_calibration_image.telluric

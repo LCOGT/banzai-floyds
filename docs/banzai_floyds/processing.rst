@@ -1,5 +1,14 @@
 Processing Stages 
 =================
+Choosing Calibrations
+---------------------
+Due to flexure in the instrument, FLOYDS calibrations are often taken by the observing program rather than by a global
+calibration program. To maintain data propriety, calibrations are selected in a tiered approach. Calibrations taken in the 
+same block are prefered. If none exist, calibrations taken under the same program are used. If no calibrations have been taken 
+under the same program we fall back to the most recent public data.
+
+To produce a fringe frame, we need lamp flats taken at multiple pointings. We combine lamp flats across programs, anonymizing 
+the resultant super fringe.
 
 Sky flats
 ---------

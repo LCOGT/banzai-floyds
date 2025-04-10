@@ -1,5 +1,5 @@
-from banzai.dbs import Base, add_or_update_record, get_session
-from sqlalchemy import Column, Integer, String, Float, create_engine, ForeignKey, DateTime, desc
+from banzai.dbs import Base, add_or_update_record, get_session, CalibrationImage
+from sqlalchemy import Column, Integer, String, Float, create_engine, ForeignKey, DateTime, desc, func
 from astropy.coordinates import SkyCoord
 from astropy import units
 from banzai.utils.fits_utils import open_fits_file
@@ -42,6 +42,12 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
         return Table(found_standard[0][1].data)
     else:
         return None
+
+
+class FLOYDSCalibrationImage(CalibrationImage):
+    blockid = Column(Integer, nullable=True)
+    proposal = Column(String(50), nullable=True)
+    public_date = Column(DateTime, nullable=True)
 
 
 class FluxStandard(Base):
@@ -169,3 +175,46 @@ def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
                                      good_after=good_after, good_until=good_until)
         db_session.add(new_location)
         db_session.commit()
+
+
+def get_cal_record(image, calibration_type, selection_criteria, db_address):
+    calibration_criteria = CalibrationImage.type == calibration_type.upper()
+    calibration_criteria &= CalibrationImage.instrument_id == image.instrument.id
+    calibration_criteria &= CalibrationImage.is_master.is_(True)
+    calibration_criteria &= CalibrationImage.is_bad.is_(False)
+
+    for criterion in selection_criteria:
+        # We have to cast to strings according to the sqlalchemy docs for version 1.3:
+        # https://docs.sqlalchemy.org/en/latest/core/type_basics.html?highlight=json#sqlalchemy.types.JSON
+        calibration_criteria &= CalibrationImage.attributes[criterion].as_string() ==\
+                                str(getattr(image, criterion))
+
+    calibration_criteria &= CalibrationImage.good_after <= image.dateobs
+    calibration_criteria &= CalibrationImage.good_until >= image.dateobs
+
+    calibration_image = None
+    with get_session(db_address=db_address) as db_session:
+        if 'postgres' in db_session.bind.dialect.name:
+            order_func = func.abs(func.extract("epoch", CalibrationImage.dateobs) -
+                                  func.extract("epoch", image.dateobs))
+        elif 'sqlite' in db_session.bind.dialect.name:
+            order_func = func.abs(func.julianday(CalibrationImage.dateobs) - func.julianday(image.dateobs))
+        else:
+            raise NotImplementedError("Only postgres and sqlite are supported")
+
+        # Start trying to find cals in the same block
+        block_criteria = CalibrationImage.blockid == image.blockid
+        image_filter = db_session.query(CalibrationImage).filter(calibration_criteria & block_criteria)
+        calibration_image = image_filter.order_by(order_func).first()
+        if calibration_image is None:
+            # Try to find cals in the same proposal
+            proposal_criteria = CalibrationImage.proposal == image.proposal
+            image_filter = db_session.query(CalibrationImage).filter(calibration_criteria & proposal_criteria)
+            calibration_image = image_filter.order_by(order_func).first()
+        if calibration_image is None:
+            # Fallback to anything public
+            calibration_criteria &= CalibrationImage.public_date <= datetime.datetime.now(datetime.timezone.utc)
+            image_filter = db_session.query(CalibrationImage).filter(calibration_criteria)
+            calibration_image = image_filter.order_by(order_func).first()
+
+    return calibration_image

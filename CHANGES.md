@@ -1,3 +1,8 @@
+0.16.0 (2025-04-10)
+-------------------
+- Bugfix to not override L1PUBDAT for all frames
+- We now anonymize the fringe frames better.
+
 0.15.1 (2025-04-09)
 -------------------
 - Added documenetation about data products
@@ -5,11 +10,6 @@
 0.15.0 (2025-03-05)
 -------------------
 - Migrated setup infrastructure to poetry
-
-0.14.1 (2025-02-12)
--------------------
-- Bugfix to not override L1PUBDAT for all frames
-- We now anonymize the fringe frames better.
 
 0.14.0 (2025-02-06)
 -------------------

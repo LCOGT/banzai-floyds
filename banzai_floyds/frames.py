@@ -10,6 +10,7 @@ from astropy.coordinates import SkyCoord, Angle
 from astropy import units
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from astropy.table import Table
+from banzai_floyds import dbs
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
@@ -293,12 +294,37 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.meta['DEC'] = coord
         self.meta['CAT-DEC'] = coord
 
+    @property
+    def blockid(self):
+        id = self.primary_hdu.meta.get('BLKUID')
+        if str(id).lower() in ['n/a', 'unknown', 'none', '']:
+            id = None
+        return id
+
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, grouping_criteria: list = None,
                  hdu_order: list = None):
         LCOCalibrationFrame.__init__(self, hdu_list, file_path,  grouping_criteria=grouping_criteria)
         FLOYDSObservationFrame.__init__(self, hdu_list, file_path, frame_id=frame_id, hdu_order=hdu_order)
+
+    def to_db_record(self, output_product):
+        record_attributes = {'type': self.obstype.upper(),
+                             'filename': output_product.filename,
+                             'filepath': output_product.filepath,
+                             'dateobs': self.dateobs,
+                             'datecreated': self.datecreated,
+                             'instrument_id': self.instrument.id,
+                             'is_master': self.is_master,
+                             'is_bad': self.is_bad,
+                             'frameid': output_product.frame_id,
+                             'blockid': self.blockid,
+                             'proposal': self.proposal,
+                             'public_date': self.public_date,
+                             'attributes': {}}
+        for attribute in self.grouping_criteria:
+            record_attributes['attributes'][attribute] = str(getattr(self, attribute))
+        return dbs.CalibrationImage(**record_attributes)
 
     def write(self, runtime_context):
         output_products = FLOYDSObservationFrame.write(self, runtime_context)
