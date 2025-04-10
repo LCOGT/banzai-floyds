@@ -6,8 +6,7 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 import numpy as np
 import os
 from astropy.io import fits
-from astropy.coordinates import SkyCoord, Angle
-from astropy import units
+from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from astropy.table import Table
 from banzai_floyds import dbs
@@ -324,7 +323,7 @@ class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
                              'attributes': {}}
         for attribute in self.grouping_criteria:
             record_attributes['attributes'][attribute] = str(getattr(self, attribute))
-        return dbs.CalibrationImage(**record_attributes)
+        return dbs.FLOYDSCalibrationImage(**record_attributes)
 
     def write(self, runtime_context):
         output_products = FLOYDSObservationFrame.write(self, runtime_context)
@@ -335,7 +334,9 @@ class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
                     cal_products.append(product)
         else:
             cal_products = output_products
-        CalibrationFrame.write(self, cal_products, runtime_context)
+
+        for product in cal_products:
+            dbs.save_calibration_info(self.to_db_record(product), runtime_context.db_address)
 
     @classmethod
     def from_frame(cls, frame, runtime_context):
