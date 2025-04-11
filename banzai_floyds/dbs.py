@@ -177,7 +177,24 @@ def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
         db_session.commit()
 
 
-def get_cal_record(image, calibration_type, selection_criteria, db_address):
+def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selection_criteria: list, db_address: str):
+    """Search for the best calibration frame to use
+
+    image: FLOYDSObservationFrame
+        The observation frame to search for a calibration frame
+    calibration_type: str
+        The obstype of calibration frame to search for
+    selection_criteria: list
+        The list of attributes to match against the calibration frame
+    db_address: str
+        The address of the database to use (SQLAlchemy format)
+
+    Notes
+    -----
+    We choose the closest calibration frame in time that matches the following hierarchy: If possible, we use
+    calibrations taht are taken in the same block. The next tier is that we use calirbrations taken in the
+    same proposal. Our final fallback is to use any public calibration frame.
+    """
     calibration_criteria = FLOYDSCalibrationImage.type == calibration_type.upper()
     calibration_criteria &= FLOYDSCalibrationImage.instrument_id == image.instrument.id
     calibration_criteria &= FLOYDSCalibrationImage.is_master.is_(True)
