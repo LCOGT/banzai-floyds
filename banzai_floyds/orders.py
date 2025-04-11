@@ -1,4 +1,4 @@
-from banzai.calibrations import CalibrationUser
+from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai.stages import Stage
 import numpy as np
 from scipy.ndimage.filters import maximum_filter1d
@@ -355,7 +355,7 @@ def fit_order_tweak(data, error, order_height, coeffs, x, domain):
     return best_fit_offsets
 
 
-class OrderLoader(CalibrationUser):
+class OrderLoader(FLOYDSCalibrationUser):
     """
     A stage to load previous order fits from sky flats
     """

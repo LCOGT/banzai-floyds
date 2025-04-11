@@ -1,4 +1,5 @@
-from banzai.calibrations import CalibrationMaker, CalibrationUser
+from banzai.calibrations import CalibrationMaker
+from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai.stages import Stage
 from banzai.utils import import_utils
 from banzai.utils.file_utils import make_calibration_filename_function
@@ -120,7 +121,7 @@ class FringeCorrector(Stage):
         return image
 
 
-class FringeLoader(CalibrationUser):
+class FringeLoader(FLOYDSCalibrationUser):
     def on_missing_master_calibration(self, image):
         if image.obstype == 'LAMPFLAT':
             return image

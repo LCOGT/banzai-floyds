@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.polynomial.legendre import Legendre
 from banzai.stages import Stage
-from banzai.calibrations import CalibrationUser
+from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai_floyds.matched_filter import matched_filter_metric
 from scipy.signal import find_peaks
 from banzai_floyds.matched_filter import optimize_match_filter
@@ -310,7 +310,7 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     return best_fit_params
 
 
-class WavelengthSolutionLoader(CalibrationUser):
+class WavelengthSolutionLoader(FLOYDSCalibrationUser):
     """
     Loads the wavelengths from the nearest Arc lamp (wavelength calibration) in the db.
     """
