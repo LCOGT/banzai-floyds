@@ -1,3 +1,8 @@
+0.17.0 (2025-04-26)
+-------------------
+- Minor fixes to deployment
+- Added readthedocs config
+
 0.16.0 (2025-04-10)
 -------------------
 - Bugfix to not override L1PUBDAT for all frames
