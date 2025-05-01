@@ -6,7 +6,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "banzai-floyds"
-version = "0.17.0"
+version = "0.17.1"
 requires-python = ">=3.10,<4"
 description = "BANZAI Data Reduction for FLOYDS spectra"
 readme = "docs/README.rst"
@@ -19,7 +19,7 @@ urls = { "Documentation" = "https://banzai-floyds.readthedocs.io/", "Source" = "
 
 dependencies = [
     "astropy>=6.0",
-    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.22.0",
+    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.24.1",
     "matplotlib",
     "torch",
     "ipython"
@@ -48,7 +48,7 @@ packages = [
 
 [tool.poetry.dependencies]
 torch = [
-    { version = "^2.3", source = "pypi", markers = "sys_platform=='darwin'" },
+    { version = "^2.3", source = "PyPI", markers = "sys_platform=='darwin'" },
     { version = "^2.3", source = "pytorch-cpu", markers = "sys_platform!='darwin' and extra!='cuda'" },
     { version = "^2.3", source = "pytorch-cuda", markers = "sys_platform!='darwin' and extra=='cuda'" }
 ]
