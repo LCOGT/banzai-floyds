@@ -1,3 +1,7 @@
+0.17.1 (2025-04-29)
+-------------------
+- We now build arm64 (for apple silicon) to docker build in github action
+
 0.17.0 (2025-04-26)
 -------------------
 - Minor fixes to deployment
