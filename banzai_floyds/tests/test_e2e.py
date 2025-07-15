@@ -192,9 +192,9 @@ class TestWavelengthSolutionCreation:
             if 'a91.fits' in expected_file:
                 assert os.path.exists(expected_file)
 
-    @pytest.mark.xfail(reason='Wavelengths are within a few angstroms of the manual fits, but we should do better.')
     def test_if_arc_solution_is_sensible(self):
-        with open(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'wavelength_e2e_fits.dat')) as solution_file:
+        manual_fits = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'wavelength_e2e_fits.dat')
+        with open(manual_fits) as solution_file:
             solution_params = json.load(solution_file)
         order_fits_file = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'orders_e2e_fits.dat')
         test_data = ascii.read(DATA_FILELIST)
@@ -279,6 +279,7 @@ class TestStandardFileCreation:
         def frame_is_standard(frame):
             return is_standard(frame['object'])
         run_reduce_individual_frames('e00.fits', extra_checks=frame_is_standard)
+
     def test_if_standards_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for i, expected_file in enumerate(expected_filenames(test_data, one_d=True)):
@@ -294,6 +295,7 @@ class TestScienceFileCreation:
         def frame_is_not_standard(frame):
             return not is_standard(frame['object'])
         run_reduce_individual_frames('e00.fits', extra_checks=frame_is_not_standard)
+
     def test_if_science_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for i, expected_file in enumerate(expected_filenames(test_data, one_d=True)):

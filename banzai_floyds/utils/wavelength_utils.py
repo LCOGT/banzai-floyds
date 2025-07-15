@@ -2,11 +2,13 @@ from astropy.io import fits
 from numpy.polynomial.legendre import Legendre
 import numpy as np
 from scipy.optimize import root
+from matplotlib import pyplot
+
+from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 
 
 class WavelengthSolution:
-    def __init__(self, polymomials, line_fwhms, line_tilts, orders):
-        self._line_fwhms = line_fwhms
+    def __init__(self, polymomials, line_tilts, orders):
         self._polynomials = polymomials
         self._line_tilts = line_tilts
         self._orders = orders
@@ -26,8 +28,7 @@ class WavelengthSolution:
 
     def to_header(self):
         header = fits.Header()
-        for i, (polynomial, fwhm, tilt) in enumerate(zip(self._polynomials, self._line_fwhms, self._line_tilts)):
-            header[f'FWHM{i + 1}'] = fwhm, f'Line spread FWHM in angstroms for order {i}'
+        for i, (polynomial, tilt) in enumerate(zip(self._polynomials, self._line_tilts)):
             header[f'TILT{i + 1}'] = tilt, f'Tilt angle in deg for order {i}'
             header[f'POLYORD{i + 1}'] = polynomial.degree(), f'Wavelength polynomial order for order {i}'
             header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain order for order {i}'
@@ -39,10 +40,6 @@ class WavelengthSolution:
     @property
     def coefficients(self):
         return [polynomial.coef for polynomial in self._polynomials]
-
-    @property
-    def line_fwhms(self):
-        return self._line_fwhms
 
     @property
     def line_tilts(self):
@@ -64,7 +61,6 @@ class WavelengthSolution:
         polynomials = []
         for order_id in order_ids:
             line_tilts.append(header[f'TILT{order_id}'])
-            line_fwhms.append(header[f'FWHM{order_id}'])
             polynomials.append(Legendre([float(header[f'COEF{order_id}_{i}'])
                                          for i in range(int(header[f'POLYORD{order_id}']) + 1)],
                                domain=eval(header[f'POLYDOM{order_id}'])))
@@ -132,4 +128,45 @@ def tilt_coordinates(tilt_angle, x, y):
     x_tilt = x0 - y0 * tan(ϴ)
     """
 
-    return x + y * np.tan(np.deg2rad(tilt_angle))
+    return np.array(x) + np.array(y) * np.tan(np.deg2rad(tilt_angle))
+
+
+def full_wavelength_solution_weights(theta, coordinates, lines, line_slices, bkg_order_x, bkg_order_y):
+    """
+    Produce a 2d model of arc fluxes given a line list and a wavelength solution polynomial, a tilt, and a line width
+
+    Parameters
+    ----------
+    theta: tuple: tilt, line_fwhm, *polynomial_coefficients, *background_coefficients, *line_strengths
+    coordinates: tuple of 2d arrays x, y. x and y are the coordinates of the data array for the model
+    lines: astropy table of the lines in the line list with wavelength (in angstroms) and strength
+
+    Returns
+    -------
+    model array: 2d array with the match filter weights given the wavelength solution model
+    """
+    tilt, line_fwhm, polynomial_coefficients, bkg_coefficients_x, bkg_coefficients_y, line_strengths = \
+        parse_wavelength_solution_paramters(theta, bkg_order_x, bkg_order_y, lines)
+    x, y = coordinates
+    # We could cache the domain of the function
+    wavelength_polynomial = Legendre(polynomial_coefficients, domain=(np.min(x), np.max(x)))
+    bkg_polynomial_x = Legendre(bkg_coefficients_x, domain=(np.min(x), np.max(x)))
+    bkg_polynomial_y = Legendre(bkg_coefficients_y, domain=(np.min(y), np.max(y)))
+
+    model = np.zeros(x.shape)
+    # Some possible optimizations are to truncate around each line (caching which indicies are for each line)
+    # say +- 5 sigma around each line
+    # We fit a relative strength of each line here to capture variations of the lamp
+    for line, line_slice, line_strength in zip(lines, line_slices, line_strengths):
+        tilted_x = tilt_coordinates(tilt, x[line_slice], y[line_slice])
+        model_wavelengths = wavelength_polynomial(tilted_x)
+        # Convert line sigma in pixels to wavelengths
+        line_sigma = fwhm_to_sigma(line_fwhm) * wavelength_polynomial.deriv(1)(tilted_x)
+        # in principle we should set the resolution to be a constant, i.e. delta lambda / lambda, not the overall width
+        model[line_slice] += line_strength * gauss(model_wavelengths, line['wavelength'], line_sigma)
+
+    used_region = np.where(model != 0.0)
+    model[used_region] += bkg_polynomial_x(x[used_region]) * bkg_polynomial_y(y[used_region])
+    # TODO: There is probably some annoying normalization here that is unconstrained
+    # so we probably need 1 fewer free parameters
+    return model

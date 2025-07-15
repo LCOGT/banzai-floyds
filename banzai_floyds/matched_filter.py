@@ -152,7 +152,7 @@ def matched_filter_normalization_jacobian(theta, x, weights, error, weights_jaco
 
     Notes
     -----
-    ∂ⱼN = Σ (w ∂ⱼw / σ²) / N²
+    ∂ⱼN = Σ (w ∂ⱼw / σ²) / N
     """
     return np.array([(weights * weights_jacobian_function(theta, x, i, *args) / error / error).sum() / normalization
                      for i in range(len(theta))])

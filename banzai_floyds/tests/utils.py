@@ -95,7 +95,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     # can shift the fringe pattern up and down
     orders.order_heights = np.ones(2) * (order_height + 5)
     wavelengths = WavelengthSolution([wavelength_model1, wavelength_model2],
-                                     [INITIAL_LINE_FWHMS[i + 1] for i in range(2)],
                                      [INITIAL_LINE_TILTS[i + 1] for i in range(2)],
                                      orders=orders.new(expanded_order_height))
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
