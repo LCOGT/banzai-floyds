@@ -103,20 +103,25 @@ def init(mock_configdb):
         if 'floyds' in instrument.type.lower():
             ogg_instrument = instrument
             break
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id, xdomainmin=0, xdomainmax=1550, order_id=1)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id, xdomainmin=500, xdomainmax=1835, order_id=2)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id,
+                                         xdomainmin=0, xdomainmax=1550, order_id=1)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id,
+                                         xdomainmin=500, xdomainmax=1835, order_id=2)
 
     coj_instruments = banzai.dbs.get_instruments_at_site('coj', os.environ["DB_ADDRESS"])
     for instrument in coj_instruments:
         if 'floyds' in instrument.type.lower():
             coj_instrument = instrument
             break
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=55, xdomainmax=1600, order_id=1)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1920, order_id=2)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=0, xdomainmax=1550, order_id=1,
-                                         good_after="2024-12-01T00:00:00.000000")
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1965, order_id=2,
-                                         good_after="2024-12-01T00:00:00.000000")
+
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=0, xdomainmax=1550, order_id=1)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=615, xdomainmax=1965, order_id=2)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=55, xdomainmax=1600, order_id=1, good_after="2024-12-01T00:00:00.000000")
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=615, xdomainmax=1920, order_id=2, good_after="2024-12-01T00:00:00.000000")
     banzai_floyds.dbs.ingest_standards(db_address=os.environ["DB_ADDRESS"])
 
 @pytest.mark.e2e
@@ -221,7 +226,7 @@ class TestWavelengthSolutionCreation:
                 manual_wavelengths[region] = manual_wavelengths_cutout
                 overlap = np.logical_and(hdu['ORDERS'].data == order_id, order_region)
                 # Require < 0.5 Angstrom tolerance
-                assert np.testing.assert_allclose(hdu['WAVELENGTHS'].data[overlap],
+                assert np.testing.assert_allclose(hdu['WAVELENGTH'].data[overlap],
                                                   manual_wavelengths[overlap],
                                                   atol=0.5)
 

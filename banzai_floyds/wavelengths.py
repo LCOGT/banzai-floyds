@@ -6,18 +6,17 @@ from banzai_floyds.matched_filter import matched_filter_metric
 from scipy.signal import find_peaks
 from banzai_floyds.matched_filter import optimize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
-from banzai.data import ArrayData, DataTable
+from banzai.data import DataTable
 from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
-from banzai_floyds.utils.order_utils import get_order_2d_region 
-from banzai_floyds.arc_lines import arc_lines_table, used_lines
+from banzai_floyds.utils.order_utils import get_order_2d_region
+from banzai_floyds.arc_lines import arc_lines_table
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 from banzai_floyds.extract import extract
 from scipy.special import erf
 from copy import copy
-from astropy.table import Table
+from astropy.table import Table, vstack
 from banzai.logs import get_logger
-from scipy.optimize import minimize 
 
 
 logger = get_logger()
@@ -208,13 +207,13 @@ def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separat
 
 
 def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients, initial_tilt, line_fwhm,
-                             lines, min_line_separation, match_threshold, snr_threshold, domain):
+                             lines, blended_lines, min_line_separation, match_threshold, snr_threshold, domain):
     """
     Use a match filter to estimate the best fit 2-d wavelength solution
 
     Parameters
     ----------
-    data: 2-d array with data to be fit
+    data: 2-d array with data to be fit ()
     error: 2-d array error, same shape as data
     x: 2-d array, x-coordinates of the data, same, shape as data
     y: 2-d array, y-coordinates of the data, same, shape as data
@@ -222,11 +221,13 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     initial_tilt: float: initial angle measured clockwise of up in degrees
     line_fwhm: float: initial estimate of fwhm of the lines in pixels
     lines: astropy table: must have the columns of catalog center in angstroms, and strength
+    blended_lines: astropy table: must have the columns of catalog center in angstroms, and strength
     Returns
     -------
     best_fit_params: 1-d array: (best_fit_tilt, *best_fit_polynomial_coefficients)
     """
-    data_to_fit = {'x': [], 'y': [], 'line': []}
+    wavelengths = np.zeros_like(data, dtype=float)
+    line_sigma = fwhm_to_sigma(line_fwhm)
     for row in range(data.shape[0]):
         def row_guess(peaks):
             tilted_x = tilt_coordinates(initial_tilt, peaks, np.interp(peaks, x[row], y[row]))
@@ -234,12 +235,18 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
             return polynomial(tilted_x)
         row_peaks, row_lines = match_features(data[row], error[row], line_fwhm, row_guess, min_line_separation, lines,
                                               match_threshold, domain, snr_threshold)
-        data_to_fit['x'] += list(row_peaks)
-        data_to_fit['y'] += list(np.interp(row_peaks, x[row], y[row]))
-        data_to_fit['line'] += list(row_lines)
-    best_fit_params = minimize(features_2d_neg_metric, x0=[initial_tilt,] + list(initial_polynomial_coefficients),
-                               args=(data_to_fit['x'], data_to_fit['y'], data_to_fit['line'], domain), method='Powell')
-    return best_fit_params.x[0], *best_fit_params.x[1:]
+
+        initial_fit = Legendre.fit(deg=len(initial_polynomial_coefficients) - 1,
+                                   x=row_peaks, y=row_lines, domain=domain)
+        if len(blended_lines) > 0:
+            all_lines = vstack([lines, blended_lines])
+        else:
+            all_lines = lines
+        best_fit_coeffs = optimize_match_filter(initial_fit.coef, data[row], error[row], wavelength_model_weights,
+                                                x[row], args=(all_lines, line_sigma,))
+        best_fit = Legendre(best_fit_coeffs, domain=domain)
+        wavelengths[row] = best_fit(x[row])
+    return wavelengths
 
 
 def features_2d_neg_metric(theta, x, y, lines, domain):
@@ -291,7 +298,7 @@ def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line
     return np.array(reference_wavelengths), np.array(measured_wavelengths)
 
 
-def estimate_residuals(image, line_fwhm, min_line_separation=5.0):
+def estimate_residuals(image, line_fwhm, used_lines, min_line_separation=5.0):
     # Note min_line_separation is in pixels here.
     reference_wavelengths = []
     measured_wavelengths = []
@@ -329,7 +336,7 @@ class CalibrateWavelengths(Stage):
     MIN_LINE_SEPARATION_N_SIGMA = 7.5
     # In units of median signal to noise in the spectrum
     PEAK_SNR_THRESHOLD = 10.0
-    FIT_ORDERS = {1: 5, 2: 2}
+    FIT_ORDERS = {1: 4, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
     """
@@ -341,8 +348,7 @@ class CalibrateWavelengths(Stage):
         # Do a quick extraction by medianing the central region of the order
         extraction_orders = copy(image.orders)
 
-        best_fit_polynomials = []
-        best_fit_tilts = []
+        wavelength_data = np.zeros_like(image.data, dtype=float)
         for i, order in enumerate(order_ids):
             order_region = extraction_orders.data == order
 
@@ -395,25 +401,18 @@ class CalibrateWavelengths(Stage):
             order_region_2d = get_order_2d_region(image.orders.data == order)
             tilt_ys = y2d[order_region_2d] - image.orders.center(x2d[order_region_2d])[i]
             # Do a final fit that allows the line tilt and a single set of polynomial coeffs to vary.
-            tilt, *coefficients = full_wavelength_solution(
+            wavelength_data[order_region_2d] = full_wavelength_solution(
                 image.data[order_region_2d],
                 image.uncertainty[order_region_2d],
                 x2d[order_region_2d], tilt_ys,
-                initial_solution.coef, self.INITIAL_LINE_TILTS[order],
+                initial_solution.coef,
+                self.INITIAL_LINE_TILTS[order],
                 initial_fwhm,
-                self.LINES[self.LINES['used']], min_line_separation, self.MATCH_THRESHOLDS[order],
-                snr_threshold=self.PEAK_SNR_THRESHOLD, domain=image.orders.domains[i]
+                self.LINES[self.LINES['used']], self.LINES[self.LINES['blend']], min_line_separation,
+                self.MATCH_THRESHOLDS[order], snr_threshold=self.PEAK_SNR_THRESHOLD, domain=image.orders.domains[i]
             )
-            # evaluate wavelength solution at all pixels in 2D order
-            # TODO: Make sure that the domain here doesn't mess up the tilts
-            polynomial = Legendre(coefficients[:self.FIT_ORDERS[order] + 1],
-                                  domain=(min(x2d[image.orders.data == order]),
-                                          max(x2d[image.orders.data == order])))
-            best_fit_polynomials.append(polynomial)
-            best_fit_tilts.append(tilt)
-        image.wavelengths = WavelengthSolution(best_fit_polynomials, best_fit_tilts, image.orders)
-        image.add_or_update(ArrayData(image.wavelengths.data, name='WAVELENGTHS',
-                                      meta=image.wavelengths.to_header()))
+
+        image.wavelengths = WavelengthSolution(wavelength_data, self.FIT_ORDERS, image.orders)
         image.is_master = True
 
         # Extract the data
@@ -426,6 +425,7 @@ class CalibrateWavelengths(Stage):
         min_line_separation = fwhm_to_sigma(initial_fwhm)
         min_line_separation *= self.MIN_LINE_SEPARATION_N_SIGMA
         image.add_or_update(DataTable(estimate_residuals(image, fwhm_to_sigma(initial_fwhm),
+                                                         self.LINES[self.LINES['used']],
                                                          min_line_separation=min_line_separation),
                                       name='LINESUSED'))
         return image

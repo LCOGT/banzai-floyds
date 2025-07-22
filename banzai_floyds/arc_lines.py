@@ -100,6 +100,21 @@ used_lines = [
     },
 ]
 
+blended_lines = [
+    {
+        'wavelength': 5769.610,
+        'line_strength': 0.0296,
+        'line_source': 'Hg',
+        'line_notes': 'Typically a blend at FLOYDS resolution'
+    },
+    {
+        'wavelength': 5790.670,
+        'line_strength': 0.02664,
+        'line_source': 'Hg',
+        'line_notes': 'Blend?'
+    }
+]
+
 unused_lines = [{
     'wavelength': 3451.689,
     'line_strength': 'nan',
@@ -135,11 +150,6 @@ unused_lines = [{
     'line_strength': 'nan',
     'line_source': 'Hg',
     'line_notes': 'Weak line'
-}, {
-    'wavelength': 5790.67,
-    'line_strength': 'nan',
-    'line_source': 'Hg',
-    'line_notes': 'Blend?'
 }, {
     'wavelength': 5803.782,
     'line_strength': 'nan',
@@ -196,11 +206,6 @@ unused_lines = [{
     'Zn',
     'line_notes':
     'Removed until we start turning on the Zn lamp again.'
-}, {
-    'wavelength': 5769.61,
-    'line_strength': 0.0296,
-    'line_source': 'Hg',
-    'line_notes': 'Typically a blend at FLOYDS resolution'
 }, {
     'wavelength': 6677.282,
     'line_strength': 0.0017,
@@ -375,12 +380,14 @@ def arc_lines_table():
     source = []
     notes = []
     used = []
+    blend = []
     for line in used_lines:
         wavelength.append(line['wavelength'])
         strength.append(float(line['line_strength']))
         source.append(line['line_source'])
         notes.append(line['line_notes'])
         used.append(True)
+        blend.append(False)
 
     for line in unused_lines:
         wavelength.append(line['wavelength'])
@@ -388,13 +395,23 @@ def arc_lines_table():
         source.append(line['line_source'])
         notes.append(line['line_notes'])
         used.append(False)
+        blend.append(False)
+
+    for line in blended_lines:
+        wavelength.append(line['wavelength'])
+        strength.append(float(line['line_strength']))
+        source.append(line['line_source'])
+        notes.append(line['line_notes'])
+        used.append(False)
+        blend.append(True)
 
     lines_table = Table({
         'wavelength': wavelength,
         'strength': strength,
         'source': source,
         'notes': notes,
-        'used': used
+        'used': used,
+        'blend': blend
     })
 
     return lines_table

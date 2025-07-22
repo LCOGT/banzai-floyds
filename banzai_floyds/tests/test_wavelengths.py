@@ -176,18 +176,22 @@ def test_2d_wavelength_solution():
     # Ineresting that the extra offset you need is the same as the slope
     initial_offset = min_wavelength + dispersion * (np.max(x2d) - np.min(x2d)) / 2.0
     # Note that weight function has the line width in angstroms whereas our line width here is in pixels
-    params = full_wavelength_solution(data[input_2d_order_region], error[input_2d_order_region], 
-                                      x2d[input_2d_order_region],
-                                      (y2d - trace_center(x2d))[input_2d_order_region],
-                                      (initial_offset, initial_slope, 0),
-                                      tilt, sigma_to_fwhm(line_sigma), lines, match_threshold=25,
-                                      min_line_separation=7.5 * line_sigma,
-                                      snr_threshold=10.0, domain=(0, data.shape[1] - 1))
-    fit_tilt, *fit_polynomial_coefficients = params
-    # Assert that the best fit parameters are close to the inputs
-    np.testing.assert_allclose(tilt, fit_tilt, atol=0.1)
-    np.testing.assert_allclose((initial_offset, initial_slope), fit_polynomial_coefficients[:2],
-                               atol=0.1)
+    fitted_wavelengths = full_wavelength_solution(
+        data[input_2d_order_region],
+        error[input_2d_order_region],
+        x2d[input_2d_order_region],
+        (y2d - trace_center(x2d))[input_2d_order_region],
+        (initial_offset, initial_slope, 0),
+        tilt, sigma_to_fwhm(line_sigma), lines,
+        Table({'wavelength': [], 'strength': [], 'line_source': []}), 
+        match_threshold=25,
+        min_line_separation=7.5 * line_sigma,
+        snr_threshold=10.0, domain=(0, data.shape[1] - 1)
+    )
+    # Assert that the fit wavelegnths are all close to the inputs
+    expected_wavelength_solution =  np.poly1d((dispersion, min_wavelength))
+    expected_wavelengths = expected_wavelength_solution(tilted_x[input_2d_order_region])
+    np.testing.assert_allclose(fitted_wavelengths, expected_wavelengths, atol=1.0)
 
 
 def generate_fake_arc_frame():
@@ -211,6 +215,7 @@ def generate_fake_arc_frame():
 
     # Calculate the tilted coordinates
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
+    input_wavelengths = np.zeros_like(data)
     for order_center, wavelength_model, tilt, line_fwhm, dispersion in \
             zip((order1, order2),
                 (wavelength_model1, wavelength_model2),
@@ -221,14 +226,15 @@ def generate_fake_arc_frame():
         tilted_x = tilt_coordinates(tilt, x2d[input_order_region],
                                     y2d[input_order_region] - order_center(x2d[input_order_region]))
 
+        input_wavelengths[input_order_region] = wavelength_model(tilted_x)
         # Fill in both used and unused lines that have strengths, setting a reasonable signal to noise
-        lines = arc_lines.used_lines + arc_lines.unused_lines
+        lines = arc_lines.used_lines + arc_lines.unused_lines + arc_lines.blended_lines
         for line in lines:
             if line['line_strength'] == 'nan':
                 continue
-            wavelengths = wavelength_model(tilted_x)
             line_sigma = fwhm_to_sigma(line_fwhm)
-            line_data = gauss(wavelengths, line['wavelength'], dispersion * line_sigma) * flux_scale
+            line_data = gauss(input_wavelengths[input_order_region], line['wavelength'],
+                              dispersion * line_sigma)
             line_data *= line['line_strength'] * flux_scale
             data[input_order_region] += line_data
     # Add poisson noise
@@ -243,29 +249,19 @@ def generate_fake_arc_frame():
                                             uncertainty=errors)], 'foo.fits')
     frame.orders = orders
     # return the test frame and the input wavelength solution
-    return frame, {'models': [wavelength_model1, wavelength_model2], 'tilts': line_tilts, 'fwhms': line_fwhms}
+    return frame, input_wavelengths
 
 
 def test_full_wavelength_solution():
     np.random.seed(234132)
     input_context = context.Context({})
-    frame, input_wavelength_solution = generate_fake_arc_frame()
+    frame, input_wavelengths = generate_fake_arc_frame()
     stage = CalibrateWavelengths(input_context)
     frame = stage.do_stage(frame)
-    for fit_tilt, input_tilt, in zip(frame.wavelengths.line_tilts, input_wavelength_solution['tilts']):
-        np.testing.assert_allclose(fit_tilt, input_tilt, atol=0.1)
 
-    for fitted_model, input_model in zip(frame.wavelengths._polynomials, input_wavelength_solution['models']):
-        wavelength_differences = []
-        for line in arc_lines.used_lines:
-            roots = (input_model - line['wavelength']).roots()
-            in_order = np.logical_and(np.isreal(roots), np.logical_and(roots > 0, roots < max(fitted_model.domain)))
-            if any(in_order):
-                input_center = np.real_if_close(roots[in_order])[0]
-                wavelength_differences.append(fitted_model(input_center) - line['wavelength'])
-            else:
-                continue
-        assert np.std(wavelength_differences) < 1.0
+    in_order = frame.orders.data > 0
+    np.testing.assert_allclose(frame.wavelengths.data[in_order], input_wavelengths[in_order],
+                               atol=1.0)
 
 
 def test_empty_calibrate_wavelengths_stage():

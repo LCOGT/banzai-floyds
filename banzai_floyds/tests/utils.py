@@ -3,7 +3,7 @@ from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
-from banzai_floyds.utils.wavelength_utils import WavelengthSolution
+from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
 from banzai_floyds.fringe import fit_smooth_fringe_spline
 from banzai_floyds.utils.telluric_utils import estimate_telluric
 from banzai_floyds.utils.flux_utils import airmass_extinction
@@ -68,7 +68,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     """
     nx = 2048
     ny = 512
-    INITIAL_LINE_FWHMS = {1: 15.6, 2: 8.6}
     # DISPERSIONS = {1: 3.13, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
@@ -94,10 +93,16 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     # Work out the wavelength solution for larger than the typical order size so that we
     # can shift the fringe pattern up and down
     orders.order_heights = np.ones(2) * (order_height + 5)
-    wavelengths = WavelengthSolution([wavelength_model1, wavelength_model2],
-                                     [INITIAL_LINE_TILTS[i + 1] for i in range(2)],
-                                     orders=orders.new(expanded_order_height))
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
+    wavelength_data = np.zeros_like(x2d, dtype=float)
+    for order_id, wavelength_model in zip([1, 2], [wavelength_model1, wavelength_model2]):
+        order_region = orders.data == order_id
+        y_tilt = y2d[order_region] - orders.center(x2d[order_region])[order_id - 1]
+        tilted_x = tilt_coordinates(INITIAL_LINE_TILTS[order_id], x2d[order_region], y_tilt)
+        wavelength_data[order_region] = wavelength_model(tilted_x)
+    wavelengths = WavelengthSolution(wavelength_data,
+                                     [wavelength_model1.degree(), wavelength_model2.degree()],
+                                     orders=orders.new(expanded_order_height))
     profile_sigma = fwhm_to_sigma(profile_fwhm)
     flux_normalization = 10000.0
 

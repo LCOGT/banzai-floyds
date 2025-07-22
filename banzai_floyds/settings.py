@@ -57,3 +57,5 @@ CALIBRATION_SET_CRITERIA = {'SKYFLAT': [], 'LAMPFLAT': ['slit_width'], 'ARC': ['
                             'FRINGE': ['slit_width']}
 
 OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']
+
+LOSSLESS_EXTENSIONS = ['WAVELENGTH']
