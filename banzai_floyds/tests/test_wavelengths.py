@@ -11,7 +11,7 @@ from banzai_floyds import arc_lines
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai.data import CCDData
 from astropy.io import fits
-from banzai_floyds.utils.wavelength_utils import tilt_coordinates
+from banzai_floyds.utils.wavelength_utils import tilt_coordinates, WavelengthSolution
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, sigma_to_fwhm
 
 
@@ -40,6 +40,27 @@ def build_random_spectrum(seed=None, min_wavelength=3200, line_sigma=3, dispersi
         input_spectrum += line['strength'] * gauss(x_pixels, peak_center, line_sigma) * flux_scale
         test_lines.append(peak_center[0])
     return input_spectrum, lines, test_lines
+
+
+def test_bin_edges():
+    wavelength_model = Legendre([5500.0, 256.0], domain=(0, 512))
+    tilt_model = Legendre([8.0, 0.0], domain=(0, 512))
+    wavelength_solution = WavelengthSolution([wavelength_model], [tilt_model],
+                                             Orders([Legendre([128, 0.0], domain=(0, 512))],
+                                                    (523, 533), [65.0,]))
+    np.testing.assert_allclose(wavelength_solution.bin_edges[0], np.arange(5500 - 255.5, 5500. + 256))
+
+
+def test_wavelength_solution_to_array():
+    wavelength_polynomial = Legendre([3825,  625], domain=[  0., 500.], window=[-1,  1], symbol='x')
+    tilt_polynomial = Legendre([0.0,], domain=[0, 500.0])
+    nx, ny = 523, 101
+    wavelength_solution = WavelengthSolution([wavelength_polynomial], [tilt_polynomial],
+                                             Orders([Legendre([50,], domain=(0, 500))],
+                                                    (ny, nx), [51,]))
+    expected_data = np.zeros((ny, nx))
+    expected_data[25:-25, :501] = np.arange(3200.0, 4451, 2.5)
+    np.testing.assert_allclose(wavelength_solution.data, expected_data)
 
 
 def test_linear_wavelength_solution():
@@ -176,22 +197,20 @@ def test_2d_wavelength_solution():
     # Ineresting that the extra offset you need is the same as the slope
     initial_offset = min_wavelength + dispersion * (np.max(x2d) - np.min(x2d)) / 2.0
     # Note that weight function has the line width in angstroms whereas our line width here is in pixels
-    fitted_wavelengths = full_wavelength_solution(
+    wavelength_polynomial, tilted_polynomial = full_wavelength_solution(
         data[input_2d_order_region],
         error[input_2d_order_region],
         x2d[input_2d_order_region],
         (y2d - trace_center(x2d))[input_2d_order_region],
-        (initial_offset, initial_slope, 0),
-        tilt, sigma_to_fwhm(line_sigma), lines,
-        Table({'wavelength': [], 'strength': [], 'line_source': []}), 
-        match_threshold=25,
-        min_line_separation=7.5 * line_sigma,
-        snr_threshold=10.0, domain=(0, data.shape[1] - 1)
+        (initial_offset, initial_slope),
+        (tilt,), sigma_to_fwhm(line_sigma), lines, domain=(0, data.shape[1] - 1)
     )
+    fitted_solution = WavelengthSolution([wavelength_polynomial,], [tilted_polynomial,],
+                                         Orders([trace_center], data.shape, [order_height,]))
     # Assert that the fit wavelegnths are all close to the inputs
-    expected_wavelength_solution =  np.poly1d((dispersion, min_wavelength))
+    expected_wavelength_solution = np.poly1d((dispersion, min_wavelength))
     expected_wavelengths = expected_wavelength_solution(tilted_x[input_2d_order_region])
-    np.testing.assert_allclose(fitted_wavelengths, expected_wavelengths, atol=1.0)
+    np.testing.assert_allclose(fitted_solution.data[input_2d_order_region], expected_wavelengths, atol=1.0)
 
 
 def generate_fake_arc_frame():

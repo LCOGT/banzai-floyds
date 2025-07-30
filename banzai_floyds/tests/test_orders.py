@@ -28,6 +28,14 @@ def test_blind_center_search():
         assert i in found_centers
 
 
+def test_order_region():
+    nx, ny = 523, 101
+    orders = Orders([Legendre([50,], domain=(0, 500))], (ny, nx), [51,])
+    expected = np.zeros((ny, nx), dtype=np.uint8)
+    expected[25:-25, :501] = 1
+    np.testing.assert_allclose(orders.data, expected)
+
+
 def test_fit_orders():
     data = np.zeros((512, 501))
     error = np.ones((512, 501))

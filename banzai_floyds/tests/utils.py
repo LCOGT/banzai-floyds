@@ -94,14 +94,10 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     # can shift the fringe pattern up and down
     orders.order_heights = np.ones(2) * (order_height + 5)
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
-    wavelength_data = np.zeros_like(x2d, dtype=float)
-    for order_id, wavelength_model in zip([1, 2], [wavelength_model1, wavelength_model2]):
-        order_region = orders.data == order_id
-        y_tilt = y2d[order_region] - orders.center(x2d[order_region])[order_id - 1]
-        tilted_x = tilt_coordinates(INITIAL_LINE_TILTS[order_id], x2d[order_region], y_tilt)
-        wavelength_data[order_region] = wavelength_model(tilted_x)
-    wavelengths = WavelengthSolution(wavelength_data,
-                                     [wavelength_model1.degree(), wavelength_model2.degree()],
+    wavelengths = WavelengthSolution([wavelength_model1, wavelength_model2],
+                                     [Legendre([INITIAL_LINE_TILTS[order_id], 0, 0],
+                                               domain=orders.domains[order_id - 1])
+                                      for order_id in orders.order_ids],
                                      orders=orders.new(expanded_order_height))
     profile_sigma = fwhm_to_sigma(profile_fwhm)
     flux_normalization = 10000.0

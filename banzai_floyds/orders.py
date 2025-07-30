@@ -179,8 +179,9 @@ def order_region(order_height, center, image_size):
     y_centers = np.round(center(x)).astype(int)
     x2d, y2d = np.meshgrid(np.arange(image_size[1]), np.arange(image_size[0]))
     centered_coordinates = y2d - y_centers
-    order_mask = np.logical_and(centered_coordinates >= -1 - order_height // 2,
-                                centered_coordinates <= order_height // 2 + 1)
+    half_height = order_height // 2
+    order_mask = np.logical_and(centered_coordinates >= -half_height,
+                                centered_coordinates <= half_height)
     # Note we leave in the ability to filter out columns by using the domain attribute of the model
     order_mask = np.logical_and(order_mask, np.logical_and(x2d >= center.domain[0], x2d <= center.domain[1]))
     return order_mask

@@ -206,8 +206,9 @@ def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separat
     return peaks, corresponding_lines[successful_matches]
 
 
-def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients, initial_tilt, line_fwhm,
-                             lines, blended_lines, min_line_separation, match_threshold, snr_threshold, domain):
+def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
+                             initial_tilt_coefficients, line_fwhm,
+                             lines, domain, fitting_region_nsigma=5):
     """
     Use a match filter to estimate the best fit 2-d wavelength solution
 
@@ -218,42 +219,61 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     x: 2-d array, x-coordinates of the data, same, shape as data
     y: 2-d array, y-coordinates of the data, same, shape as data
     initial_polynomial_coefficients: 1d array of the initial polynomial coefficients for the wavelength solution
-    initial_tilt: float: initial angle measured clockwise of up in degrees
+    initial_tilt: 1d array: initial angle measured clockwise of up in degrees
     line_fwhm: float: initial estimate of fwhm of the lines in pixels
     lines: astropy table: must have the columns of catalog center in angstroms, and strength
-    blended_lines: astropy table: must have the columns of catalog center in angstroms, and strength
+    fitting_region: float: N-sigma away from the initital line position to include in fit
     Returns
     -------
-    best_fit_params: 1-d array: (best_fit_tilt, *best_fit_polynomial_coefficients)
+    wavelength_polynomial, tilt_polynomial: Legednre polynomials
     """
-    wavelengths = np.zeros_like(data, dtype=float)
     line_sigma = fwhm_to_sigma(line_fwhm)
-    for row in range(data.shape[0]):
-        def row_guess(peaks):
-            tilted_x = tilt_coordinates(initial_tilt, peaks, np.interp(peaks, x[row], y[row]))
-            polynomial = Legendre(initial_polynomial_coefficients, domain=domain)
-            return polynomial(tilted_x)
-        row_peaks, row_lines = match_features(data[row], error[row], line_fwhm, row_guess, min_line_separation, lines,
-                                              match_threshold, domain, snr_threshold)
+    line_regions = []
+    initial_tilt_angle = Legendre(initial_tilt_coefficients, domain=domain)(x)
+    tilted_x = tilt_coordinates(initial_tilt_angle, x, y)
+    initial_wavelength_model = Legendre(initial_polynomial_coefficients, domain=domain)
+    initial_wavelengths = initial_wavelength_model(tilted_x)
+    initial_derivs = initial_wavelength_model.deriv()(tilted_x)
 
-        initial_fit = Legendre.fit(deg=len(initial_polynomial_coefficients) - 1,
-                                   x=row_peaks, y=row_lines, domain=domain)
-        if len(blended_lines) > 0:
-            all_lines = vstack([lines, blended_lines])
-        else:
-            all_lines = lines
-        best_fit_coeffs = optimize_match_filter(initial_fit.coef, data[row], error[row], wavelength_model_weights,
-                                                x[row], args=(all_lines, line_sigma,))
-        best_fit = Legendre(best_fit_coeffs, domain=domain)
-        wavelengths[row] = best_fit(x[row])
-    return wavelengths
+    used_lines = []
+    for line in lines:
+        wavlength_sigma = line_sigma * initial_derivs
+        in_line_region = initial_wavelengths >= line['wavelength'] - fitting_region_nsigma * wavlength_sigma
+        in_line_region = np.logical_and(
+            in_line_region,
+            initial_wavelengths <= line['wavelength'] + fitting_region_nsigma * wavlength_sigma
+        )
+        if in_line_region.sum() > 0:
+            line_regions.append(np.where(in_line_region))
+            used_lines.append(line)
+    best_fit = optimize_match_filter(
+        [*initial_polynomial_coefficients, *initial_tilt_coefficients],
+        data, error, wavelength_2d_weights, (x, y),
+        args=(used_lines, domain, len(initial_polynomial_coefficients) - 1, line_regions, line_sigma)
+    )
+
+    wavelength_polynomial = Legendre(best_fit[:len(initial_polynomial_coefficients)],
+                                     domain=domain)
+    tilt_polynomial = Legendre(best_fit[len(initial_polynomial_coefficients):],
+                               domain=domain)
+    return wavelength_polynomial, tilt_polynomial
 
 
-def features_2d_neg_metric(theta, x, y, lines, domain):
-    tilt, *polynomial_coefficients = theta
-    tilted_x = tilt_coordinates(tilt, x, y)
-    wavelength_polynomial = Legendre(polynomial_coefficients, domain=domain)
-    return ((lines - wavelength_polynomial(tilted_x)) ** 2.0).sum()
+def wavelength_2d_weights(theta, xy, lines, domain, wavelength_degree, line_regions, line_sigma):
+    x, y = xy
+    wavelength_coeffs = theta[:wavelength_degree + 1]
+    tilt_coeffs = theta[wavelength_degree + 1:]
+    tilt_polynomial = Legendre(tilt_coeffs, domain=domain)
+    wavelength_polynomial = Legendre(wavelength_coeffs, domain=domain)
+    weights = np.zeros_like(x, dtype=float)
+    for line, region in zip(lines, line_regions):
+        tilt_angle = tilt_polynomial(x[region])
+        tilted_x = tilt_coordinates(tilt_angle, x[region], y[region])
+        line_weights = gauss(wavelength_polynomial(tilted_x), line['wavelength'],
+                             line_sigma * wavelength_polynomial.deriv()(tilted_x))
+        line_weights *= line['strength']
+        weights[region] += line_weights
+    return weights
 
 
 class WavelengthSolutionLoader(FLOYDSCalibrationUser):
@@ -280,6 +300,7 @@ def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line
     # Note line_separation is in pixels here.
     reference_wavelengths = []
     measured_wavelengths = []
+    pixel_positions = []
     peaks = np.array(identify_peaks(flux, flux_errors, line_fwhm, line_separation, snr_threshold=15.0))
     for line in lines:
         if line['wavelength'] > np.max(wavelengths) or line['wavelength'] < np.min(wavelengths):
@@ -292,10 +313,11 @@ def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line
                 continue
             if np.abs(refined_peak - closest_peak) > 5:
                 continue
+            pixel_positions.append(refined_peak)
             refined_peak = np.interp(refined_peak, np.arange(len(wavelengths)), wavelengths)
             measured_wavelengths.append(refined_peak)
             reference_wavelengths.append(line['wavelength'])
-    return np.array(reference_wavelengths), np.array(measured_wavelengths)
+    return np.array(pixel_positions), np.array(reference_wavelengths), np.array(measured_wavelengths)
 
 
 def estimate_residuals(image, line_fwhm, used_lines, min_line_separation=5.0):
@@ -303,10 +325,11 @@ def estimate_residuals(image, line_fwhm, used_lines, min_line_separation=5.0):
     reference_wavelengths = []
     measured_wavelengths = []
     orders = []
+    positions = []
 
     for order in [1, 2]:
         where_order = image.extracted['order'] == order
-        order_reference_wavelengths, order_measured_wavelengths = estimate_line_centers(
+        pixel_positions, order_reference_wavelengths, order_measured_wavelengths = estimate_line_centers(
             image.extracted['wavelength'][where_order],
             image.extracted['fluxraw'][where_order],
             image.extracted['fluxrawerr'][where_order],
@@ -315,8 +338,10 @@ def estimate_residuals(image, line_fwhm, used_lines, min_line_separation=5.0):
             )
         reference_wavelengths = np.hstack([reference_wavelengths, order_reference_wavelengths])
         measured_wavelengths = np.hstack([measured_wavelengths, order_measured_wavelengths])
+        positions = np.hstack([positions, pixel_positions])
         orders += [order] * len(order_reference_wavelengths)
-    return Table({'measured_wavelength': measured_wavelengths,
+    return Table({'position': positions,
+                  'measured_wavelength': measured_wavelengths,
                   'reference_wavelength': reference_wavelengths,
                   'order': orders})
 
@@ -328,6 +353,7 @@ class CalibrateWavelengths(Stage):
     INITIAL_DISPERSIONS = {1: 3.51, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
+    TILT_COEFF_ORDER = {'coj': 2, 'ogg': 2}
     OFFSET_RANGES = {1: np.arange(7200.0, 8000.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
     # These thresholds were set using the data processed by the characterization tests.
     # The notebook is in the diagnostics folder
@@ -336,7 +362,7 @@ class CalibrateWavelengths(Stage):
     MIN_LINE_SEPARATION_N_SIGMA = 7.5
     # In units of median signal to noise in the spectrum
     PEAK_SNR_THRESHOLD = 10.0
-    FIT_ORDERS = {1: 4, 2: 2}
+    FIT_ORDERS = {1: 5, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
     """
@@ -348,7 +374,8 @@ class CalibrateWavelengths(Stage):
         # Do a quick extraction by medianing the central region of the order
         extraction_orders = copy(image.orders)
 
-        wavelength_data = np.zeros_like(image.data, dtype=float)
+        wavelength_polynomials = []
+        tilt_polynomials = []
         for i, order in enumerate(order_ids):
             order_region = extraction_orders.data == order
 
@@ -401,18 +428,21 @@ class CalibrateWavelengths(Stage):
             order_region_2d = get_order_2d_region(image.orders.data == order)
             tilt_ys = y2d[order_region_2d] - image.orders.center(x2d[order_region_2d])[i]
             # Do a final fit that allows the line tilt and a single set of polynomial coeffs to vary.
-            wavelength_data[order_region_2d] = full_wavelength_solution(
+            line_tilt_coeffs = np.zeros(self.TILT_COEFF_ORDER[image.site] + 1)
+            line_tilt_coeffs[0] = self.INITIAL_LINE_TILTS[order]
+            wavelength_polynomial, tilt_polynomial = full_wavelength_solution(
                 image.data[order_region_2d],
                 image.uncertainty[order_region_2d],
                 x2d[order_region_2d], tilt_ys,
                 initial_solution.coef,
-                self.INITIAL_LINE_TILTS[order],
+                line_tilt_coeffs,
                 initial_fwhm,
-                self.LINES[self.LINES['used']], self.LINES[self.LINES['blend']], min_line_separation,
-                self.MATCH_THRESHOLDS[order], snr_threshold=self.PEAK_SNR_THRESHOLD, domain=image.orders.domains[i]
+                vstack([self.LINES[self.LINES['used']], self.LINES[self.LINES['blend']]]),
+                domain=image.orders.domains[i]
             )
-
-        image.wavelengths = WavelengthSolution(wavelength_data, self.FIT_ORDERS, image.orders)
+            wavelength_polynomials.append(wavelength_polynomial)
+            tilt_polynomials.append(tilt_polynomial)
+        image.wavelengths = WavelengthSolution(wavelength_polynomials, tilt_polynomials, image.orders)
         image.is_master = True
 
         # Extract the data
