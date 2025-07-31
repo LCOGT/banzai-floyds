@@ -208,7 +208,7 @@ def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separat
 
 def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
                              initial_tilt_coefficients, line_fwhm,
-                             lines, domain, fitting_region_nsigma=5):
+                             lines, domain, fitting_region_nsigma=10):
     """
     Use a match filter to estimate the best fit 2-d wavelength solution
 
@@ -234,21 +234,20 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     initial_wavelength_model = Legendre(initial_polynomial_coefficients, domain=domain)
     initial_wavelengths = initial_wavelength_model(tilted_x)
     initial_derivs = initial_wavelength_model.deriv()(tilted_x)
-
     used_lines = []
     for line in lines:
-        wavlength_sigma = line_sigma * initial_derivs
-        in_line_region = initial_wavelengths >= line['wavelength'] - fitting_region_nsigma * wavlength_sigma
+        wavelength_sigma = line_sigma * initial_derivs
+        in_line_region = initial_wavelengths >= line['wavelength'] - fitting_region_nsigma * wavelength_sigma
         in_line_region = np.logical_and(
             in_line_region,
-            initial_wavelengths <= line['wavelength'] + fitting_region_nsigma * wavlength_sigma
+            initial_wavelengths <= line['wavelength'] + fitting_region_nsigma * wavelength_sigma
         )
         if in_line_region.sum() > 0:
             line_regions.append(np.where(in_line_region))
             used_lines.append(line)
     best_fit = optimize_match_filter(
         [*initial_polynomial_coefficients, *initial_tilt_coefficients],
-        data, error, wavelength_2d_weights, (x, y),
+        data - np.median(data), error, wavelength_2d_weights, (x, y),
         args=(used_lines, domain, len(initial_polynomial_coefficients) - 1, line_regions, line_sigma)
     )
 
@@ -320,7 +319,7 @@ def estimate_line_centers(wavelengths, flux, flux_errors, lines, line_fwhm, line
     return np.array(pixel_positions), np.array(reference_wavelengths), np.array(measured_wavelengths)
 
 
-def estimate_residuals(image, line_fwhm, used_lines, min_line_separation=5.0):
+def estimate_residuals(image, line_fwhm, used_lines, min_line_separation=10.0):
     # Note min_line_separation is in pixels here.
     reference_wavelengths = []
     measured_wavelengths = []
@@ -353,16 +352,16 @@ class CalibrateWavelengths(Stage):
     INITIAL_DISPERSIONS = {1: 3.51, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    TILT_COEFF_ORDER = {'coj': 2, 'ogg': 2}
+    TILT_COEFF_ORDER = {'coj': 0, 'ogg': 0}
     OFFSET_RANGES = {1: np.arange(7200.0, 8000.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
     # These thresholds were set using the data processed by the characterization tests.
     # The notebook is in the diagnostics folder
     MATCH_THRESHOLDS = {1: 50.0, 2: 25.0}
     # In units of the line fwhm (converted to sigma)
-    MIN_LINE_SEPARATION_N_SIGMA = 7.5
+    MIN_LINE_SEPARATION_N_SIGMA = 10.0
     # In units of median signal to noise in the spectrum
     PEAK_SNR_THRESHOLD = 10.0
-    FIT_ORDERS = {1: 5, 2: 2}
+    FIT_ORDERS = {1: 4, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
     """
@@ -400,6 +399,7 @@ class CalibrateWavelengths(Stage):
             flux_1d_error **= 0.5
             # Convert to a 2" slit
             initial_fwhm = self.INITIAL_LINE_FWHMS[image.site][order] * image.slit_width / 2.0
+
             linear_solution = linear_wavelength_solution(flux_1d, flux_1d_error, self.LINES[self.LINES['used']],
                                                          self.INITIAL_DISPERSIONS[order],
                                                          initial_fwhm,
@@ -454,7 +454,7 @@ class CalibrateWavelengths(Stage):
 
         min_line_separation = fwhm_to_sigma(initial_fwhm)
         min_line_separation *= self.MIN_LINE_SEPARATION_N_SIGMA
-        image.add_or_update(DataTable(estimate_residuals(image, fwhm_to_sigma(initial_fwhm),
+        image.add_or_update(DataTable(estimate_residuals(image, initial_fwhm,
                                                          self.LINES[self.LINES['used']],
                                                          min_line_separation=min_line_separation),
                                       name='LINESUSED'))

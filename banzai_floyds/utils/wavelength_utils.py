@@ -56,9 +56,9 @@ class WavelengthSolution:
         tilt_polynomials = []
         for order_id in orders.order_ids:
             wavelength_coeffs = [header[f'WCOEF{order_id}_{j}'] for j in range(header[f'POLYORD{order_id}'] + 1)]
-            wavelength_polynomials.append(Legendre(wavelength_coeffs, domain=header[f'POLYDOM{order_id}']))
+            wavelength_polynomials.append(Legendre(wavelength_coeffs, domain=eval(header[f'POLYDOM{order_id}'])))
             tilt_coeffs = [header[f'TCOEF{order_id}_{j}'] for j in range(header[f'TILTORD{order_id}'] + 1)]
-            tilt_polynomials.append(Legendre(tilt_coeffs, domain=header[f'TILTDOM{order_id}']))
+            tilt_polynomials.append(Legendre(tilt_coeffs, domain=eval(header[f'TILTDOM{order_id}'])))
         return cls(wavelength_polynomials, tilt_polynomials, orders)
 
     @property
