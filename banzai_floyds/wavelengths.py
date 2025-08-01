@@ -206,9 +206,25 @@ def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separat
     return peaks, corresponding_lines[successful_matches]
 
 
+def in_fitting_region(wavelengths, wavelength_derivs, lines, nsigma, sigma):
+    used_lines = []
+    line_regions = []
+    for line in lines:
+        wavelength_sigma = sigma * wavelength_derivs
+        in_line_region = wavelengths >= line['wavelength'] - nsigma * wavelength_sigma
+        in_line_region = np.logical_and(
+            in_line_region,
+            wavelengths <= line['wavelength'] + nsigma * wavelength_sigma
+        )
+        if in_line_region.sum() > 0:
+            used_lines.append(line)
+            line_regions.append(np.where(in_line_region))
+    return used_lines, line_regions
+
+
 def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
                              initial_tilt_coefficients, line_fwhm,
-                             lines, domain, fitting_region_nsigma=10):
+                             lines, domain, fitting_region_nsigma=5):
     """
     Use a match filter to estimate the best fit 2-d wavelength solution
 
@@ -228,26 +244,28 @@ def full_wavelength_solution(data, error, x, y, initial_polynomial_coefficients,
     wavelength_polynomial, tilt_polynomial: Legednre polynomials
     """
     line_sigma = fwhm_to_sigma(line_fwhm)
-    line_regions = []
     initial_tilt_angle = Legendre(initial_tilt_coefficients, domain=domain)(x)
     tilted_x = tilt_coordinates(initial_tilt_angle, x, y)
     initial_wavelength_model = Legendre(initial_polynomial_coefficients, domain=domain)
     initial_wavelengths = initial_wavelength_model(tilted_x)
     initial_derivs = initial_wavelength_model.deriv()(tilted_x)
-    used_lines = []
-    for line in lines:
-        wavelength_sigma = line_sigma * initial_derivs
-        in_line_region = initial_wavelengths >= line['wavelength'] - fitting_region_nsigma * wavelength_sigma
-        in_line_region = np.logical_and(
-            in_line_region,
-            initial_wavelengths <= line['wavelength'] + fitting_region_nsigma * wavelength_sigma
-        )
-        if in_line_region.sum() > 0:
-            line_regions.append(np.where(in_line_region))
-            used_lines.append(line)
+
+    used_lines, line_regions = in_fitting_region(
+        initial_wavelengths, initial_derivs, lines, fitting_region_nsigma, line_sigma
+    )
+
+    to_fit = np.zeros_like(initial_wavelengths, dtype=bool)
+    for line_region in line_regions:
+        to_fit[line_region] = True
+
+    used_lines, line_regions = in_fitting_region(
+        initial_wavelengths[to_fit], initial_derivs[to_fit], used_lines, fitting_region_nsigma, line_sigma
+    )
+
+    fitted_data = data[to_fit] - np.median(data)
     best_fit = optimize_match_filter(
         [*initial_polynomial_coefficients, *initial_tilt_coefficients],
-        data - np.median(data), error, wavelength_2d_weights, (x, y),
+        fitted_data, error[to_fit], wavelength_2d_weights, (x[to_fit], y[to_fit]),
         args=(used_lines, domain, len(initial_polynomial_coefficients) - 1, line_regions, line_sigma)
     )
 

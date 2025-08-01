@@ -83,14 +83,13 @@ class WavelengthSolution:
         red_order = np.argmax([min(wavelength_domain) for wavelength_domain in self.wavelength_domains])
         red_edges = self.bin_edges[red_order]
         blue_order = np.argmin([max(wavelength_domain) for wavelength_domain in self.wavelength_domains])
-        row = np.arange(*self.domains[blue_order], dtype=float)
-        row = self._wavelength_polynomials[blue_order](row)
-        blue_region = row < np.min(red_edges)
-        blue_switchover_pixel = np.argmin(np.abs(row[blue_region] - np.min(red_edges)))
-        blue_switchover_pixel = np.argwhere(row == row[blue_region][blue_switchover_pixel])[0]
-        blue_edges = row[:int(blue_switchover_pixel)]
+        blue_edges = self.bin_edges[blue_order]
+        blue_region = blue_edges < np.min(red_edges)
+        blue_switchover_pixel = np.argmin(np.abs(blue_edges[blue_region] - np.min(red_edges)))
+        blue_switchover_pixel = np.argwhere(blue_edges == blue_edges[blue_region][blue_switchover_pixel])[0][0]
+        blue_edges = blue_edges[:int(blue_switchover_pixel) + 1]
         # Remove the overlapping edge
-        combined_edges = np.hstack([blue_edges, red_edges])
+        combined_edges = np.hstack([blue_edges, red_edges[1:]])
         return np.sort(combined_edges)
 
 

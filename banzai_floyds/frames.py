@@ -1,5 +1,4 @@
 from banzai.lco import LCOObservationFrame, LCOCalibrationFrame, LCOFrameFactory
-from banzai.frames import CalibrationFrame
 from banzai.data import DataProduct, HeaderOnly, ArrayData, DataTable
 from banzai_floyds.orders import orders_from_fits
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
@@ -39,7 +38,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         if 'ORDER_COEFFS' in self:
             self.orders = orders_from_fits(self['ORDER_COEFFS'].data, self['ORDER_COEFFS'].meta, self.shape)
         if 'WAVELENGTH' in self:
-            self.wavelengths = WavelengthSolution.from_fit(self['WAVELENGTH'].meta, self.orders)
+            self.wavelengths = WavelengthSolution.from_fits(self['WAVELENGTH'].meta, self.orders)
         if 'PROFILEFITS' in self:
             self.profile = load_profile_fits(self['PROFILEFITS'])
         if 'BINNED2D' in self:

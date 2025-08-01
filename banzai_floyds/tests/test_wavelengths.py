@@ -51,8 +51,24 @@ def test_bin_edges():
     np.testing.assert_allclose(wavelength_solution.bin_edges[0], np.arange(5500 - 255.5, 5500. + 256))
 
 
+def test_combined_bin_edges():
+    expected_blue_bins = np.arange(3581.5, 6012, 1.0)
+    expected_red_bins = np.arange(5013.0, 10322, 2.0)
+    expected_blue_switchover_pixel = np.where(expected_blue_bins > np.min(expected_red_bins))[0][0]
+    expected_combined = np.hstack([expected_blue_bins[:expected_blue_switchover_pixel],
+                                   expected_red_bins[1:]])
+    wavelength_model1 = Legendre([4796.5, 1215.5], domain=[0, 2431])
+    wavelength_model2 = Legendre([7667, 2655], domain=[0, 2655])
+    orders = Orders([Legendre([11,], domain=[0, 2431]), Legendre([51,], domain=[0, 2655])], [101, 2700], [11, 11])
+    tilt_models = [Legendre([0.0,], domain=[0, 2431]), Legendre([0.0,], domain=[0, 2655])]
+    wavelength_solution = WavelengthSolution([wavelength_model1, wavelength_model2], tilt_models, orders)
+    for bin_edges, expected in zip(wavelength_solution.bin_edges, [expected_blue_bins, expected_red_bins]):
+        np.testing.assert_allclose(bin_edges, expected)
+    np.testing.assert_allclose(wavelength_solution.combined_bin_edges, expected_combined)
+
+
 def test_wavelength_solution_to_array():
-    wavelength_polynomial = Legendre([3825,  625], domain=[  0., 500.], window=[-1,  1], symbol='x')
+    wavelength_polynomial = Legendre([3825,  625], domain=[0., 500.], window=[-1,  1], symbol='x')
     tilt_polynomial = Legendre([0.0,], domain=[0, 500.0])
     nx, ny = 523, 101
     wavelength_solution = WavelengthSolution([wavelength_polynomial], [tilt_polynomial],
