@@ -157,19 +157,19 @@ def refine_peak_centers(data, error, peaks, line_fwhm, domain=None):
 
 def correlate_peaks(peaks, linear_model, lines, match_threshold):
     """
-        Find the standard line peaks associated with the detected peaks in a raw 1D arc extraction
+    Find the standard line peaks associated with the detected peaks in a raw 1D arc extraction
 
-        Parameters
-        ----------
-        peaks: array containing the pixel location of detected peaks
-        linear_model: 1st order fit function for the wavelength solution
-        lines: table containing 'wavelength' and 'strength' for each standard line
-        match_threshold: maximum separation for a pair of peaks to be considered a match.
+    Parameters
+    ----------
+    peaks: array containing the pixel location of detected peaks
+    linear_model: 1st order fit function for the wavelength solution
+    lines: table containing 'wavelength' and 'strength' for each standard line
+    match_threshold: maximum separation for a pair of peaks to be considered a match.
 
-        Returns
-        -------
-        list of standard line peak wavelengths matching detected peaks
-        """
+    Returns
+    -------
+    list of standard line peak wavelengths matching detected peaks
+    """
     guessed_wavelengths = linear_model(peaks)
     corresponding_lines = []
     # correlate detected peaks to known wavelengths
@@ -371,12 +371,12 @@ class CalibrateWavelengths(Stage):
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
     TILT_COEFF_ORDER = {'coj': 0, 'ogg': 0}
-    OFFSET_RANGES = {1: np.arange(7200.0, 8000.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
+    OFFSET_RANGES = {1: np.arange(7000.0, 7600.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
     # These thresholds were set using the data processed by the characterization tests.
     # The notebook is in the diagnostics folder
     MATCH_THRESHOLDS = {1: 50.0, 2: 25.0}
     # In units of the line fwhm (converted to sigma)
-    MIN_LINE_SEPARATION_N_SIGMA = 10.0
+    MIN_LINE_SEPARATION_N_SIGMA = 5.0
     # In units of median signal to noise in the spectrum
     PEAK_SNR_THRESHOLD = 10.0
     FIT_ORDERS = {1: 4, 2: 2}
