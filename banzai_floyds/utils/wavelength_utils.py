@@ -1,74 +1,65 @@
 from astropy.io import fits
 from numpy.polynomial.legendre import Legendre
 import numpy as np
-from scipy.optimize import root
 
 
 class WavelengthSolution:
-    def __init__(self, polymomials, line_fwhms, line_tilts, orders):
-        self._line_fwhms = line_fwhms
-        self._polynomials = polymomials
-        self._line_tilts = line_tilts
+    def __init__(self, wavelength_polynomials, tilt_polynomials, orders):
+        self._wavelength_polynomials = wavelength_polynomials
+        self._tilt_polynomials = tilt_polynomials
         self._orders = orders
 
     @property
     def data(self):
-        model_wavelengths = np.zeros(self._orders.shape, dtype=float)
-        # Recall that numpy arrays are indexed y,x
-        x2d, y2d = np.meshgrid(np.arange(self._orders.shape[1]), np.arange(self._orders.shape[0]))
-        order_ids = self._orders.order_ids
-        order_data = self._orders.data
-        order_iter = zip(order_ids, self._orders.center(x2d), self._line_tilts, self._polynomials)
-        for order, order_center, line_tilt, polynomial in order_iter:
-            tilted_x = x2d + np.tan(np.deg2rad(line_tilt)) * (y2d - order_center)
-            model_wavelengths[order_data == order] = polynomial(tilted_x[order_data == order])
-        return model_wavelengths
+        wavelengths = np.zeros_like(self.orders.data, dtype=float)
+        x2d, y2d = np.meshgrid(np.arange(wavelengths.shape[1], dtype=float),
+                               np.arange(wavelengths.shape[0], dtype=float))
+        for order_id in self.orders.order_ids:
+            in_order = self.orders.data == order_id
+            tilt_angle = self._tilt_polynomials[order_id - 1](x2d[in_order])
+            order_center = self._orders.center(x2d[in_order])[order_id - 1]
+            tilted_x = tilt_coordinates(tilt_angle, x2d[in_order],
+                                        y2d[in_order] - order_center)
+            wavelengths[in_order] = self._wavelength_polynomials[order_id - 1](tilted_x)
+        return wavelengths
 
     def to_header(self):
         header = fits.Header()
-        for i, (polynomial, fwhm, tilt) in enumerate(zip(self._polynomials, self._line_fwhms, self._line_tilts)):
-            header[f'FWHM{i + 1}'] = fwhm, f'Line spread FWHM in angstroms for order {i}'
-            header[f'TILT{i + 1}'] = tilt, f'Tilt angle in deg for order {i}'
+        for i, polynomial in enumerate(self._wavelength_polynomials):
             header[f'POLYORD{i + 1}'] = polynomial.degree(), f'Wavelength polynomial order for order {i}'
-            header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain order for order {i}'
+            header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain for order {i}'
             for j, coef in enumerate(polynomial.coef):
-                header[f'COEF{i + 1}_{j}'] = coef, f'Wavelength polynomial coef {j} for order {i}'
-        header['EXTNAME'] = 'WAVELENGTHS'
+                header[f'WCOEF{i + 1}_{j}'] = coef, f'Wavelength polynomial coef {j} for order {i}'
+        for i, polynomial in enumerate(self._tilt_polynomials):
+            header[f'TILTORD{i + 1}'] = polynomial.degree(), f'Tilt angle polynomial order for order {i}'
+            header[f'TILTDOM{i + 1}'] = str(list(polynomial.domain)), f'Tilt angle domain for order {i}'
+            for j, coef in enumerate(polynomial.coef):
+                header[f'TCOEF{i + 1}_{j}'] = coef, f'Tilt angle polynomial coef {j} for order {i}'
+        header['EXTNAME'] = 'WAVELENGTH'
         return header
 
     @property
-    def coefficients(self):
-        return [polynomial.coef for polynomial in self._polynomials]
-
-    @property
-    def line_fwhms(self):
-        return self._line_fwhms
-
-    @property
-    def line_tilts(self):
-        return self._line_tilts
-
-    @property
     def domains(self):
-        return [polynomial.domain for polynomial in self._polynomials]
+        return self._orders.domains
 
     @property
     def wavelength_domains(self):
-        return [polynomial(polynomial.domain) for polynomial in self._polynomials]
+        wavelength_domains = []
+        for polynomial in self._wavelength_polynomials:
+            wavelength_domains.append([polynomial(min(polynomial.domain)),
+                                       polynomial(max(polynomial.domain))])
+        return wavelength_domains
 
     @classmethod
-    def from_header(cls, header, orders):
-        order_ids = np.arange(1, len([x for x in header.keys() if 'POLYORD' in x]) + 1)
-        line_fwhms = []
-        line_tilts = []
-        polynomials = []
-        for order_id in order_ids:
-            line_tilts.append(header[f'TILT{order_id}'])
-            line_fwhms.append(header[f'FWHM{order_id}'])
-            polynomials.append(Legendre([float(header[f'COEF{order_id}_{i}'])
-                                         for i in range(int(header[f'POLYORD{order_id}']) + 1)],
-                               domain=eval(header[f'POLYDOM{order_id}'])))
-        return cls(polynomials, line_fwhms, line_tilts, orders)
+    def from_fits(cls, header, orders):
+        wavelength_polynomials = []
+        tilt_polynomials = []
+        for order_id in orders.order_ids:
+            wavelength_coeffs = [header[f'WCOEF{order_id}_{j}'] for j in range(header[f'POLYORD{order_id}'] + 1)]
+            wavelength_polynomials.append(Legendre(wavelength_coeffs, domain=eval(header[f'POLYDOM{order_id}'])))
+            tilt_coeffs = [header[f'TCOEF{order_id}_{j}'] for j in range(header[f'TILTORD{order_id}'] + 1)]
+            tilt_polynomials.append(Legendre(tilt_coeffs, domain=eval(header[f'TILTDOM{order_id}'])))
+        return cls(wavelength_polynomials, tilt_polynomials, orders)
 
     @property
     def orders(self):
@@ -79,20 +70,26 @@ class WavelengthSolution:
         # By convention, integer numbers are pixel centers.
         # Here we take the bin edge between the first and second pixel as the beginning of our bins
         # This means that our bin positions are fully in the domain of the wavelength model
-        return [model(np.arange(min(model.domain)+0.5, max(model.domain))) for model in self._polynomials]
+        bin_edges = []
+        for order_id in self._orders.order_ids:
+            row = np.arange(self.domains[order_id - 1][0], self.domains[order_id - 1][1] + 1, dtype=float)
+            # We take the bin edges to be the average of the pixel values, removing the first and last pixel
+            bin_edges.append(self._wavelength_polynomials[order_id - 1]((row[1:] + row[:-1]) / 2.0))
+        return bin_edges
 
     @property
     def combined_bin_edges(self):
         # Find the overlapping point of the orders
-        red_order = np.argmax([model(min(model.domain)) for model in self._polynomials])
+        red_order = np.argmax([min(wavelength_domain) for wavelength_domain in self.wavelength_domains])
         red_edges = self.bin_edges[red_order]
-        blue_order = np.argmin([model(max(model.domain)) for model in self._polynomials])
-        blue_switchover_pixel = root(lambda x: self._polynomials[blue_order](x) - np.min(red_edges),
-                                     np.max(self._polynomials[blue_order].domain)).x
-        blue_edge_pixels = np.arange(blue_switchover_pixel, min(self._polynomials[blue_order].domain), -1)
-        blue_edges = self._polynomials[blue_order](blue_edge_pixels)
+        blue_order = np.argmin([max(wavelength_domain) for wavelength_domain in self.wavelength_domains])
+        blue_edges = self.bin_edges[blue_order]
+        blue_region = blue_edges < np.min(red_edges)
+        blue_switchover_pixel = np.argmin(np.abs(blue_edges[blue_region] - np.min(red_edges)))
+        blue_switchover_pixel = np.argwhere(blue_edges == blue_edges[blue_region][blue_switchover_pixel])[0][0]
+        blue_edges = blue_edges[:int(blue_switchover_pixel) + 1]
         # Remove the overlapping edge
-        combined_edges = np.hstack([blue_edges[1:], red_edges])
+        combined_edges = np.hstack([blue_edges, red_edges[1:]])
         return np.sort(combined_edges)
 
 
@@ -132,4 +129,4 @@ def tilt_coordinates(tilt_angle, x, y):
     x_tilt = x0 - y0 * tan(ϴ)
     """
 
-    return x + y * np.tan(np.deg2rad(tilt_angle))
+    return np.array(x) + np.array(y) * np.tan(np.deg2rad(tilt_angle))

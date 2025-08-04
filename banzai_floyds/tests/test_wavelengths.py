@@ -4,13 +4,14 @@ import numpy as np
 from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.orders import order_region
+from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai import context
 from banzai_floyds.orders import Orders
 from banzai_floyds import arc_lines
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai.data import CCDData
 from astropy.io import fits
-from banzai_floyds.utils.wavelength_utils import tilt_coordinates
+from banzai_floyds.utils.wavelength_utils import tilt_coordinates, WavelengthSolution
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, sigma_to_fwhm
 
 
@@ -39,6 +40,43 @@ def build_random_spectrum(seed=None, min_wavelength=3200, line_sigma=3, dispersi
         input_spectrum += line['strength'] * gauss(x_pixels, peak_center, line_sigma) * flux_scale
         test_lines.append(peak_center[0])
     return input_spectrum, lines, test_lines
+
+
+def test_bin_edges():
+    wavelength_model = Legendre([5500.0, 256.0], domain=(0, 512))
+    tilt_model = Legendre([8.0, 0.0], domain=(0, 512))
+    wavelength_solution = WavelengthSolution([wavelength_model], [tilt_model],
+                                             Orders([Legendre([128, 0.0], domain=(0, 512))],
+                                                    (523, 533), [65.0,]))
+    np.testing.assert_allclose(wavelength_solution.bin_edges[0], np.arange(5500 - 255.5, 5500. + 256))
+
+
+def test_combined_bin_edges():
+    expected_blue_bins = np.arange(3581.5, 6012, 1.0)
+    expected_red_bins = np.arange(5013.0, 10322, 2.0)
+    expected_blue_switchover_pixel = np.where(expected_blue_bins > np.min(expected_red_bins))[0][0]
+    expected_combined = np.hstack([expected_blue_bins[:expected_blue_switchover_pixel],
+                                   expected_red_bins[1:]])
+    wavelength_model1 = Legendre([4796.5, 1215.5], domain=[0, 2431])
+    wavelength_model2 = Legendre([7667, 2655], domain=[0, 2655])
+    orders = Orders([Legendre([11,], domain=[0, 2431]), Legendre([51,], domain=[0, 2655])], [101, 2700], [11, 11])
+    tilt_models = [Legendre([0.0,], domain=[0, 2431]), Legendre([0.0,], domain=[0, 2655])]
+    wavelength_solution = WavelengthSolution([wavelength_model1, wavelength_model2], tilt_models, orders)
+    for bin_edges, expected in zip(wavelength_solution.bin_edges, [expected_blue_bins, expected_red_bins]):
+        np.testing.assert_allclose(bin_edges, expected)
+    np.testing.assert_allclose(wavelength_solution.combined_bin_edges, expected_combined)
+
+
+def test_wavelength_solution_to_array():
+    wavelength_polynomial = Legendre([3825,  625], domain=[0., 500.], window=[-1,  1], symbol='x')
+    tilt_polynomial = Legendre([0.0,], domain=[0, 500.0])
+    nx, ny = 523, 101
+    wavelength_solution = WavelengthSolution([wavelength_polynomial], [tilt_polynomial],
+                                             Orders([Legendre([50,], domain=(0, 500))],
+                                                    (ny, nx), [51,]))
+    expected_data = np.zeros((ny, nx))
+    expected_data[25:-25, :501] = np.arange(3200.0, 4451, 2.5)
+    np.testing.assert_allclose(wavelength_solution.data, expected_data)
 
 
 def test_linear_wavelength_solution():
@@ -156,9 +194,7 @@ def test_2d_wavelength_solution():
     order_height = 85
     trace_center = Legendre(input_center_params, domain=(0, data.shape[1] - 1))
     input_order_region = order_region(order_height, trace_center, data.shape)
-
-    bkg_order_x = 4
-    bkg_order_y = 2
+    input_2d_order_region = get_order_2d_region(input_order_region)
     min_wavelength = 3200.0
     seed = 76856
     line_sigma = 3
@@ -177,26 +213,28 @@ def test_2d_wavelength_solution():
     # Ineresting that the extra offset you need is the same as the slope
     initial_offset = min_wavelength + dispersion * (np.max(x2d) - np.min(x2d)) / 2.0
     # Note that weight function has the line width in angstroms whereas our line width here is in pixels
-    params = full_wavelength_solution(data[input_order_region], error[input_order_region], x2d[input_order_region],
-                                      (y2d - trace_center(x1d))[input_order_region], (initial_offset, initial_slope),
-                                      tilt, sigma_to_fwhm(line_sigma), lines,
-                                      background_order_x=bkg_order_x,
-                                      background_order_y=bkg_order_y)
-
-    fit_tilt, fit_line_width, *fit_polynomial_coefficients = params
-    # Assert that the best fit parameters are close to the inputs
-    np.testing.assert_allclose(tilt, fit_tilt, atol=0.1)
-    np.testing.assert_allclose(line_sigma, fwhm_to_sigma(fit_line_width), atol=0.3)
-    np.testing.assert_allclose((initial_offset, initial_slope), fit_polynomial_coefficients[:2],
-                               atol=0.1)
+    wavelength_polynomial, tilted_polynomial = full_wavelength_solution(
+        data[input_2d_order_region],
+        error[input_2d_order_region],
+        x2d[input_2d_order_region],
+        (y2d - trace_center(x2d))[input_2d_order_region],
+        (initial_offset, initial_slope),
+        (tilt,), sigma_to_fwhm(line_sigma), lines, domain=(0, data.shape[1] - 1)
+    )
+    fitted_solution = WavelengthSolution([wavelength_polynomial,], [tilted_polynomial,],
+                                         Orders([trace_center], data.shape, [order_height,]))
+    # Assert that the fit wavelegnths are all close to the inputs
+    expected_wavelength_solution = np.poly1d((dispersion, min_wavelength))
+    expected_wavelengths = expected_wavelength_solution(tilted_x[input_2d_order_region])
+    np.testing.assert_allclose(fitted_solution.data[input_2d_order_region], expected_wavelengths, atol=1.0)
 
 
 def generate_fake_arc_frame():
     nx = 2048
     ny = 512
     order_height = 93
-    order1 = Legendre((135.4,  81.8,  45.2, -11.4), domain=(0, 1700))
-    order2 = Legendre((410, 17, 63, -12), domain=(475, 1975))
+    order1 = Legendre((145.4,  81.8,  45.2, -11.4), domain=(0, 1700))
+    order2 = Legendre((390, 17, 63, -12), domain=(475, 1975))
     data = np.zeros((ny, nx))
     errors = np.zeros_like(data)
     orders = Orders([order1, order2], (ny, nx), order_height)
@@ -212,6 +250,7 @@ def generate_fake_arc_frame():
 
     # Calculate the tilted coordinates
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
+    input_wavelengths = np.zeros_like(data)
     for order_center, wavelength_model, tilt, line_fwhm, dispersion in \
             zip((order1, order2),
                 (wavelength_model1, wavelength_model2),
@@ -222,14 +261,15 @@ def generate_fake_arc_frame():
         tilted_x = tilt_coordinates(tilt, x2d[input_order_region],
                                     y2d[input_order_region] - order_center(x2d[input_order_region]))
 
+        input_wavelengths[input_order_region] = wavelength_model(tilted_x)
         # Fill in both used and unused lines that have strengths, setting a reasonable signal to noise
-        lines = arc_lines.used_lines + arc_lines.unused_lines
+        lines = arc_lines.used_lines + arc_lines.unused_lines + arc_lines.blended_lines
         for line in lines:
             if line['line_strength'] == 'nan':
                 continue
-            wavelengths = wavelength_model(tilted_x)
             line_sigma = fwhm_to_sigma(line_fwhm)
-            line_data = gauss(wavelengths, line['wavelength'], dispersion * line_sigma) * flux_scale
+            line_data = gauss(input_wavelengths[input_order_region], line['wavelength'],
+                              dispersion * line_sigma)
             line_data *= line['line_strength'] * flux_scale
             data[input_order_region] += line_data
     # Add poisson noise
@@ -240,34 +280,23 @@ def generate_fake_arc_frame():
     errors = np.sqrt(errors * errors + read_noise)
     data += np.random.normal(0.0, read_noise, size=(ny, nx))
     # save the data, errors, and orders to a floyds frame
-    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({'SITEID': 'ogg'}), uncertainty=errors)], 'foo.fits')
+    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({'SITEID': 'ogg', 'APERWID': 2.0}),
+                                            uncertainty=errors)], 'foo.fits')
     frame.orders = orders
     # return the test frame and the input wavelength solution
-    return frame, {'models': [wavelength_model1, wavelength_model2], 'tilts': line_tilts, 'fwhms': line_fwhms}
+    return frame, input_wavelengths
 
 
 def test_full_wavelength_solution():
     np.random.seed(234132)
     input_context = context.Context({})
-    frame, input_wavelength_solution = generate_fake_arc_frame()
+    frame, input_wavelengths = generate_fake_arc_frame()
     stage = CalibrateWavelengths(input_context)
     frame = stage.do_stage(frame)
-    for fit_fwhm, input_fwhm in zip(frame.wavelengths.line_fwhms, input_wavelength_solution['fwhms']):
-        np.testing.assert_allclose(fit_fwhm, input_fwhm, atol=0.1)
-    for fit_tilt, input_tilt, in zip(frame.wavelengths.line_tilts, input_wavelength_solution['tilts']):
-        np.testing.assert_allclose(fit_tilt, input_tilt, atol=0.1)
 
-    for fitted_model, input_model in zip(frame.wavelengths._polynomials, input_wavelength_solution['models']):
-        wavelength_differences = []
-        for line in arc_lines.used_lines:
-            roots = (input_model - line['wavelength']).roots()
-            in_order = np.logical_and(np.isreal(roots), np.logical_and(roots > 0, roots < max(fitted_model.domain)))
-            if any(in_order):
-                input_center = np.real_if_close(roots[in_order])[0]
-                wavelength_differences.append(fitted_model(input_center) - line['wavelength'])
-            else:
-                continue
-        assert np.std(wavelength_differences) < 1.0
+    in_order = frame.orders.data > 0
+    np.testing.assert_allclose(frame.wavelengths.data[in_order], input_wavelengths[in_order],
+                               atol=1.0)
 
 
 def test_empty_calibrate_wavelengths_stage():
@@ -288,7 +317,8 @@ def test_empty_calibrate_wavelengths_stage():
     errors = np.sqrt(errors * errors + read_noise)
     data += np.random.normal(0.0, read_noise, size=(ny, nx))
     # save the data, errors, and orders to a floyds Calibration frame
-    frame = FLOYDSCalibrationFrame([CCDData(data, fits.Header({'SITEID': 'ogg'}), uncertainty=errors)], 'foo.fits')
+    frame = FLOYDSCalibrationFrame([CCDData(data, fits.Header({'SITEID': 'ogg', 'APERWID': 2}),
+                                            uncertainty=errors)], 'foo.fits')
     frame.orders = orders
 
     calibrate_wavelengths = CalibrateWavelengths(input_context)

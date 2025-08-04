@@ -103,21 +103,27 @@ def init(mock_configdb):
         if 'floyds' in instrument.type.lower():
             ogg_instrument = instrument
             break
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id, xdomainmin=0, xdomainmax=1550, order_id=1)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id, xdomainmin=500, xdomainmax=1835, order_id=2)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id,
+                                         xdomainmin=0, xdomainmax=1550, order_id=1)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id,
+                                         xdomainmin=500, xdomainmax=1835, order_id=2)
 
     coj_instruments = banzai.dbs.get_instruments_at_site('coj', os.environ["DB_ADDRESS"])
     for instrument in coj_instruments:
         if 'floyds' in instrument.type.lower():
             coj_instrument = instrument
             break
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=55, xdomainmax=1600, order_id=1)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1920, order_id=2)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=0, xdomainmax=1550, order_id=1,
-                                         good_after="2024-12-01T00:00:00.000000")
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id, xdomainmin=615, xdomainmax=1965, order_id=2,
-                                         good_after="2024-12-01T00:00:00.000000")
+
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=0, xdomainmax=1550, order_id=1)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=615, xdomainmax=1965, order_id=2)
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=55, xdomainmax=1600, order_id=1, good_after="2024-12-01T00:00:00.000000")
+    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
+                                         xdomainmin=615, xdomainmax=1920, order_id=2, good_after="2024-12-01T00:00:00.000000")
     banzai_floyds.dbs.ingest_standards(db_address=os.environ["DB_ADDRESS"])
+
 
 @pytest.mark.e2e
 @pytest.mark.detect_orders
@@ -194,7 +200,8 @@ class TestWavelengthSolutionCreation:
 
     @pytest.mark.xfail(reason='Wavelengths are within a few angstroms of the manual fits, but we should do better.')
     def test_if_arc_solution_is_sensible(self):
-        with open(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'wavelength_e2e_fits.dat')) as solution_file:
+        manual_fits = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'wavelength_e2e_fits.dat')
+        with open(manual_fits) as solution_file:
             solution_params = json.load(solution_file)
         order_fits_file = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'orders_e2e_fits.dat')
         test_data = ascii.read(DATA_FILELIST)
@@ -209,7 +216,8 @@ class TestWavelengthSolutionCreation:
                                                   hdu['SCI'].data.shape,
                                                   ORDER_HEIGHT)
                 region = get_order_2d_region(order_region)
-                wavelength_entry = solution_params[os.path.basename(expected_file)][str(order_id)]
+                solution_entry = os.path.basename(expected_file).replace('a91.fits', 'a00.fits')
+                wavelength_entry = solution_params[solution_entry][str(order_id)]
                 manual_wavelengths_cutout = np.zeros((ORDER_HEIGHT, int(np.max(wavelength_entry['domain'][0]) + 1)))
                 for i in range(ORDER_HEIGHT):
                     wavelength_solution = Legendre(coef=wavelength_entry['coef'][i],
@@ -221,7 +229,7 @@ class TestWavelengthSolutionCreation:
                 manual_wavelengths[region] = manual_wavelengths_cutout
                 overlap = np.logical_and(hdu['ORDERS'].data == order_id, order_region)
                 # Require < 0.5 Angstrom tolerance
-                assert np.testing.assert_allclose(hdu['WAVELENGTHS'].data[overlap],
+                assert np.testing.assert_allclose(hdu['WAVELENGTH'].data[overlap],
                                                   manual_wavelengths[overlap],
                                                   atol=0.5)
 
@@ -279,6 +287,7 @@ class TestStandardFileCreation:
         def frame_is_standard(frame):
             return is_standard(frame['object'])
         run_reduce_individual_frames('e00.fits', extra_checks=frame_is_standard)
+
     def test_if_standards_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for i, expected_file in enumerate(expected_filenames(test_data, one_d=True)):
@@ -294,6 +303,7 @@ class TestScienceFileCreation:
         def frame_is_not_standard(frame):
             return not is_standard(frame['object'])
         run_reduce_individual_frames('e00.fits', extra_checks=frame_is_not_standard)
+
     def test_if_science_frames_were_created(self):
         test_data = ascii.read(DATA_FILELIST)
         for i, expected_file in enumerate(expected_filenames(test_data, one_d=True)):

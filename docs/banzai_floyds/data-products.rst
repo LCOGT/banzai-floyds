@@ -46,7 +46,7 @@ The non-extracted 2-D frames are in files with the '2d' suffix and 'SPECTRUM' OB
    polynomial, and the height of the order in pixels. From this extension, a user can select only pixels that fall in
    their order of choice. 
 
-- ***WAVELENGTHS*** Extension: 2-D image of the wavelengths per pixel in Angstroms. This extension can be used if users would
+- ***WAVELENGTH*** Extension: 2-D image of the wavelengths per pixel in Angstroms. This extension can be used if users would
   like to re-extract a spectrum or re-fit the data using a different technique.
 
 - ***BINNED2D*** Extension: This extension is a binary fits table that is broken down into wavelength bins. This pre-binned
@@ -89,7 +89,7 @@ Lamp flat observations of a Tungsten Halogen source are taken primarily to corre
 useful for the red order. The blue order has a dichroic that blocks lines from the lamp, but also renders the blue order
 of the flat unusable. In the future, different lamps may be installed to flat field in the blue.
 
-The individual lamp flats have the 'SCI', 'BPM', 'ERR', 'ORDER_COEFFS', and 'WAVELENGTHS' extensions. The 'SCI' extension
+The individual lamp flats have the 'SCI', 'BPM', 'ERR', 'ORDER_COEFFS', and 'WAVELENGTH' extensions. The 'SCI' extension
 contains the raw image data (bias subtracted and gain-corrected to electrons). The other extensions are the same structure
 as the 2-D spectroscopic images.
 
@@ -105,7 +105,7 @@ store the combined bad pixel mask and the combined error array in the future.
 Arc Frames
 ----------
 HgAr exposures are used for wavelength calibration. These frames have an 'a91' filename suffix and an OBSTYPE of ARC.
-The only difference from the 2-D spectroscopic frames described above is that the ***WAVELENGTHS*** extension is derived from
+The only difference from the 2-D spectroscopic frames described above is that the ***WAVELENGTH*** extension is derived from
 this frame rather than being copied in. Science frames reference the arc that provided the WAVELENGTH extension via the 
 L1IDARC header keyword. The ***EXTRACTED*** extension provides an unweighted binned sum of the arc frame, typically for 
 diagnostic purposes. The 'fluxraw' and 'fluxrawerror' columns are given in electrons. The 'wavelength' and 'binwidth' columns 

@@ -1,3 +1,8 @@
+0.18.0 (2025-07-14)
+-------------------
+- Updated the wavelength solution to make the 2d solution more stable. We now fit features row by row in a
+  flattened order image
+
 0.17.1 (2025-04-29)
 -------------------
 - We now build arm64 docker images (for apple silicon) in the automated github actions
