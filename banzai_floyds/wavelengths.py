@@ -371,7 +371,7 @@ class CalibrateWavelengths(Stage):
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
     TILT_COEFF_ORDER = {'coj': 0, 'ogg': 0}
-    OFFSET_RANGES = {1: np.arange(7000.0, 7600.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
+    OFFSET_RANGES = {1: np.arange(7000.0, 7900.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
     # These thresholds were set using the data processed by the characterization tests.
     # The notebook is in the diagnostics folder
     MATCH_THRESHOLDS = {1: 50.0, 2: 25.0}

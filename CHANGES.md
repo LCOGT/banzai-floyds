@@ -1,3 +1,8 @@
+0.19.0 (2025-08-15)
+-------------------
+- Updated how we trace the profile. We now stack the profile in a more robust way that should be less
+  sensitive to sky brightness
+
 0.18.0 (2025-07-14)
 -------------------
 - Updated the wavelength solution to make the 2d solution more stable. We now fit features row by row in a
