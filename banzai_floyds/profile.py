@@ -81,7 +81,7 @@ def fit_profile(data, domains, order_heights, center_polynomial_order=7, width_p
                                      'sigma_error': [np.sqrt(covariance[1, 1])]})
             trace_points = vstack([trace_points, new_trace_table])
         this_order = trace_points['order'] == order_id
-        if len(trace_points) > 0:
+        if len(trace_points) > center_polynomial_order:
             center_polynomial = Legendre.fit(trace_points['wavelength'][this_order],
                                              trace_points['center'][this_order],
                                              w=trace_points['center_error'][this_order] ** -2,
