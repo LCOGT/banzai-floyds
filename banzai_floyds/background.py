@@ -82,7 +82,7 @@ def set_background_region(image):
     Notes
     -----
     We no longer allow the background region to go to the edge of the order because weird things happen
-    there. We also require at least 5 pixels on each of the trace to be in the background region.
+    there. We also require at least 5 pixels on each side of the trace to be in the background region.
     """
     if 'in_background' in image.binned_data.colnames:
         return
@@ -95,17 +95,17 @@ def set_background_region(image):
         order_height = image.orders.order_heights[order_id - 1]
         profile_center = data['y_order'] - data['y_profile']
         # We choose a 2 pixel buffer at the edge of the order as a no fly zone
-        # Note the minimum function here. This is different that min because it works elementwise
+        # Note the minimum function here. This is different than min because it works elementwise
         lower_background_region = image.background_windows[order_id - 1][0]
         lower_lim = data['y_order'] >= np.maximum(profile_center + lower_background_region[0] * data['profile_sigma'],
                                                   -(order_height // 2) + 2)
+        # We require a minimum of 5 pixels in the background region on each side of the trace (+2 for the edge buffer)
         upper_lim = data['y_order'] <= np.maximum(profile_center + lower_background_region[1] * data['profile_sigma'],
                                                   -(order_height // 2) + 7)
         in_lower_region = np.logical_and(lower_lim, upper_lim)
         upper_background_region = image.background_windows[order_id - 1][1]
         upper_lim = data['y_order'] <= np.minimum(profile_center + upper_background_region[1] * data['profile_sigma'],
                                                   order_height // 2 - 2)
-        # We require a minimum of 5 pixels in the background region
         lower_lim = data['y_order'] >= np.minimum(profile_center + upper_background_region[0] * data['profile_sigma'],
                                                   order_height // 2 - 7)
         in_upper_region = np.logical_and(upper_lim, lower_lim)
