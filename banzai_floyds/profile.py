@@ -77,7 +77,7 @@ def fit_profile(data, domains, order_heights, center_polynomial_order=7, width_p
                                      'center': [best_fit[0]],
                                      'order': [order_id],
                                      'center_error': [np.sqrt(covariance[0, 0])],
-                                     'sigma': [best_fit[1]], 
+                                     'sigma': [best_fit[1]],
                                      'sigma_error': [np.sqrt(covariance[1, 1])]})
             trace_points = vstack([trace_points, new_trace_table])
         this_order = trace_points['order'] == order_id

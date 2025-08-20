@@ -77,6 +77,13 @@ def fit_background(data, background_order=3):
 
 
 def set_background_region(image):
+    """ Convert the background region in n-sigma to a pixel-by-pixel mask
+
+    Notes
+    -----
+    We no longer allow the background region to go to the edge of the order because weird things happen
+    there. We also require at least 5 pixels on each of the trace to be in the background region.
+    """
     if 'in_background' in image.binned_data.colnames:
         return
 
@@ -85,12 +92,27 @@ def set_background_region(image):
         in_order = image.binned_data['order'] == order_id
         this_background = np.zeros(in_order.sum(), dtype=bool)
         data = image.binned_data[in_order]
-        for background_region in image.background_windows[order_id - 1]:
-            in_background_reg = data['y_profile'] >= (background_region[0] * data['profile_sigma'])
-            in_background_reg = np.logical_and(data['y_profile'] <= (background_region[1] * data['profile_sigma']),
-                                               in_background_reg)
-            this_background = np.logical_or(this_background, in_background_reg)
-            image.binned_data['in_background'][in_order] = this_background
+        order_height = image.orders.order_heights[order_id - 1]
+        profile_center = data['y_order'] - data['y_profile']
+        # We choose a 2 pixel buffer at the edge of the order as a no fly zone
+        # Note the minimum function here. This is different that min because it works elementwise
+        lower_background_region = image.background_windows[order_id - 1][0]
+        lower_lim = data['y_order'] >= np.maximum(profile_center + lower_background_region[0] * data['profile_sigma'],
+                                                  -(order_height // 2) + 2)
+        upper_lim = data['y_order'] <= np.maximum(profile_center + lower_background_region[1] * data['profile_sigma'],
+                                                  -(order_height // 2) + 7)
+        in_lower_region = np.logical_and(lower_lim, upper_lim)
+        upper_background_region = image.background_windows[order_id - 1][1]
+        upper_lim = data['y_order'] <= np.minimum(profile_center + upper_background_region[1] * data['profile_sigma'],
+                                                  order_height // 2 - 2)
+        # We require a minimum of 5 pixels in the background region
+        lower_lim = data['y_order'] >= np.minimum(profile_center + upper_background_region[0] * data['profile_sigma'],
+                                                  order_height // 2 - 7)
+        in_upper_region = np.logical_and(upper_lim, lower_lim)
+
+        in_background_reg = np.logical_or(in_upper_region, in_lower_region)
+        this_background = np.logical_or(this_background, in_background_reg)
+        image.binned_data['in_background'][in_order] = this_background
     for order in [1, 2]:
         for reg_num, region in enumerate(image.background_windows[order - 1]):
             image.meta[f'BKWO{order}{reg_num}0'] = (
@@ -102,7 +124,7 @@ def set_background_region(image):
 
 
 class BackgroundFitter(Stage):
-    DEFAULT_BACKGROUND_WINDOW = (7.5, 15)
+    DEFAULT_BACKGROUND_WINDOW = (4, 12.5)
 
     def do_stage(self, image):
         if not image.background_windows:

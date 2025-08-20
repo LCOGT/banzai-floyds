@@ -2,6 +2,8 @@
 -------------------
 - Updated how we trace the profile. We now stack the profile in a more robust way that should be less
   sensitive to sky brightness
+- Updated the background region to always have at least 5 pixels on each side of the profile and to ignore the
+  outermost 2 pixels in each order.
 
 0.18.0 (2025-07-14)
 -------------------
