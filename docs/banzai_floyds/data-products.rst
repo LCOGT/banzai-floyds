@@ -67,7 +67,7 @@ The non-extracted 2-D frames are in files with the '2d' suffix and 'SPECTRUM' OB
   - 'wavelength_bin': The wavelength bin (Angstrom) from the extraction combining orders
   - 'wavelength_bin_width': The wavelength bin width (Angstrom) from the extraction combining orders
   - 'y_order': The y-position of the pixel relative to the center of the order
-  - 'y_profile': The y-position of the center of the order
+  - 'y_profile': The y-position relative to the center of the profile (profile center is at 0)
   - 'profile_sigma': The profile width (sigma) in pixels
   - 'in_extraction': Boolean flag if the pixel is in the extraction region
   - 'background': Background value of the pixel in units of electrons

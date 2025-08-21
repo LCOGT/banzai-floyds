@@ -38,3 +38,20 @@ class Legendre2d:
         x_to_fit = mapdomain(x, self.domains[0], self.windows[0])
         y_to_fit = mapdomain(y, self.domains[1], self.windows[1])
         return legval(x_to_fit, self.x_coeffs) * legval(y_to_fit, self.y_coeffs)
+
+
+def interp_with_errors(x, y, yerr, x_new):
+    if np.min(x_new) < np.min(x) or np.max(x_new) > np.max(x):
+        raise ValueError('X for interpolation must be within the input range')
+    y_new = np.interp(x_new, x, y)
+
+    # This is a cute way to find the two bracketing indices for each new x value
+    left_indices = np.searchsorted(x, x_new, side='right') - 1
+
+    # Calculate the fractional distance between the bracketing x-values
+    # This is the term that shows up in the propogation of uncertatinty
+    alpha = (x_new - x[left_indices]) / (x[left_indices + 1] - x[left_indices])
+
+    yerr_new = np.sqrt((1 - alpha)**2 * yerr[left_indices]**2 + alpha**2 * yerr[left_indices + 1]**2)
+
+    return y_new, yerr_new
