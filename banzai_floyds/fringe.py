@@ -8,6 +8,8 @@ from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.matched_filter import optimize_match_filter
 from banzai.logs import get_logger
 import numpy as np
+from banzai.data import ArrayData
+from astropy.io import fits
 
 logger = get_logger()
 
@@ -118,6 +120,13 @@ class FringeCorrector(Stage):
         image.uncertainty[to_correct] /= fringe_correction[fringe_correction > 0.1]
         image.meta['L1FRNGOF'] = (fringe_offset, 'Fringe offset (pixels)')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
+
+        fringe_data = np.zeros_like(image.data, dtype=np.float32)
+        fringe_data[in_order] = fringe_correction
+        header = fits.Header()
+        header['L1IDFRNG'] = image.meta['L1IDFRNG'], 'ID of Fringe frame'
+        header['L1FRNGOF'] = fringe_offset, 'Fringe offset (pixels)'
+        image.add_or_update(ArrayData(fringe_data, name='FRINGE', meta=header))
         return image
 
 
