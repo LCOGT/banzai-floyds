@@ -123,9 +123,10 @@ class FringeCorrector(Stage):
 
         fringe_data = np.zeros_like(image.data, dtype=np.float32)
         fringe_data[in_order] = fringe_correction
-        header = fits.Header({'L1IDFRNG': (image.fringe.filename, 'ID of Fringe frame'),
-                              'L1FRNGOF': (fringe_offset, 'Fringe offset (pixels)')})
-        image['FRINGE'] = ArrayData(fringe_data, 'FRINGE', header)
+        header = fits.Header()
+        header['L1IDFRNG'] = image.meta['L1IDFRNG'], 'ID of Fringe frame'
+        header['L1FRNGOF'] = fringe_offset, 'Fringe offset (pixels)'
+        image.add_or_update(ArrayData(fringe_data, name='FRINGE', meta=header))
         return image
 
 

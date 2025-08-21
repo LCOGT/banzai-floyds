@@ -187,6 +187,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         frame.input_fringe = input_fringe_frame
     if include_super_fringe and fringe:
         frame.fringe = super_fringe_frame
+        frame.meta['L1IDFRNG'] = 'super_fringe'
     if not flat_spectrum:
         frame.input_spectrum_wavelengths = np.arange(3000.0, 12000.0, 0.1)
         frame.input_spectrum = flux_normalization * continuum_polynomial(frame.input_spectrum_wavelengths)

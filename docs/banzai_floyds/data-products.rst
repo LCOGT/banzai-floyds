@@ -83,8 +83,8 @@ The non-extracted 2-D frames are in files with the '2d' suffix and 'SPECTRUM' OB
 - ***BACKGROUND*** Extension: This extension has a 2-D image of the pixel-by-pixel background value in electrons. This
   array can be used directly by the user to subtract the background from the data.
 
-- ***FRINGE*** Extension: This extension has a 2-D image of the fringe pattern used to correct the data. This
-  data is shifted and interpolated from the stacked super fringed that was used.
+- ***FRINGE*** Extension: This extension has a 2-D image of the fringe pattern used to correct the data. 
+  This data is shifted and interpolated from the stacked super fringe that was used.
 
 Lamp Flats
 ----------
