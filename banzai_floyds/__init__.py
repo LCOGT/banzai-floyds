@@ -2,4 +2,4 @@ from importlib.metadata import version
 
 __version__ = version("banzai-floyds")
 
-all = ['__version__']
+__all__ = ['__version__']
