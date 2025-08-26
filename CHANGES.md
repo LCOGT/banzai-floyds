@@ -1,3 +1,7 @@
+0.20.1 (2025-08-26)
+-------------------
+- We now properly save the version of the banzai-floyds pipeline in the fits header rather than base banzai
+
 0.20.0 (2025-08-21)
 -------------------
 - We now save the shifted fringe data used for the correction in each science spectrum frame.

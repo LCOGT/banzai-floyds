@@ -1,4 +1,8 @@
 from banzai.settings import *  # noqa: F401,F403
+import banzai_floyds
+
+
+PIPELINE_VERSION = banzai_floyds.__version__
 
 ORDERED_STAGES = [
     'banzai.bias.OverscanSubtractor',
