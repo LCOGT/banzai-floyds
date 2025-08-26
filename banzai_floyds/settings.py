@@ -1,4 +1,8 @@
 from banzai.settings import *  # noqa: F401,F403
+import banzai_floyds
+
+
+PIPELINE_VERSION = banzai_floyds.__version__
 
 ORDERED_STAGES = [
     'banzai.bias.OverscanSubtractor',
@@ -59,3 +63,5 @@ CALIBRATION_SET_CRITERIA = {'SKYFLAT': [], 'LAMPFLAT': ['slit_width'], 'ARC': ['
 OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']
 
 LOSSLESS_EXTENSIONS = ['WAVELENGTH']
+
+PIPELINE_VERSION = 
