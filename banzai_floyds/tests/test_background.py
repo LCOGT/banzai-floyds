@@ -159,6 +159,6 @@ def test_background_region_off_chip():
                                        in_background)
         in_background = np.logical_and(in_background, in_order)
         assert np.all(fake_data.binned_data['in_background'][in_background])
-        # We choose a minumum background region of 3 (5 pixels from the edge but omit the outer 2)
+        # We choose a minimum background region of 3 (5 pixels from the edge but omit the outer 2)
         # With an upper and lower region (factor of 2) and 2 orders (facotr of 2)
         assert np.sum(fake_data.binned_data['in_background'][in_order]) == 5 * 2 * nx
