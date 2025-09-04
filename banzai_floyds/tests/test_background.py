@@ -114,3 +114,51 @@ def test_background_region():
         in_background = np.logical_and(in_background, in_order)
         assert np.all(fake_data.binned_data['in_background'][in_background])
         assert np.sum(fake_data.binned_data['in_background'][in_order]) == (upper_edge - lower_edge + 1) * 2 * nx
+
+
+def test_background_region_off_chip():
+    FakeImage = namedtuple('FakeImage', ['binned_data', 'meta', 'background_windows', 'orders'])
+    nx, ny = 103, 101
+    lower_edge = 30
+    upper_edge = 35
+    x, y = np.meshgrid(np.arange(nx), np.arange(ny))
+    order_centers = [30, 65]
+    order_height = 27
+    order_data = np.zeros_like(x)
+    y_order = np.zeros_like(x)
+    for order_id in [1, 2]:
+        in_order = order_centers[order_id - 1] - (order_height // 2) <= y
+        in_order = np.logical_and(y <= order_centers[order_id - 1] + order_height // 2, in_order)
+        order_data[in_order] = order_id
+        y_order[in_order] = y[in_order] - order_centers[order_id - 1]
+    profile_sigma = 1.0
+    # Set the profile center to be the center of the order
+    y_profile = y_order.copy()
+
+    FakeOrders = namedtuple('FakeOrders', ['data', 'order_heights'])
+    orders = FakeOrders(data=order_data, order_heights=[order_height, order_height])
+
+    binned_data = Table({'x': x.ravel(), 'y': y.ravel(), 'order': order_data.ravel(),
+                         'profile_sigma': profile_sigma * np.ones(x.size),
+                         'y_profile': y_profile.ravel(), 'y_order': y_order.ravel()})
+    fake_data = FakeImage(binned_data, {}, [[[-upper_edge, -lower_edge], [lower_edge, upper_edge]],
+                                            [[-upper_edge, -lower_edge], [lower_edge, upper_edge]]], orders)
+    set_background_region(fake_data)
+    # The background region falls outside the order so it should be the default 5 pixels wide on both sides
+    for order in [1, 2]:
+        in_order = fake_data.binned_data['order'] == order
+        # Check the lower region first
+        in_background = fake_data.binned_data['y'] >= order_centers[order - 1] + (order_height // 2) - 7
+        in_background = np.logical_and(fake_data.binned_data['y'] < order_centers[order - 1] + (order_height // 2) - 2,
+                                       in_background)
+        in_background = np.logical_and(in_background, in_order)
+        assert np.all(fake_data.binned_data['in_background'][in_background])
+
+        in_background = fake_data.binned_data['y'] <= order_centers[order - 1] - (order_height // 2) + 7
+        in_background = np.logical_and(fake_data.binned_data['y'] > order_centers[order - 1] - (order_height // 2) + 2,
+                                       in_background)
+        in_background = np.logical_and(in_background, in_order)
+        assert np.all(fake_data.binned_data['in_background'][in_background])
+        # We choose a minumum background region of 3 (5 pixels from the edge but omit the outer 2)
+        # With an upper and lower region (factor of 2) and 2 orders (facotr of 2)
+        assert np.sum(fake_data.binned_data['in_background'][in_order]) == 5 * 2 * nx

@@ -113,6 +113,8 @@ class FringeCorrector(Stage):
         logger.info('Correcting for fringing', image=image)
         x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
         in_order = image.orders.data == 1
+        # TODO: Should this be + or - in the offset. Feels like the difference between a passive and
+        # active transformation
         fringe_correction = fringe_spline(np.array([x[in_order], y[in_order] - fringe_offset]).T)
         to_correct = in_order.copy()
         to_correct[in_order] = fringe_correction > 0.1

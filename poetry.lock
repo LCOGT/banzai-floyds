@@ -2116,7 +2116,7 @@ test = ["pytest (>=7.4)", "pytest-cov (>=4.1)"]
 
 [[package]]
 name = "lco-banzai"
-version = "1.24.5"
+version = "1.24.6"
 description = "Python data reduction package for LCOGT data"
 optional = false
 python-versions = ">=3.10,<4"
@@ -2158,15 +2158,15 @@ torch = "*"
 [package.extras]
 cpu = ["torch"]
 cuda = ["torch"]
-docs = ["sphinx-astropy"]
+docs = ["ipykernel", "nbsphinx", "sphinx-astropy", "sphinx-autobuild", "sphinx-pyproject", "sphinx_rtd_theme"]
 style = ["pycodestyle"]
 test = ["coverage", "pytest (>=4.0)", "pytest-astropy"]
 
 [package.source]
 type = "git"
 url = "https://github.com/lcogt/banzai.git"
-reference = "1.24.5"
-resolved_reference = "b9dfd9497036f806e36270448c6389057b41d6c7"
+reference = "1.24.6"
+resolved_reference = "f988da1c9d6f0462cfd72c568981d955a2a6a7e4"
 
 [[package]]
 name = "lcogt-logging"
@@ -5718,4 +5718,4 @@ test = ["coverage", "mock", "pytest", "pytest-astropy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4"
-content-hash = "16e134476845106dac4b0ffeb646d2568bd2df05e0dcec68df9ab70329a3776a"
+content-hash = "9f6ed470e1c1bbae7f89574837d76d8432e8ddb0f73f8be83f3c10e4d260b819"
