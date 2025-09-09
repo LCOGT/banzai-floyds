@@ -1,3 +1,8 @@
+0.20.2 (2025-09-04)
+-------------------
+- Added an additional test to validate that we do indeed never use data off the chip for the background
+  and that we always have a minimum background region size of 5 pixels on each side of the trace
+
 0.20.1 (2025-08-26)
 -------------------
 - We now properly save the version of the banzai-floyds pipeline in the fits header rather than base banzai
