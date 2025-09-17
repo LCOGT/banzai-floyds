@@ -3,13 +3,16 @@ from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai.stages import Stage
 from banzai.utils import import_utils
 from banzai.utils.file_utils import make_calibration_filename_function
+from banzai_floyds.utils.order_utils import get_order_2d_region
 from datetime import datetime
 from scipy.interpolate import CloughTocher2DInterpolator
-from banzai_floyds.matched_filter import optimize_match_filter
+from banzai_floyds.matched_filter import optimize_match_filter, matched_filter_metric
 from banzai.logs import get_logger
 import numpy as np
 from banzai.data import ArrayData
 from astropy.io import fits
+import pywt
+
 
 logger = get_logger()
 
@@ -17,7 +20,9 @@ logger = get_logger()
 def fringe_weights(theta, x, spline):
     y_offset = theta
     x, y = x
-    return spline(np.array([x, y - y_offset]).T)
+    weights = spline(np.array([x, y - y_offset]).T)
+    weights -= 1.0
+    return weights
 
 
 def find_fringe_offset(image, fringe_spline):
@@ -25,9 +30,24 @@ def find_fringe_offset(image, fringe_spline):
     # We implicitly limit the parameter search space to +- 10 pixels here.
     trimmed_orders = image.orders.new(image.orders.order_heights[0] - 20)
     red_order = trimmed_orders.data == 1
-
+    # Grid +- 8 pixels offset to make sure our optimizer doesn't get stuck in a local minimum
+    offsets = np.arange(-8, 9)
+    metrics = [
+        matched_filter_metric(
+            [offset],
+            image.data[red_order] - 1.0,
+            image.uncertainty[red_order],
+            fringe_weights,
+            None,
+            None,
+            (x2d[red_order], y2d[red_order]),
+            *(fringe_spline,))
+        for offset in offsets
+    ]
+    import pdb; pdb.set_trace()
     # Maximize the match filter with weight function using the fringe spline
-    return optimize_match_filter([0], image.data[red_order], image.uncertainty[red_order], fringe_weights,
+    return optimize_match_filter([offsets[np.argmax(metrics)]], image.data[red_order] - 1.0,
+                                 image.uncertainty[red_order], fringe_weights,
                                  (x2d[red_order], y2d[red_order]), args=(fringe_spline,))[0]
 
 
@@ -35,6 +55,79 @@ def fit_smooth_fringe_spline(image, data_region):
     x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
     return CloughTocher2DInterpolator(np.array([x[data_region], y[data_region]]).T, image[data_region],
                                       fill_value=1.0)
+
+
+def get_fringe_region_data(image, cutoff):
+    # Get data from the red order that is blue of the cutoff, is rectangular, and is
+    # fully contained by pixels (no extrapolation at the edges)
+    order = 1
+    x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
+    wavelengths = image.wavelengths
+    order_region = get_order_2d_region(image.orders.data == order)
+    # Get the minimum x-value that has a wavelength > cutoff. The dichroic causes problems
+    # if we fit the whole order
+    x_cutoff = np.max(x2d[order_region][wavelengths[order_region] < cutoff]) + 1
+    x_to_grid = np.arange(int(x_cutoff), np.max(x2d[order_region]) + 1, dtype=int)
+    order_center = image.orders.center(x2d[order_region])[order - 1]
+    y_min = int(np.ceil(np.max(y2d[order_region][0] - order_center[0])))
+    y_max = int(np.floor(np.min(y2d[order_region][-1] - order_center[-1])))
+    y_to_grid = np.arange(y_min, y_max + 1, dtype=int)
+    # Resample the data in this region to be on a grid that is fully enclosed by the edge pixels
+    # Set the center of the order at zero
+    interpolator = CloughTocher2DInterpolator((x2d[order_region].ravel(),
+                                              (y2d[order_region] - order_center).ravel()),
+                                              image.data[order_region].ravel())
+    x_grid, y_grid = np.meshgrid(x_to_grid, y_to_grid)
+    data = interpolator(x_grid, y_grid)
+    xgrid2d, ygrid2d = np.meshgrid(x_grid, y_grid)
+    ygrid2d += image.orders.center(xgrid2d)[order - 1]
+    return data, xgrid2d, ygrid2d
+
+
+def make_fringe_continuum_model(data, wavelet, level):
+    # Fit wavelets to the data and get the lowest order coefficients.
+    coeffs = pywt.wavedec2(data, wavelet=wavelet, level=level,
+                           mode='symmetric')
+
+    continuum_coeffs = [coeffs[0]] + [(np.zeros_like(d[0]), np.zeros_like(d[1]),
+                                       np.zeros_like(d[2])) for d in coeffs[1:]]
+
+    continuum_model = pywt.waverec2(continuum_coeffs, wavelet=wavelet,
+                                    mode='symmetric')
+
+    h, w = data.shape
+    continuum_model = continuum_model[:h, :w]
+    return continuum_model
+
+
+class FringeContinuumFitter(Stage):
+    WAVELET_CLASS = 'db8'
+    # This appears to be specific to our data and the code does produce a warning
+    # but the results look the best with this level of decomposition
+    WAVELET_LEVEL = 5
+    # We just need to be redward of the dichroic cutoff which is ~4500 Angstroms
+    CUTOFF_WAVELENGTH = 4700
+
+    def do_stage(self, image):
+        fringe_data, fringe_x2d, fringe_y2d = get_fringe_region_data(image, cutoff=self.CUTOFF_WAVELENGTH)
+        continuum_model = make_fringe_continuum_model(fringe_data, self.WAVELET_CLASS,
+                                                      self.WAVELET_LEVEL)
+        fringe_interpolator = CloughTocher2DInterpolator((fringe_x2d.ravel(), 
+                                                          fringe_y2d.ravel()),
+                                                         continuum_model.ravel(),
+                                                         fill_value=1)
+        continuum_data = np.zeros_like(image.data)
+        continuum_data[image.orders.data == 1] = image.data[image.orders.data == 1]
+        x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
+        to_interpolate = []
+        for x_column, y_column in zip(fringe_x2d.T, fringe_y2d.T):
+            to_interpolate.append([(y, x_column[0]) for y in np.arange(int(np.ceil(np.min(y_column))), int(np.floor(np.max(y_column))))])
+        continuum_data[to_interpolate] = fringe_interpolator(x2d[to_interpolate],
+                                                             y2d[to_interpolate])
+        image.data[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
+        image.uncertainty[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
+        image.add_or_update(ArrayData(continuum_data, name='CONTINUUM', meta=fits.Header({})))
+        return image
 
 
 class FringeMaker(CalibrationMaker):
@@ -71,6 +164,8 @@ class FringeMaker(CalibrationMaker):
             # We want a S/N of greater than 10 in the data
             high_sn = image.data / image.uncertainty > 10.0
             data_to_fit = np.logical_and(image.orders.data == 1, high_sn)
+            # Anything with exactly = 1 is just filled data
+            data_to_fit = np.logical_and(data_to_fit, image.data != 1.0)
             fringe_spline = fit_smooth_fringe_spline(image.data, data_to_fit)
 
             # TODO: Someone needs to check this transformation
@@ -109,6 +204,13 @@ class FringeCorrector(Stage):
         logger.info('Interpolating super fringe', image=image)
         fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0.1)
         logger.info('Fitting fringe offset', image=image)
+
+        # If this doesn't work, we may need to adopt a more complex algorithm.
+        # We could minimize the difference in the fft of the effected fringe pixels
+        # to find the shift
+        # This will require us to resample the data onto a rectangular grid using interpolation
+        # For now, since we now properly have a match filter that has positive and negatives
+        # (1 +- fringe), this should still work
         fringe_offset = find_fringe_offset(image, fringe_spline)
         logger.info('Correcting for fringing', image=image)
         x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))

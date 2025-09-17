@@ -45,7 +45,8 @@ CALIBRATION_STACKER_STAGES = {'LAMPFLAT': ['banzai_floyds.fringe.FringeMaker']}
 CALIBRATION_MIN_FRAMES['LAMPFLAT'] = 2  # noqa: F405
 CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = ('banzai_floyds.utils.file_utils.config_to_filename',)  # noqa: F405
 
-EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': None, 'STANDARD': None,
+EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': ['banzai_floyds.fringe.FringeContinuumFitter'],
+                'STANDARD': None,
                 'ARC': ['banzai_floyds.wavelengths.CalibrateWavelengths'],
                 'SKYFLAT': ['banzai_floyds.orders.OrderSolver']}
 

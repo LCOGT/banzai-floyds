@@ -22,7 +22,8 @@ dependencies = [
     "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.24.6",
     "matplotlib",
     "torch",
-    "ipython"
+    "ipython",
+    "pywavelets"
 ]
 [project.optional-dependencies]
 test = [
