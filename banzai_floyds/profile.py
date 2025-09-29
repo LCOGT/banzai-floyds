@@ -62,7 +62,7 @@ def fit_profile(data, domains, order_heights, center_polynomial_order=7, width_p
             centers = np.arange(np.min(interp_y), np.max(interp_y) + 1)
             for center in centers:
                 metric = matched_filter_metric([center,], flux, flux_error, profile_gauss_fixed_width,
-                                               None, None, interp_y, sigma)
+                                               interp_y, sigma)
                 snrs.append(metric)
 
             initial_guess = (centers[np.argmax(snrs)], sigma, flux[np.argmax(snrs)])

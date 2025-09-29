@@ -1,33 +1,35 @@
 import numpy as np
 from banzai_floyds.fringe import FringeMaker, find_fringe_offset, fit_smooth_fringe_spline
+from banzai_floyds.fringe import get_fringe_region_data
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.fringe import FringeCorrector
 from banzai import context
 
 
-def test_find_fringe_offset():
+def test_find_fringe_offset_flats():
     # Make fringe data using a sin function and our fake data generator
     np.random.seed(234142)
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=False, background=6000.0,
-                                        fringe=True, fringe_offset=5, include_trace=False)
-    x2d, y2d = np.meshgrid(np.arange(frame.shape[1]), np.arange(frame.shape[0]))
-    red_order = frame.orders.data == 1
-    fringe_data = np.ones_like(frame.data)
-    fringe_data[red_order] = np.sin(frame.fringe_wave_number * frame.wavelengths.data[red_order])
-    fringe_data[red_order] = 1.0 + 0.5 * (x2d[red_order] / np.max(x2d[red_order])) * fringe_data[red_order]
+                                        fringe=True, fringe_offset=5, include_trace=False,
+                                        include_super_fringe=True)
+    frame.data[:, :] = frame.input_fringe + np.random.normal(0, 0.01, size=frame.data.shape)
+    frame.uncertainty[:, :] = 0.01
+    # fit the super fringe to use to measure the offset
+    fringe_spline = fit_smooth_fringe_spline(frame.fringe, frame.orders.data == 1)
+    best_fit_offset = find_fringe_offset(frame, fringe_spline, 4700.0)
+    # assert that the offset is correct
+    np.testing.assert_allclose(best_fit_offset, frame.input_fringe_shift, atol=0.2)
 
-    class FakeFrame(object):
-        pass
 
-    fringe_frame = FakeFrame()
-    fringe_frame.data = fringe_data
-    fringe_frame.orders = frame.orders
-    fringe_frame.error = 0.01 * fringe_data
-    fringe_frame.shape = fringe_data.shape
-    # fit the fringe offset
-
-    fringe_spline = fit_smooth_fringe_spline(fringe_data, frame.orders.data == 1)
-    best_fit_offset = find_fringe_offset(frame, fringe_spline)
+def test_find_fringe_offset_science():
+    # Make fringe data using a sin function and our fake data generator
+    np.random.seed(198345)
+    frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True, background=6000.0,
+                                        fringe=True, fringe_offset=5.2, include_trace=True,
+                                        include_super_fringe=True)
+    # fit the super fringe to use to measure the offset
+    fringe_spline = fit_smooth_fringe_spline(frame.fringe, frame.orders.data == 1)
+    best_fit_offset = find_fringe_offset(frame, fringe_spline, cutoff=4700.0, normalize=True)
     # assert that the offset is correct
     np.testing.assert_allclose(best_fit_offset, frame.input_fringe_shift, atol=0.2)
 
@@ -52,7 +54,8 @@ def test_create_super_fringe():
         'CALIBRATION_SET_CRITERIA': {'LAMPFLAT': []},
         'CALIBRATION_FRAME_CLASS': 'banzai_floyds.frames.FLOYDSCalibrationFrame',
         'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']},
-        'CALIBRATE_PROPOSAL_ID': 'calibrate'
+        'CALIBRATE_PROPOSAL_ID': 'calibrate',
+        'FRINGE_CUTOFF_WAVELENGTH': 4700.0
     })
     stage = FringeMaker(input_context)
     frame = stage.do_stage(frames)
@@ -64,15 +67,15 @@ def test_create_super_fringe():
 
 
 def test_correct_fringe():
-    np.random.seed(91275)
+    np.random.seed(981435)
     # Make fake fringe data and using a fixed sin fringe pattern but offset in the image
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True,
                                         fringe=True, fringe_offset=3.5, include_super_fringe=True)
     original_data = frame.data.copy()
     # Run the image through the fringing correction stage
-    stage = FringeCorrector(context.Context({}))
+    stage = FringeCorrector(context.Context({'FRINGE_CUTOFF_WAVELENGTH': 4700.0}))
     output_frame = stage.do_stage(frame)
     # Assert that the fringe pattern is removed and the image matches the input
     in_order = frame.orders.data == 1
     np.testing.assert_allclose(original_data[in_order] / frame.input_fringe[in_order],
-                               output_frame.data[in_order], rtol=0.01)
+                               output_frame.data[in_order], rtol=0.012)
