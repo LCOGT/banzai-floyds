@@ -50,6 +50,9 @@ def matched_filter_normalization(data, error, weights, norm_data=False):
     Note that the normalization includes the square of the weights. The propagation of uncertainty for a weighted
     sum of independent measurements is variance = Σ (w / σ²)² σ² =  Σ w² / σ²
 
+    The additional option to normalize the signal with the data was taken from
+    https://scribblethink.org/Work/nvisionInterface/nip.html#eq3:xform by Lewis from Industrial Light and Magic.
+
     """
     norm = weights * weights
     if norm_data:

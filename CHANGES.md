@@ -1,3 +1,7 @@
+0.21.0 (2025-09-30)
+-------------------
+- Updated how we align fringe frames which should be more robust.
+
 0.20.2 (2025-09-04)
 -------------------
 - Added an additional test to validate that we do indeed never use data off the chip for the background

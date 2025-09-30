@@ -214,6 +214,9 @@ class FringeCorrector(Stage):
         # artifacts due to the edge of the slit
         fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0.1)
         logger.info('Fitting fringe offset', image=image)
+        # The additional option to normalize the signal with the data was taken from
+        # https://scribblethink.org/Work/nvisionInterface/nip.html#eq3:xform by Lewis from
+        # Industrial Light and Magic.
 
         fringe_offset = find_fringe_offset(image, fringe_spline, self.runtime_context.FRINGE_CUTOFF_WAVELENGTH,
                                            normalize=True)
