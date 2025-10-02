@@ -132,8 +132,9 @@ class FringeContinuumFitter(Stage):
         for x_column, y_column in zip(fringe_x2d.T, fringe_y2d.T):
             interp_range = np.arange(int(np.ceil(np.min(y_column))), int(np.floor(np.max(y_column))))
             to_interpolate.append([(y, x_column[0]) for y in interp_range])
-        continuum_data[to_interpolate] = fringe_interpolator(x2d[to_interpolate],
-                                                             y2d[to_interpolate])
+        ys, xs = zip(*to_interpolate)
+        continuum_data[ys, xs] = fringe_interpolator(x2d[ys, xs], y2d[ys, xs])
+
         image.data[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
         image.uncertainty[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
         image.add_or_update(ArrayData(continuum_data, name='CONTINUUM', meta=fits.Header({})))
