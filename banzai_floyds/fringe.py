@@ -12,8 +12,6 @@ import numpy as np
 from banzai.data import ArrayData
 from astropy.io import fits
 import pywt
-from scipy.fftpack import fft2
-from scipy.optimize import minimize
 
 
 logger = get_logger()
@@ -131,8 +129,9 @@ class FringeContinuumFitter(Stage):
         to_interpolate = []
         for x_column, y_column in zip(fringe_x2d.T, fringe_y2d.T):
             interp_range = np.arange(int(np.ceil(np.min(y_column))), int(np.floor(np.max(y_column))))
-            to_interpolate.append([(y, x_column[0]) for y in interp_range])
+            to_interpolate += [(y, x_column[0]) for y in interp_range]
         ys, xs = zip(*to_interpolate)
+        ys, xs = np.array(ys, dtype=int), np.array(xs, dtype=int)
         continuum_data[ys, xs] = fringe_interpolator(x2d[ys, xs], y2d[ys, xs])
 
         image.data[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
@@ -223,22 +222,24 @@ class FringeCorrector(Stage):
                                            normalize=True)
         logger.info('Correcting for fringing', image=image)
         x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-        in_order = image.orders.data == 1
+        in_order = np.logical_and(
+            image.orders.data == 1,
+            image.wavelengths.data >= self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
+        )
         # TODO: Should this be + or - in the offset. Feels like the difference between
         # a passive and active transformation
-        fringe_correction = fringe_spline(np.array([x[in_order], y[in_order] - fringe_offset]).T)
-        to_correct = in_order.copy()
-        to_correct[in_order] = np.logical_and(
+        fringe_correction = np.zeros_like(image.data)
+        fringe_correction[in_order] = fringe_spline(np.array([x[in_order], y[in_order] - fringe_offset]).T)
+        to_correct = np.logical_and(
+            in_order,
             fringe_correction > 0.1,
-            image.wavelengths.data[in_order] >= self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
         )
-        image.data[to_correct] /= fringe_correction[fringe_correction > 0.1]
-        image.uncertainty[to_correct] /= fringe_correction[fringe_correction > 0.1]
+        image.data[to_correct] /= fringe_correction[to_correct]
+        image.uncertainty[to_correct] /= fringe_correction[to_correct]
         image.meta['L1FRNGOF'] = (fringe_offset, 'Fringe offset (pixels)')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
 
-        fringe_data = np.zeros_like(image.data, dtype=np.float32)
-        fringe_data[in_order] = fringe_correction
+        fringe_data = fringe_correction.astype(np.float32)
         header = fits.Header()
         header['L1IDFRNG'] = image.meta['L1IDFRNG'], 'ID of Fringe frame'
         header['L1FRNGOF'] = fringe_offset, 'Fringe offset (pixels)'
