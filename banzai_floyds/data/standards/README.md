@@ -20,7 +20,11 @@ standards = [{'name': 'gd108', 'input_file': 'fgd108.dat', 'ra': 150.196859, 'de
 
 for standard in standards:
     eso_data = ascii.read(standard['input_file'])
-    data = Table({'wavelength': eso_data['col1'], 'flux': eso_data['col2']})
+    if standard['name'] != 'eg274':
+        scale = 1e-16
+    else:
+        scale = 1
+    data = Table({'wavelength': eso_data['col1'], 'flux': eso_data['col2'] * scale})
     hdu_list = fits.HDUList([fits.PrimaryHDU(header=fits.Header({'RA': standard['ra'], 'DEC': standard['dec'], 
                                                                  'OBSTYPE': 'fluxstandard'})), 
                              fits.BinTableHDU(data)])
