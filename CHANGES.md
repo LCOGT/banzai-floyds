@@ -1,3 +1,7 @@
+0.21.0 (2025-10-07)
+-------------------
+- Added correct scaling to standard star files so that the output spectra are in ergs/s/cm^2/A
+
 0.20.2 (2025-09-04)
 -------------------
 - Added an additional test to validate that we do indeed never use data off the chip for the background
