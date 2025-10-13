@@ -12,6 +12,9 @@ import numpy as np
 from banzai.data import ArrayData
 from astropy.io import fits
 import pywt
+from astropy.table import Table
+from banzai.data import DataTable
+from scipy.optimize import minimize
 
 
 logger = get_logger()
@@ -56,10 +59,45 @@ def find_fringe_offset(image, fringe_spline, cutoff, normalize=False):
                                  norm_data=normalize)[0]
 
 
+def science_fringe_metric(theta, data, error, x, y, spline):
+    offset, = theta
+    # Take the log for a holomorphic transformation of the fringe pattern
+    weights = np.log(spline(np.array([x, y - offset]).T))
+    log_errors2 = (error / data) ** 2
+    return ((np.log(data) - weights) ** 2 / log_errors2).sum()
+
+
+def find_fringe_offset_science(image, fringe_spline, cutoff):
+    x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
+    # We implicitly limit the parameter search space to +- 10 pixels here.
+    trimmed_orders = image.orders.new(image.orders.order_heights[0] - 20)
+    red_order = np.logical_and(trimmed_orders.data == 1, image.wavelengths.data >= cutoff)
+    offsets = np.arange(-8, 9)
+    metrics = []
+    for offset in offsets:
+        metric = science_fringe_metric(
+            [offset,],
+            image.data[red_order],
+            image.uncertainty[red_order],
+            x2d[red_order],
+            y2d[red_order],
+            fringe_spline
+        )
+        metrics.append(metric)
+
+    best_fit = minimize(
+        science_fringe_metric,
+        x0=[offsets[np.argmin(metrics)],],
+        args=(image.data[red_order], image.uncertainty[red_order],
+              x2d[red_order], y2d[red_order], fringe_spline)
+    )
+    return best_fit.x[0]
+
+
 def fit_smooth_fringe_spline(image, data_region):
     x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-    return CloughTocher2DInterpolator(np.array([x[data_region], y[data_region]]).T, image[data_region],
-                                      fill_value=1.0)
+    return CloughTocher2DInterpolator(np.array([x[data_region], y[data_region]]).T,
+                                      image[data_region], fill_value=0.0)
 
 
 def get_fringe_region_data(image, cutoff):
@@ -114,9 +152,9 @@ class FringeContinuumFitter(Stage):
     WAVELET_LEVEL = 5
 
     def do_stage(self, image):
-        fringe_data, fringe_x2d, fringe_y2d = get_fringe_region_data(
-            image,
-            cutoff=self.runtime_context.FRINGE_CUTOFF_WAVELENGTH)
+        cutoff = self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
+        fringe_data, fringe_x2d, fringe_y2d = get_fringe_region_data(image, cutoff=cutoff)
+
         continuum_model = make_fringe_continuum_model(fringe_data, self.WAVELET_CLASS,
                                                       self.WAVELET_LEVEL)
         fringe_interpolator = CloughTocher2DInterpolator((fringe_x2d.ravel(),
@@ -161,14 +199,18 @@ class FringeMaker(CalibrationMaker):
             in_order = images[0].orders.data == 1
             reference_fringe[in_order] = images[0].data[in_order]
         # Only fit where the fringe data is > 0.1. Anything smaller than this and we get really, bad residuals
-        # as we get close to zero
-        reference_fringe_spline = fit_smooth_fringe_spline(reference_fringe, reference_fringe > 0.1)
+        # Don't try to fit anything that is just filled with a value of 1
+        to_spline = np.logical_and(reference_fringe > 0.1, reference_fringe != 1.0)
+        reference_fringe_spline = fit_smooth_fringe_spline(reference_fringe, to_spline)
         super_fringe = np.zeros_like(images[0].data)
         super_fringe_weights = np.zeros_like(images[0].data)
+        fringe_offsets = []
         for image in images:
             # Fit a smoothing B-spline to data in the red order
             x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-            # find the offset to the rest of the splines:
+            # find the offset to the rest of the flats
+            # Note this is the shift to move the reference to the individual frame
+            # This shift also is in absolute x, y pixels. Not relative to either order center
             fringe_offset = find_fringe_offset(image, reference_fringe_spline,
                                                cutoff=self.runtime_context.FRINGE_CUTOFF_WAVELENGTH)
             # Interpolate onto a normal pixel grid using the order offset
@@ -180,12 +222,14 @@ class FringeMaker(CalibrationMaker):
             fringe_spline = fit_smooth_fringe_spline(image.data, data_to_fit)
 
             # TODO: Someone needs to check this transformation
-            shifted_order = np.logical_and(image.orders.shifted(-fringe_offset).data == 1, high_sn)
+            shifted_order = image.orders.shifted(-fringe_offset).data == 1
             offset_coordinates = [x[shifted_order], y[shifted_order] + fringe_offset]
             this_fringe = fringe_spline(np.array(offset_coordinates).T)
             this_fringe /= np.median(this_fringe[this_fringe > 0])
             super_fringe[shifted_order] += this_fringe
-            super_fringe_weights[shifted_order] += 1.0
+            has_data = y[shifted_order][this_fringe > 0], x[shifted_order][this_fringe > 0]
+            super_fringe_weights[has_data] += 1.0
+            fringe_offsets.append({'image': image.filename, 'offset': fringe_offset, 'altitude': image.altitude})
         # write out the calibration frame
         super_fringe[super_fringe_weights > 0] /= super_fringe_weights[super_fringe_weights > 0]
         make_calibration_name = make_calibration_filename_function(self.calibration_type,
@@ -198,6 +242,7 @@ class FringeMaker(CalibrationMaker):
         hdu_order = self.runtime_context.MASTER_CALIBRATION_EXTENSION_ORDER.get(self.calibration_type)
         super_frame = master_frame_class.init_master_frame(images, master_calibration_filename,
                                                            grouping_criteria=grouping, hdu_order=hdu_order)
+        super_frame.add_or_update(DataTable(Table(fringe_offsets), name='FRINGE_OFFSETS', meta=fits.Header()))
         super_frame.primary_hdu.data[:, :] = super_fringe[:, :]
         super_frame.primary_hdu.name = 'FRINGE'
         super_frame.proposal = self.runtime_context.CALIBRATE_PROPOSAL_ID
@@ -218,8 +263,7 @@ class FringeCorrector(Stage):
         # https://scribblethink.org/Work/nvisionInterface/nip.html#eq3:xform by Lewis from
         # Industrial Light and Magic.
 
-        fringe_offset = find_fringe_offset(image, fringe_spline, self.runtime_context.FRINGE_CUTOFF_WAVELENGTH,
-                                           normalize=True)
+        fringe_offset = find_fringe_offset_science(image, fringe_spline, self.runtime_context.FRINGE_CUTOFF_WAVELENGTH)
         logger.info('Correcting for fringing', image=image)
         x, y = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
         in_order = np.logical_and(

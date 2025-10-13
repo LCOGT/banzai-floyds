@@ -1,6 +1,6 @@
 import numpy as np
 from banzai_floyds.fringe import FringeMaker, find_fringe_offset, fit_smooth_fringe_spline
-from banzai_floyds.fringe import get_fringe_region_data
+from banzai_floyds.fringe import find_fringe_offset_science
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.fringe import FringeCorrector
 from banzai import context
@@ -29,7 +29,7 @@ def test_find_fringe_offset_science():
                                         include_super_fringe=True)
     # fit the super fringe to use to measure the offset
     fringe_spline = fit_smooth_fringe_spline(frame.fringe, frame.orders.data == 1)
-    best_fit_offset = find_fringe_offset(frame, fringe_spline, cutoff=4700.0, normalize=True)
+    best_fit_offset = find_fringe_offset_science(frame, fringe_spline, cutoff=4700.0)
     # assert that the offset is correct
     np.testing.assert_allclose(best_fit_offset, frame.input_fringe_shift, atol=0.2)
 
