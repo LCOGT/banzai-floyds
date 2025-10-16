@@ -20,7 +20,7 @@ standards = [{'name': 'gd108', 'input_file': 'fgd108.dat', 'ra': 150.196859, 'de
 
 for standard in standards:
     eso_data = ascii.read(standard['input_file'])
-    # Xshooter adopted a different convention that the other HST standards so we have to 
+    # Xshooter adopted a different convention than the other HST standards so we have to 
     # scale that one differently
     if standard['name'] != 'eg274':
         scale = 1e-16
