@@ -13,7 +13,6 @@ from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.arc_lines import arc_lines_table
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma
 from banzai_floyds.extract import extract
-from scipy.special import erf
 from copy import copy
 from astropy.table import Table, vstack
 from banzai.logs import get_logger
@@ -62,7 +61,7 @@ def linear_wavelength_solution(data, error, lines, dispersion, line_fwhm, offset
         domain = (0, len(data) - 1)
     # Step the model spectrum metric through each of the offsets and find the peak
     slope = dispersion * (len(data) // 2)
-    metrics = [matched_filter_metric((offset, slope), data, error, wavelength_model_weights, None, None,
+    metrics = [matched_filter_metric((offset, slope), data, error, wavelength_model_weights,
                                      np.arange(data.size), lines, fwhm_to_sigma(line_fwhm)) for offset in offset_range]
     best_fit_offset = offset_range[np.argmax(metrics)]
     return Legendre((best_fit_offset, slope), domain=domain)
@@ -107,21 +106,7 @@ def identify_peaks(data, error, line_fwhm, line_sep, domain=None, snr_threshold=
 
 def centroiding_weights(theta, x, line_sigma):
     center = theta[0]
-
-    # Originally we just used the gaussian, but we really need the gaussian integrated over pixels
-    # which is what this is. This should be more numerically stable without being too much slower
-    # It also may be overkill
-    upper_pixel_limits = np.zeros_like(x, dtype=float)
-    upper_pixel_limits[:-1] = (x[:-1] + x[1:]) / 2.0
-    # attach the last limit on the array
-    upper_pixel_limits[-1] = x[-1] + (x[-1] - upper_pixel_limits[-2])
-    lower_pixel_limits = np.zeros_like(x, dtype=float)
-    lower_pixel_limits[1:] = (x[:-1] + x[1:]) / 2.0
-    lower_pixel_limits[0] = x[0] - (lower_pixel_limits[1] - x[0])
-
-    weights = -erf((-upper_pixel_limits + center) / (np.sqrt(2) * line_sigma))
-    weights += erf((center - lower_pixel_limits) / (np.sqrt(2) * line_sigma))
-    weights /= 2.0
+    weights = gauss(x, center, line_sigma)
     return weights
 
 
@@ -148,7 +133,7 @@ def refine_peak_centers(data, error, peaks, line_fwhm, domain=None):
     x = np.arange(len(data)) + min(domain)
     best_fit_peaks = []
     for peak in peaks:
-        window = np.logical_and(x > peak - 2 * line_sigma, x < peak + 2 * line_sigma)
+        window = np.logical_and(x > peak - 5 * line_sigma, x < peak + 5 * line_sigma)
         best_fit_peak, = optimize_match_filter([peak], data[window], error[window],
                                                centroiding_weights, x[window], args=(line_sigma,))
         best_fit_peaks.append(best_fit_peak)

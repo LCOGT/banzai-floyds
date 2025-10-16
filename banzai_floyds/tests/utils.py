@@ -162,7 +162,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                                                         y2d[in_red_order] - fringe_offset]).T)
 
         data *= input_fringe_frame
-
     data = np.random.poisson(data.astype(int)).astype(float)
     data += np.random.normal(0.0, read_noise, size=data.shape)
     errors = np.sqrt(read_noise**2 + np.abs(data))
