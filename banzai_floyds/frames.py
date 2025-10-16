@@ -299,6 +299,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             id = None
         return id
 
+    @property
+    def altitude(self):
+        return self.meta.get('ALTITUDE', None)
+
 
 class FLOYDSCalibrationFrame(LCOCalibrationFrame, FLOYDSObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, grouping_criteria: list = None,
