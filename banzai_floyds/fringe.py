@@ -62,9 +62,10 @@ def find_fringe_offset(image, fringe_spline, cutoff, normalize=False):
 def science_fringe_metric(theta, data, error, x, y, spline):
     offset, = theta
     # Take the log for a holomorphic transformation of the fringe pattern
-    weights = np.log(spline(np.array([x, y - offset]).T))
+    weights = spline(np.array([x, y - offset]).T)
+    model_ok = weights > 1e-15
     log_errors2 = (error / data) ** 2
-    return ((np.log(data) - weights) ** 2 / log_errors2).sum()
+    return ((np.log(data[model_ok]) - np.log(weights[model_ok])) ** 2 / log_errors2[model_ok]).sum()
 
 
 def find_fringe_offset_science(image, fringe_spline, cutoff):
@@ -72,15 +73,16 @@ def find_fringe_offset_science(image, fringe_spline, cutoff):
     # We implicitly limit the parameter search space to +- 10 pixels here.
     trimmed_orders = image.orders.new(image.orders.order_heights[0] - 20)
     red_order = np.logical_and(trimmed_orders.data == 1, image.wavelengths.data >= cutoff)
+    to_fit = np.logical_and(red_order, image.data > 0.1)
     offsets = np.arange(-8, 9)
     metrics = []
     for offset in offsets:
         metric = science_fringe_metric(
             [offset,],
-            image.data[red_order],
-            image.uncertainty[red_order],
-            x2d[red_order],
-            y2d[red_order],
+            image.data[to_fit],
+            image.uncertainty[to_fit],
+            x2d[to_fit],
+            y2d[to_fit],
             fringe_spline
         )
         metrics.append(metric)
@@ -88,8 +90,8 @@ def find_fringe_offset_science(image, fringe_spline, cutoff):
     best_fit = minimize(
         science_fringe_metric,
         x0=[offsets[np.argmin(metrics)],],
-        args=(image.data[red_order], image.uncertainty[red_order],
-              x2d[red_order], y2d[red_order], fringe_spline)
+        args=(image.data[to_fit], image.uncertainty[to_fit],
+              x2d[to_fit], y2d[to_fit], fringe_spline)
     )
     return best_fit.x[0]
 
@@ -171,9 +173,13 @@ class FringeContinuumFitter(Stage):
         ys, xs = zip(*to_interpolate)
         ys, xs = np.array(ys, dtype=int), np.array(xs, dtype=int)
         continuum_data[ys, xs] = fringe_interpolator(x2d[ys, xs], y2d[ys, xs])
-
         image.data[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
         image.uncertainty[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
+        # Normalize out the continuum such that the remaining fringe pattern has a median of 1
+        fringe_norm = np.median(image.data[ys, xs])
+        image.data[ys, xs] /= fringe_norm
+        image.uncertainty[ys, xs] /= fringe_norm
+        continuum_data[ys, xs] *= fringe_norm
         image.add_or_update(ArrayData(continuum_data, name='CONTINUUM', meta=fits.Header({})))
         return image
 
@@ -221,7 +227,8 @@ class FringeMaker(CalibrationMaker):
             data_to_fit = np.logical_and(data_to_fit, image.data != 1.0)
             fringe_spline = fit_smooth_fringe_spline(image.data, data_to_fit)
 
-            # TODO: Someone needs to check this transformation
+            # Note we fit the offset from the reference to the image so we need the
+            # opposite sign when shifting the image to a common grid
             shifted_order = image.orders.shifted(-fringe_offset).data == 1
             offset_coordinates = [x[shifted_order], y[shifted_order] + fringe_offset]
             this_fringe = fringe_spline(np.array(offset_coordinates).T)
@@ -259,9 +266,6 @@ class FringeCorrector(Stage):
         # artifacts due to the edge of the slit
         fringe_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > 0.1)
         logger.info('Fitting fringe offset', image=image)
-        # The additional option to normalize the signal with the data was taken from
-        # https://scribblethink.org/Work/nvisionInterface/nip.html#eq3:xform by Lewis from
-        # Industrial Light and Magic.
 
         fringe_offset = find_fringe_offset_science(image, fringe_spline, self.runtime_context.FRINGE_CUTOFF_WAVELENGTH)
         logger.info('Correcting for fringing', image=image)
