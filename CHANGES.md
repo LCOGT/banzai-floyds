@@ -1,5 +1,6 @@
-0.21.0 (2025-09-30)
+0.21.0 (2025-10-07)
 -------------------
+- Added correct scaling to standard star files so that the output spectra are in ergs/s/cm^2/A
 - Updated how we align fringe frames which should be more robust.
 
 0.20.2 (2025-09-04)
