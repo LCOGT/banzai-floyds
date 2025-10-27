@@ -1,18 +1,11 @@
 from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table
-from banzai.logs import get_logger
 from banzai_floyds.utils.binning_utils import rebin_data_combined
 from banzai_floyds.utils.flux_utils import flux_calibrate
 
 
-logger = get_logger()
-
-
 def set_extraction_region(image):
-    if 'extraction_window' in image.binned_data.colnames:
-        return
-
     image.binned_data['extraction_window'] = False
     for order_id in [2, 1]:
         in_order = image.binned_data['order'] == order_id

@@ -84,9 +84,6 @@ def set_background_region(image):
     We no longer allow the background region to go to the edge of the order because weird things happen
     there. We also require at least 5 pixels on each side of the trace to be in the background region.
     """
-    if 'in_background' in image.binned_data.colnames:
-        return
-
     image.binned_data['in_background'] = False
     for order_id in [2, 1]:
         in_order = image.binned_data['order'] == order_id
