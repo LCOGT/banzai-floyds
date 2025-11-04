@@ -1,3 +1,7 @@
+0.22.0 (2025-10-27)
+-------------------
+- Made it easier to override background and extraction windows for re-extracting
+
 0.21.0 (2025-10-07)
 -------------------
 - Added correct scaling to standard star files so that the output spectra are in ergs/s/cm^2/A
