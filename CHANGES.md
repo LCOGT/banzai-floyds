@@ -1,3 +1,7 @@
+0.23.0 (2025-12-08)
+-------------------
+- Propagate masked pixels to the 1d extraction
+
 0.22.0 (2025-10-27)
 -------------------
 - Made it easier to override background and extraction windows for re-extracting

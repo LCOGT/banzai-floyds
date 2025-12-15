@@ -33,6 +33,7 @@ def flux_calibrate(data, sensitivity, elevation, airmass, raw_key='fluxraw', err
 
     for order_id in [1, 2]:
         in_order = data['order'] == order_id
+        in_order = np.logical_and(in_order, np.isfinite(data[raw_key]))
         sensitivity_order = sensitivity['order'] == order_id
         # Divide the spectrum by the sensitivity function, correcting for airmass
         sensitivity_model = np.interp(data['wavelength'][in_order],

@@ -19,13 +19,13 @@ def fit_background(data, background_order=3):
     data['uncertainty_bin_center'] = 0.0
     for order in [1, 2]:
         in_order = data['order'] == order
-
-        data_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][in_order],
-                                                                 data['y_profile'][in_order]]).T,
-                                                       data['data'][in_order].ravel(), fill_value=0)
-        uncertainty_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][in_order],
-                                                                       data['y_profile'][in_order]]).T,
-                                                              data['uncertainty'][in_order].ravel(), fill_value=0)
+        to_fit = np.logical_and(in_order, data['mask'] == 0)
+        data_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][to_fit],
+                                                                 data['y_profile'][to_fit]]).T,
+                                                       data['data'][to_fit].ravel(), fill_value=0)
+        uncertainty_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][to_fit],
+                                                                       data['y_profile'][to_fit]]).T,
+                                                              data['uncertainty'][to_fit].ravel(), fill_value=0)
 
         data['data_bin_center'][in_order] = data_interpolator(data['order_wavelength_bin'][in_order],
                                                               data['y_profile'][in_order])
@@ -47,6 +47,7 @@ def fit_background(data, background_order=3):
             uncertainty_column = 'uncertainty_bin_center'
         in_background = data_to_fit['in_background']
         in_background = np.logical_and(in_background, data_to_fit[data_column] != 0)
+        in_background = np.logical_and(in_background, data_to_fit['mask'] == 0)
         polynomial = Legendre.fit(data_to_fit['y_profile'][in_background], data_to_fit[data_column][in_background],
                                   background_order,
                                   domain=[np.min(data_to_fit['y_profile']), np.max(data_to_fit['y_profile'])],
@@ -60,9 +61,10 @@ def fit_background(data, background_order=3):
     results = Table({'x': [], 'y': [], 'background': []})
     for order in [1, 2]:
         in_order = np.logical_and(data['order'] == order, data['order_wavelength_bin'] != 0)
-        background_interpolator = CloughTocher2DInterpolator(np.array([data['order_wavelength_bin'][in_order],
-                                                                       data['y_profile'][in_order]]).T,
-                                                             data['background_bin_center'][in_order], fill_value=0)
+        to_fit = np.logical_and(in_order, data['mask'] == 0)
+        background_interpolator = CloughTocher2DInterpolator(np.array([data['order_wavelength_bin'][to_fit],
+                                                                       data['y_profile'][to_fit]]).T,
+                                                             data['background_bin_center'][to_fit], fill_value=0)
         background = background_interpolator(data['wavelength'][in_order], data['y_profile'][in_order])
         # Deal with the funniness at the wavelength bin edges
         upper_edge = data['wavelength'][in_order] > np.max(data['order_wavelength_bin'][in_order])

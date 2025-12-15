@@ -15,7 +15,8 @@ class TelluricMaker(Stage):
         # Divide out the known flux of the source and the
         # sensitivity corrected flux to get the telluric correction
         in_order = image.extracted['order'] == 1
-        data = image.extracted[in_order]
+        to_fit = np.logical_and(in_order, image.extracted['mask'] == 0)
+        data = image.extracted[to_fit]
         correction = np.ones_like(data['wavelength'])
 
         for region in telluric_utils.TELLURIC_REGIONS:

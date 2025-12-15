@@ -390,6 +390,7 @@ class OrderTweaker(Stage):
         # Only keep pixels +- half the height above the initial guess order region
         # Because we start at the center, the region is +- 1 instead of +- 0.5
         region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= order_height)
+        region = np.logical_and(region, image.mask == 0)
         y_shift, = fit_order_tweak(image.data[region], image.uncertainty[region],
                                    order_height, coeffs, (x2d[region], y2d[region]), domain)
         image.meta['ORDYSHFT'] = y_shift

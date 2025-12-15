@@ -36,6 +36,7 @@ def find_fringe_offset(image, fringe_spline, cutoff, normalize=False):
     # We implicitly limit the parameter search space to +- 10 pixels here.
     trimmed_orders = image.orders.new(image.orders.order_heights[0] - 20)
     red_order = np.logical_and(trimmed_orders.data == 1, image.wavelengths.data >= cutoff)
+    red_order = np.logical_and(red_order, image.mask == 0)
     # Grid +- 8 pixels offset to make sure our optimizer doesn't get stuck in a local minimum
     offsets = np.arange(-8, 9)
     if normalize:
@@ -74,6 +75,7 @@ def find_fringe_offset_science(image, fringe_spline, cutoff):
     trimmed_orders = image.orders.new(image.orders.order_heights[0] - 20)
     red_order = np.logical_and(trimmed_orders.data == 1, image.wavelengths.data >= cutoff)
     to_fit = np.logical_and(red_order, image.data > 0.1)
+    to_fit = np.logical_and(to_fit, image.mask == 0)
     offsets = np.arange(-8, 9)
     metrics = []
     for offset in offsets:
@@ -114,7 +116,8 @@ def get_fringe_region_data(image, cutoff):
     if (wavelengths[order_region] < cutoff).sum() == 0:
         x_cutoff = 0
     else:
-        x_cutoff = np.max(x2d[order_region][wavelengths[order_region] < cutoff]) + 1
+        search_region = np.logical_and(image.mask[order_region] == 0, wavelengths[order_region] < cutoff)
+        x_cutoff = np.max(x2d[order_region][search_region]) + 1
     x_to_grid = np.arange(int(x_cutoff), np.max(x2d[order_region]) + 1, dtype=float)
     order_center = image.orders.center(x2d[order_region])[order - 1]
     y_min = int(np.ceil(np.max(y2d[order_region][0] - order_center[0])))
@@ -122,9 +125,10 @@ def get_fringe_region_data(image, cutoff):
     y_to_grid = np.arange(y_min, y_max + 1, dtype=float)
     # Resample the data in this region to be on a grid that is fully enclosed by the edge pixels
     # Set the center of the order at zero
-    interpolator = CloughTocher2DInterpolator((x2d[order_region].ravel(),
-                                              (y2d[order_region] - order_center).ravel()),
-                                              image.data[order_region].ravel())
+    to_fit = image.mask[order_region] == 0
+    interpolator = CloughTocher2DInterpolator((x2d[order_region][to_fit].ravel(),
+                                              (y2d[order_region][to_fit] - order_center[to_fit]).ravel()),
+                                              image.data[order_region][to_fit].ravel())
     x_grid, y_grid = np.meshgrid(x_to_grid, y_to_grid)
     data = interpolator(np.array([x_grid.ravel(), y_grid.ravel()]).T).reshape(x_grid.shape)
     y_grid += image.orders.center(x_grid)[order - 1]
@@ -207,6 +211,7 @@ class FringeMaker(CalibrationMaker):
         # Only fit where the fringe data is > 0.1. Anything smaller than this and we get really, bad residuals
         # Don't try to fit anything that is just filled with a value of 1
         to_spline = np.logical_and(reference_fringe > 0.1, reference_fringe != 1.0)
+        to_spline = np.logical_and(to_spline, images[0].mask == 0)
         reference_fringe_spline = fit_smooth_fringe_spline(reference_fringe, to_spline)
         super_fringe = np.zeros_like(images[0].data)
         super_fringe_weights = np.zeros_like(images[0].data)
@@ -225,6 +230,7 @@ class FringeMaker(CalibrationMaker):
             data_to_fit = np.logical_and(image.orders.data == 1, high_sn)
             # Anything with exactly = 1 is just filled data
             data_to_fit = np.logical_and(data_to_fit, image.data != 1.0)
+            data_to_fit = np.logical_and(data_to_fit, image.mask == 0)
             fringe_spline = fit_smooth_fringe_spline(image.data, data_to_fit)
 
             # Note we fit the offset from the reference to the image so we need the
@@ -241,8 +247,9 @@ class FringeMaker(CalibrationMaker):
         super_fringe[super_fringe_weights > 0] /= super_fringe_weights[super_fringe_weights > 0]
         make_calibration_name = make_calibration_filename_function(self.calibration_type,
                                                                    self.runtime_context)
-        master_calibration_filename = make_calibration_name(max(images,
-                                                                key=lambda x: datetime.strptime(x.epoch, '%Y%m%d')))
+        master_calibration_filename = make_calibration_name(
+            max(images, key=lambda x: datetime.strptime(x.epoch, '%Y%m%d'))
+        )
 
         grouping = self.runtime_context.CALIBRATION_SET_CRITERIA.get(images[0].obstype, [])
         master_frame_class = import_utils.import_attribute(self.runtime_context.CALIBRATION_FRAME_CLASS)
@@ -251,7 +258,9 @@ class FringeMaker(CalibrationMaker):
                                                            grouping_criteria=grouping, hdu_order=hdu_order)
         super_frame.add_or_update(DataTable(Table(fringe_offsets), name='FRINGE_OFFSETS', meta=fits.Header()))
         super_frame.primary_hdu.data[:, :] = super_fringe[:, :]
+        super_frame.primary_hdu.mask[:, :] = super_fringe_weights[:, :] == 0
         super_frame.primary_hdu.name = 'FRINGE'
+
         super_frame.proposal = self.runtime_context.CALIBRATE_PROPOSAL_ID
         super_frame.ra = None
         super_frame.dec = None
