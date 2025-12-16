@@ -238,7 +238,8 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     flux += np.random.normal(read_noise, size=flux.shape)
     flux_error = np.sqrt(read_noise**2 + np.abs(flux))
     data = Table({'wavelength': wavelengths, 'flux': flux, 'fluxerror': flux_error,
-                  'fluxraw': flux, 'fluxrawerr': flux_error, 'order': orders})
+                  'fluxraw': flux, 'fluxrawerr': flux_error, 'order': orders,
+                  'mask': np.zeros_like(flux, dtype=int)})
 
     frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}), name='foo')], file_path='foo.fits')
     frame.telluric = telluric_data
