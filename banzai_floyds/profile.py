@@ -42,6 +42,8 @@ def fit_profile(data, domains, order_heights, center_polynomial_order=7, width_p
                                            order_data.groups.indices[2*step_size:-step_size:step_size]):
             data_to_fit = order_data[left_index: right_index]
             data_to_fit = data_to_fit[data_to_fit['mask'] == 0]
+            if len(data_to_fit) == 0:
+                continue
             # Choose our grid to exclude 5 pixels at each edge
             interp_y = np.arange(np.max([-(order_height // 2) + 5, np.min(data_to_fit['y_order'])]),
                                  np.min([(order_height // 2) + 1 - 5, np.max(data_to_fit['y_order'])]))

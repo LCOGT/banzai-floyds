@@ -40,6 +40,7 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         results['order'] = []
     for data_to_sum in binned_data.groups:
         wavelength_bin = data_to_sum[bin_key][0]
+        order = data_to_sum['order'][0]
         # Skip pixels that don't fall into a bin we are going to extract
         if wavelength_bin == 0:
             continue
@@ -84,7 +85,7 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         results['binwidth'].append(wavelength_bin_width)
         results['mask'].append(mask)
         if include_order:
-            results['order'].append(data_to_sum['order'][0])
+            results['order'].append(order)
     return Table(results)
 
 
