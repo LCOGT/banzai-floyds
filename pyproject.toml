@@ -6,7 +6,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "banzai-floyds"
-version = "0.22.0"
+version = "0.23.0"
 requires-python = ">=3.10,<4"
 description = "BANZAI Data Reduction for FLOYDS spectra"
 readme = "docs/README.rst"

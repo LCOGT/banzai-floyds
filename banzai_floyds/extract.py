@@ -34,11 +34,13 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
 
-    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [], background_out_key: []}
+    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [], 
+               background_out_key: [], 'mask': []}
     if include_order:
         results['order'] = []
     for data_to_sum in binned_data.groups:
         wavelength_bin = data_to_sum[bin_key][0]
+        order = data_to_sum['order'][0]
         # Skip pixels that don't fall into a bin we are going to extract
         if wavelength_bin == 0:
             continue
@@ -50,32 +52,40 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         if np.max(data_to_sum[weights_key][data_to_sum['extraction_window']]) < 5e-3:
             continue
 
-        data_to_sum = data_to_sum[data_to_sum['mask'] == 0]
-        if len(data_to_sum) == 0:
-            continue
         wavelength_bin_width = data_to_sum[bin_key + '_width'][0]
+        data_to_sum = data_to_sum[data_to_sum['mask'] == 0]
         # This should be equivalent to Horne 1986 optimal extraction
-        flux = data_to_sum[data_keyword] - data_to_sum[background_key]
-        # We need the weights to be normalized to sum to 1 or fluxes don't match for standard unweighted extractions
-        weights = data_to_sum[weights_key]
-        if np.all(weights == 1):
-            weights /= data_to_sum[weights_key].sum()
-        flux *= weights
-        flux *= data_to_sum[uncertainty_key] ** -2
-        flux = np.sum(flux[data_to_sum['extraction_window']])
-        flux_normalization = weights**2 * data_to_sum[uncertainty_key]**-2
-        flux_normalization = np.sum(flux_normalization[data_to_sum['extraction_window']])
-        background = data_to_sum[background_key] * weights
-        background *= data_to_sum[uncertainty_key] ** -2
-        background = np.sum(background[data_to_sum['extraction_window']])
-        results[flux_keyword].append(flux / flux_normalization)
-        results[background_out_key].append(background / flux_normalization)
-        uncertainty = np.sqrt(np.sum(weights[data_to_sum['extraction_window']]) / flux_normalization)
+        if len(data_to_sum) == 0:
+            flux = np.nan
+            background = np.nan
+            uncertainty = np.nan
+            mask = 1
+        else:
+            flux = data_to_sum[data_keyword] - data_to_sum[background_key]
+            # We need the weights to be normalized to sum to 1 or fluxes don't match for standard unweighted extractions
+            weights = data_to_sum[weights_key]
+            if np.all(weights == 1):
+                weights /= data_to_sum[weights_key].sum()
+            flux *= weights
+            flux *= data_to_sum[uncertainty_key] ** -2
+            flux = np.sum(flux[data_to_sum['extraction_window']])
+            flux_normalization = weights**2 * data_to_sum[uncertainty_key]**-2
+            flux_normalization = np.sum(flux_normalization[data_to_sum['extraction_window']])
+            flux /= flux_normalization
+            background = data_to_sum[background_key] * weights
+            background *= data_to_sum[uncertainty_key] ** -2
+            background = np.sum(background[data_to_sum['extraction_window']])
+            background /= flux_normalization
+            uncertainty = np.sqrt(np.sum(weights[data_to_sum['extraction_window']]) / flux_normalization)
+            mask = 0
+        results[flux_keyword].append(flux)
+        results[background_out_key].append(background)
         results[flux_error_key].append(uncertainty)
         results['wavelength'].append(wavelength_bin)
         results['binwidth'].append(wavelength_bin_width)
+        results['mask'].append(mask)
         if include_order:
-            results['order'].append(data_to_sum['order'][0])
+            results['order'].append(order)
     return Table(results)
 
 
@@ -114,12 +124,15 @@ class CombinedExtractor(Stage):
         extracted_order2 = image.extracted['order'] == 2
         in_extracted_overlap = np.logical_and(image.extracted['wavelength'] > overlap_region[0],
                                               image.extracted['wavelength'] < overlap_region[1])
-        waves_to_interp = image.extracted['wavelength'][np.logical_and(extracted_order1, in_extracted_overlap)]
+        to_interp_1 = np.logical_and(extracted_order1, in_extracted_overlap)
+        to_interp_1 = np.logical_and(to_interp_1, np.isfinite(image.extracted['flux']))
+        waves_to_interp = image.extracted['wavelength'][to_interp_1]
         overlap_order2 = np.logical_and(extracted_order2, in_extracted_overlap)
-        flux_to_ratio = np.interp(waves_to_interp, image.extracted['wavelength'][overlap_order2],
-                                  image.extracted['flux'][overlap_order2])
-        order_ratio = image.extracted['flux'][np.logical_and(extracted_order1, in_extracted_overlap)]
-        order_ratio /= flux_to_ratio
+        to_interp_2 = np.logical_and(overlap_order2, np.isfinite(image.extracted['flux']))
+        flux2_for_ratio = np.interp(waves_to_interp, image.extracted['wavelength'][to_interp_2],
+                                    image.extracted['flux'][to_interp_2])
+        order_ratio = image.extracted['flux'][to_interp_1]
+        order_ratio /= flux2_for_ratio
         normalization = np.median(order_ratio)
         order_2 = image.binned_data['order'] == 2
         for key in ['flux', 'fluxerror', 'flux_background']:

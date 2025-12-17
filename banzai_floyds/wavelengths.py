@@ -379,7 +379,7 @@ class CalibrateWavelengths(Stage):
         wavelength_polynomials = []
         tilt_polynomials = []
         for i, order in enumerate(order_ids):
-            order_region = extraction_orders.data == order
+            order_region = np.logical_and(extraction_orders.data == order, image.mask == 0)
 
             # Bin the data using titled coordinates in pixel space
             x2d, y2d = np.meshgrid(np.arange(image.data.shape[1]), np.arange(image.data.shape[0]))
@@ -429,14 +429,15 @@ class CalibrateWavelengths(Stage):
                                                    image.orders.domains[i],
                                                    order=self.FIT_ORDERS[order])
             order_region_2d = get_order_2d_region(image.orders.data == order)
+            to_fit = image.mask[order_region_2d] == 0
             tilt_ys = y2d[order_region_2d] - image.orders.center(x2d[order_region_2d])[i]
             # Do a final fit that allows the line tilt and a single set of polynomial coeffs to vary.
             line_tilt_coeffs = np.zeros(self.TILT_COEFF_ORDER[image.site] + 1)
             line_tilt_coeffs[0] = self.INITIAL_LINE_TILTS[order]
             wavelength_polynomial, tilt_polynomial = full_wavelength_solution(
-                image.data[order_region_2d],
-                image.uncertainty[order_region_2d],
-                x2d[order_region_2d], tilt_ys,
+                image.data[order_region_2d][to_fit],
+                image.uncertainty[order_region_2d][to_fit],
+                x2d[order_region_2d][to_fit], tilt_ys[to_fit],
                 initial_solution.coef,
                 line_tilt_coeffs,
                 initial_fwhm,

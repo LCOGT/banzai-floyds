@@ -41,8 +41,12 @@ def fit_profile(data, domains, order_heights, center_polynomial_order=7, width_p
         for left_index, right_index in zip(order_data.groups.indices[step_size:-2*step_size + 1:step_size],
                                            order_data.groups.indices[2*step_size:-step_size:step_size]):
             data_to_fit = order_data[left_index: right_index]
+            data_to_fit = data_to_fit[data_to_fit['mask'] == 0]
+            if len(data_to_fit) == 0:
+                continue
             # Choose our grid to exclude 5 pixels at each edge
-            interp_y = np.arange(-(order_height // 2) + 5, (order_height // 2) + 1 - 5)
+            interp_y = np.arange(np.max([-(order_height // 2) + 5, np.min(data_to_fit['y_order'])]),
+                                 np.min([(order_height // 2) + 1 - 5, np.max(data_to_fit['y_order'])]))
             flux = np.zeros(len(interp_y))
             flux_error = np.zeros(len(interp_y))
             for bin in data_to_fit.group_by('order_wavelength_bin').groups:

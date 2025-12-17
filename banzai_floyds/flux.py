@@ -28,6 +28,7 @@ class FluxSensitivity(Stage):
         # Red and blue respectively
         for order_id in [1, 2]:
             in_order = image.extracted['order'] == order_id
+            in_order = np.logical_and(in_order, np.isfinite(image.extracted['fluxraw']))
             data_to_fit = image.extracted[in_order]
 
             # Fit the telluric coefficients using data in the red
