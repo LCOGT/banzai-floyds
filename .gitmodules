@@ -1,0 +1,3 @@
+[submodule "docs/banzai-floyds-ui"]
+	path = docs/banzai-floyds-ui
+	url = https://github.com/lcogt/banzai-floyds-ui.git
