@@ -1,9 +1,12 @@
 import numpy as np
 from banzai_floyds.fringe import FringeMaker, find_fringe_offset, fit_smooth_fringe_spline
+from banzai_floyds.fringe import prepare_fringe_data, make_fringe_continuum_model
 from banzai_floyds.fringe import find_fringe_offset_science
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.fringe import FringeCorrector
 from banzai import context
+from numpy.polynomial.legendre import Legendre
+from scipy.interpolate import CloughTocher2DInterpolator
 
 
 def test_find_fringe_offset_flats():
@@ -79,3 +82,61 @@ def test_correct_fringe():
     in_order = frame.orders.data == 1
     np.testing.assert_allclose(original_data[in_order] / frame.input_fringe[in_order],
                                output_frame.data[in_order], rtol=0.012)
+
+
+def test_pad_fringe_data():
+    np.random.seed(290235)
+    fake_frame = generate_fake_science_frame(fringe=True, fringe_offset=0,
+                                             include_super_fringe=True, include_trace=False)
+    # Define fake fringe data that is a sine wave + a quadratic continuum (slowly varying)
+    x2d, y2d = np.meshgrid(np.arange(fake_frame.data.shape[1], dtype=float),
+                           np.arange(fake_frame.data.shape[0], dtype=float))
+    y2d -= fake_frame.orders.center(x2d)[0]
+    order_height = fake_frame.orders.order_heights[0]
+    illumination = Legendre([0.0, 0.0, -0.1], domain=[-order_height, order_height])(y2d)
+    in_order = fake_frame.orders.data == 1
+    fake_frame.data[in_order] = 10000.0 * illumination[in_order] * fake_frame.fringe[in_order]
+
+    # Pad the data
+    padded_data, padded_x2d, padded_y2d = prepare_fringe_data(fake_frame, 6000.0)
+    # Each dimension should be divisible of 2**level = 32.
+    assert padded_data.shape[0] % 32 == 0
+    assert padded_data.shape[1] % 32 == 0
+    # The resulting padded data should be approximately the same as the original
+    interpolater = CloughTocher2DInterpolator((padded_x2d.ravel(), padded_y2d.ravel()),
+                                              padded_data.ravel())
+    overlap = np.logical_and(x2d >= padded_x2d.min(), fake_frame.orders.data == 1)
+    overlap = np.logical_and(overlap, fake_frame.wavelengths.data >= 6000.0)
+    expected = fake_frame.data[overlap]
+    actual = interpolater(x2d[overlap], y2d[overlap])
+    np.testing.assert_allclose(actual, expected, rtol=0.01)
+
+
+def test_fit_fringe_continuum():
+    np.random.seed(489762)
+    level = 10000.0
+    # Define fake fringe data that is already the right shape
+    # The data should be a sine wave + a quadratic continuum (slowly varying)
+    fake_frame = generate_fake_science_frame(fringe=True, fringe_offset=0,
+                                             include_super_fringe=True, include_trace=False)
+    # Define fake fringe data that is a sine wave + a quadratic continuum (slowly varying)
+    x2d, y2d = np.meshgrid(np.arange(fake_frame.data.shape[1], dtype=float),
+                           np.arange(fake_frame.data.shape[0], dtype=float))
+    y2d -= fake_frame.orders.center(x2d)[0]
+    order_height = fake_frame.orders.order_heights[0]
+    illumination = Legendre([0.0, 0.0, -0.1], domain=[-order_height, order_height])(y2d)
+    in_order = fake_frame.orders.data == 1
+    fake_frame.data[in_order] = level * illumination(y2d[in_order]) * fake_frame.fringe[in_order]
+
+    # Pad the data
+    padded_data, padded_x2d, padded_y2d = prepare_fringe_data(fake_frame, 6000.0)
+    # Fit the continuum model to the data
+    continuum = make_fringe_continuum_model(padded_x2d, padded_y2d, padded_data)
+    # The fit continuum should be approximately the input quadratic
+    in_super_fringe = fake_frame.fringe > 0.0
+    expected_fringe_interpolator = CloughTocher2DInterpolator(
+        (x2d[in_super_fringe].ravel(), y2d[in_super_fringe].ravel()),
+        fake_frame.fringe[in_super_fringe].ravel()
+    )
+    expected = level * illumination(padded_y2d) * expected_fringe_interpolator(padded_x2d, padded_y2d)
+    np.testing.assert_allclose(continuum, expected, rtol=0.01)
