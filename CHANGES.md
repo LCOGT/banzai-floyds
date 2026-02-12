@@ -1,3 +1,7 @@
+0.24.0 (2026-02-12)
+-------------------
+- Adding UI docs to the readthedocs.
+
 0.23.0 (2025-12-08)
 -------------------
 - Propagate masked pixels to the 1d extraction
