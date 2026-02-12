@@ -11,12 +11,7 @@ build:
     - pip install poetry
     - poetry install -E docs
     - poetry run sphinx-build -b html docs/ ${READTHEDOCS_OUTPUT}/html/
-  jobs:
-      post_checkout:
-        # Sometimes required to ensure submodules are pulled correctly
-        - git submodule update --init --recursive
 
-# Crucial Step: Tell RTD to download submodules
 submodules:
   include: all
   recursive: true
