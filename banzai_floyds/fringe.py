@@ -104,7 +104,7 @@ def fit_smooth_fringe_spline(image, data_region):
                                       image[data_region], fill_value=0.0)
 
 
-def make_fringe_continuum_model(data, wavelet='db8', level=5):
+def make_fringe_continuum_model(data, wavelet='sym8', level=5):
     # Fit wavelets to the data and get the lowest order coefficients.
     coeffs = pywt.swt2(data, wavelet=(wavelet, wavelet), level=level)
 
