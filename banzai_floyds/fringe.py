@@ -196,14 +196,14 @@ class FringeContinuumFitter(Stage):
         # Outside of the fringe region, we just set the values to the data so that the fringe correction is
         # just one in those regions to make the data prettier to look at
         continuum_data = image.data.copy()
-        x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-        y2d -= image.orders.order_centers[0](x2d)
+        x2d, y2d = np.meshgrid(np.arange(image.shape[1], dtype=float), np.arange(image.shape[0], dtype=float))
+        y2d -= image.orders.center(x2d)[0]
         to_interpolate = np.logical_and(cutoff <= image.wavelengths.data, image.orders.data == 1)
         to_interpolate = np.logical_and(to_interpolate, y2d <= np.max(fringe_y2d))
         to_interpolate = np.logical_and(to_interpolate, y2d >= np.min(fringe_y2d))
         continuum_data[to_interpolate] = fringe_interpolator(x2d[to_interpolate], y2d[to_interpolate])
-        image.data /= continuum_data
-        image.uncertainty /= continuum_data
+        image.data[:, :] /= continuum_data
+        image.uncertainty[:, :] /= continuum_data
         # Normalize out the continuum such that the remaining fringe pattern has a median of 1
         fringe_norm = np.median(image.data[to_interpolate])
         image.data[to_interpolate] /= fringe_norm
