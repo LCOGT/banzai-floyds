@@ -123,7 +123,7 @@ def make_fringe_continuum_model(data, wavelet='db8', level=5):
     # ]
     # H is X, V is Y, D is Diagonal
 
-    # We need to remove all the x-details. We probably need to keep some of the lowest y-details 
+    # We need to remove all the x-details. We probably need to keep some of the lowest y-details
     # because the y dimension is so much shorter than the x if we want to fit any illumination pattern
     filtered_coeffs = []
 
@@ -143,6 +143,8 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     y2d -= image.orders.center(x2d)[0]
     red_order = image.orders.data == 1
     cutoff_region = np.logical_and(red_order, image.wavelengths.data < blue_cutoff)
+    if not np.any(cutoff_region):
+        raise ValueError('No data in the cutoff region. Set the cutoff value to be larger.')
     x_cutoff = np.max(x2d[cutoff_region]) + 1
     # The x cutoff is almost always a soft cutoff, so we make sure we are at a multiple of 2^level (32)
     # so that we don't have to pad the array in that direction
@@ -151,14 +153,14 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     red_order2d = get_order_2d_region(image.orders.data == 1)
     y_min = int(np.ceil(np.max(y2d[red_order2d][0])))
     y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
-    to_intepolate = np.logical_and(red_order, image.mask == 0)
-    interpolator = CloughTocher2DInterpolator((x2d[to_intepolate].ravel(), y2d[to_intepolate].ravel()),
-                                              image.data[to_intepolate].ravel(), fill_value=1.0)
+    to_interpolate = np.logical_and(red_order, image.mask == 0)
+    interpolator = CloughTocher2DInterpolator((x2d[to_interpolate].ravel(), y2d[to_interpolate].ravel()),
+                                              image.data[to_interpolate].ravel(), fill_value=1.0)
     fringe_x2d, fringe_y2d = np.meshgrid(x_range, np.arange(y_min, y_max + 1))
 
     fringe_data = interpolator(fringe_x2d.ravel(), fringe_y2d.ravel()).reshape(fringe_x2d.shape)
-    # Pad the data to get a to 2^N size in both dimensions for the wavelet transform
-    pad_height = 2 ** level - fringe_data.shape[0] % (2 ** level)
+    # Pad the data to get to 2^N size in both dimensions for the wavelet transform
+    pad_height = (2 ** level - fringe_data.shape[0] % (2 ** level)) % (2 ** level)
 
     pad_height_low = pad_height // 2
     pad_height_high = pad_height - pad_height_low
@@ -166,7 +168,7 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     # There is a bug in padding data when one dimension has a pad of zero so we have to be tricky
     def pad_1d_smooth(slice_1d):
         return pywt.pad(slice_1d, (pad_height_low, pad_height_high), mode='smooth')
-    # Reflect the data, We will divide out the overall slope of the data in each direction
+    # Smoothly pad the data along the first axis to reach a 2^N size and reduce edge artifacts
     padded_data = np.apply_along_axis(pad_1d_smooth, axis=0, arr=fringe_data)
 
     # Calculate the ranges of the new padded array

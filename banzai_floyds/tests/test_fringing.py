@@ -104,21 +104,21 @@ def test_pad_fringe_data():
     assert padded_data.shape[0] % 32 == 0
     assert padded_data.shape[1] % 32 == 0
     # The resulting padded data should be approximately the same as the original
-    interpolater = CloughTocher2DInterpolator((padded_x2d.ravel(), padded_y2d.ravel()),
+    interpolator = CloughTocher2DInterpolator((padded_x2d.ravel(), padded_y2d.ravel()),
                                               padded_data.ravel())
     order_region = get_order_2d_region(fake_frame.orders.data == 1)
 
     overlap = fake_frame.wavelengths.data[order_region][1:-1] >= 6000.0
     # Remove the edge pixels from the comparison
     expected = fake_frame.data[order_region][1:-1][overlap]
-    actual = interpolater(x2d[order_region][1:-1][overlap], y2d[order_region][1:-1][overlap])
+    actual = interpolator(x2d[order_region][1:-1][overlap], y2d[order_region][1:-1][overlap])
     np.testing.assert_allclose(actual, expected, rtol=0.01)
 
     # Check that the edges are within 3%
     for edge in [-1, 0]:
         overlap = fake_frame.wavelengths.data[order_region][edge] >= 6000.0
         expected = fake_frame.data[order_region][edge][overlap]
-        actual = interpolater(x2d[order_region][edge][overlap], y2d[order_region][edge][overlap])
+        actual = interpolator(x2d[order_region][edge][overlap], y2d[order_region][edge][overlap])
         np.testing.assert_allclose(actual, expected, rtol=0.03)
 
 
