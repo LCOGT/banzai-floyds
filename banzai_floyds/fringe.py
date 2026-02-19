@@ -104,20 +104,33 @@ def fit_smooth_fringe_spline(image, data_region):
                                       image[data_region], fill_value=0.0)
 
 
-def make_fringe_continuum_model(data, wavelet, level):
+def make_fringe_continuum_model(data, wavelet='db8', level=5):
     # Fit wavelets to the data and get the lowest order coefficients.
-    coeffs = pywt.swt2(data, wavelet=wavelet, level=level)
+    coeffs = pywt.swt2(data, wavelet=(wavelet, wavelet), level=level)
 
-    continuum_coeffs = []
-    for cA, details in coeffs:
-        zero_details = (np.zeros_like(details[0]),
-                        np.zeros_like(details[1]),
-                        np.zeros_like(details[2]))
+    # Coeffs are structured like the following (from the docs):
+    # [
+    #     (cA_m+level,
+    #         (cH_m+level, cV_m+level, cD_m+level)
+    #     ),
+    #     ...,
+    #     (cA_m+1,
+    #         (cH_m+1, cV_m+1, cD_m+1)
+    #     ),
+    #     (cA_m,
+    #         (cH_m, cV_m, cD_m)
+    #     )
+    # ]
+    # H is X, V is Y, D is Diagonal
 
-        # Keep cA (approximation), discard details
-        continuum_coeffs.append((cA, zero_details))
+    # We need to remove all the x-details. We probably need to keep some of the lowest y-details 
+    # because the y dimension is so much shorter than the x if we want to fit any illumination pattern
+    filtered_coeffs = []
 
-    continuum_model = pywt.iswt2(continuum_coeffs, wavelet=wavelet)
+    for i, (cA, details) in enumerate(coeffs):
+        cH, cV, cD = details
+        filtered_coeffs.append((cA, (np.zeros_like(cH), np.zeros_like(cV), np.zeros_like(cD))))
+    continuum_model = pywt.iswt2(filtered_coeffs, wavelet=(wavelet, wavelet))
 
     h, w = data.shape
     return continuum_model[:h, :w]
@@ -131,41 +144,34 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     red_order = image.orders.data == 1
     cutoff_region = np.logical_and(red_order, image.wavelengths.data < blue_cutoff)
     x_cutoff = np.max(x2d[cutoff_region]) + 1
-
-    x_range = np.arange(x_cutoff, np.max(x2d[red_order]) + 1)
-    import ipdb; ipdb.set_trace()
-    y_min = int(np.ceil(np.max(y2d[red_order][0])))
-    y_max = int(np.floor(np.min(y2d[red_order][-1])))
+    # The x cutoff is almost always a soft cutoff, so we make sure we are at a multiple of 2^level (32)
+    # so that we don't have to pad the array in that direction
+    pad_length = 2 ** level - int(np.max(x2d[red_order]) + 1 - x_cutoff) % (2 ** level)
+    x_range = np.arange(x_cutoff - pad_length, np.max(x2d[red_order]) + 1)
+    red_order2d = get_order_2d_region(image.orders.data == 1)
+    y_min = int(np.ceil(np.max(y2d[red_order2d][0])))
+    y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
     to_intepolate = np.logical_and(red_order, image.mask == 0)
     interpolator = CloughTocher2DInterpolator((x2d[to_intepolate].ravel(), y2d[to_intepolate].ravel()),
                                               image.data[to_intepolate].ravel(), fill_value=1.0)
     fringe_x2d, fringe_y2d = np.meshgrid(x_range, np.arange(y_min, y_max + 1))
 
     fringe_data = interpolator(fringe_x2d.ravel(), fringe_y2d.ravel()).reshape(fringe_x2d.shape)
-
     # Pad the data to get a to 2^N size in both dimensions for the wavelet transform
-    pad_length = 2 ** level - fringe_data.shape[1] % (2 ** level)
-    # We want to pad both sides so we need pad_length > 1
-    if pad_length < 2:
-        pad_length += 2 ** level
-    # Same for y
     pad_height = 2 ** level - fringe_data.shape[0] % (2 ** level)
-    if pad_height < 2:
-        pad_height += 2 ** level
 
     pad_height_low = pad_height // 2
     pad_height_high = pad_height - pad_height_low
-    pad_length_low = pad_length // 2
-    pad_length_high = pad_length - pad_length_low
 
+    # There is a bug in padding data when one dimension has a pad of zero so we have to be tricky
+    def pad_1d_smooth(slice_1d):
+        return pywt.pad(slice_1d, (pad_height_low, pad_height_high), mode='smooth')
     # Reflect the data, We will divide out the overall slope of the data in each direction
-    padded_data = pywt.pad(fringe_data,
-                           [(pad_height_low, pad_height_high), (pad_length_low, pad_length_high)],
-                           mode='smooth')
+    padded_data = np.apply_along_axis(pad_1d_smooth, axis=0, arr=fringe_data)
 
-    # Caluclate the x and y slopes at the edges to make the reflected data smoother
+    # Calculate the ranges of the new padded array
     padded_x2d, padded_y2d = np.meshgrid(
-        np.arange(x_range[0] - pad_length_low, x_range[-1] + pad_length_high + 1),
+        x_range,
         np.arange(y_min - pad_height_low, y_max + pad_height_high + 1)
     )
     return padded_data, padded_x2d, padded_y2d
@@ -182,17 +188,19 @@ class FringeContinuumFitter(Stage):
         fringe_data, fringe_x2d, fringe_y2d = prepare_fringe_data(image, cutoff)
 
         continuum_model = make_fringe_continuum_model(fringe_data, self.WAVELET_CLASS,
-                                                      self.WAVELET_LEVEL, fringe_x2d, fringe_y2d)
+                                                      self.WAVELET_LEVEL)
         fringe_interpolator = CloughTocher2DInterpolator((fringe_x2d.ravel(),
                                                           fringe_y2d.ravel()),
                                                          continuum_model.ravel(),
                                                          fill_value=1)
-        # Outside of the fringe region, we just set the values to the data so that the fringe correction is 
+        # Outside of the fringe region, we just set the values to the data so that the fringe correction is
         # just one in those regions to make the data prettier to look at
         continuum_data = image.data.copy()
         x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
         y2d -= image.orders.order_centers[0](x2d)
         to_interpolate = np.logical_and(cutoff <= image.wavelengths.data, image.orders.data == 1)
+        to_interpolate = np.logical_and(to_interpolate, y2d <= np.max(fringe_y2d))
+        to_interpolate = np.logical_and(to_interpolate, y2d >= np.min(fringe_y2d))
         continuum_data[to_interpolate] = fringe_interpolator(x2d[to_interpolate], y2d[to_interpolate])
         image.data /= continuum_data
         image.uncertainty /= continuum_data

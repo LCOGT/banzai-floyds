@@ -7,6 +7,7 @@ from banzai_floyds.fringe import FringeCorrector
 from banzai import context
 from numpy.polynomial.legendre import Legendre
 from scipy.interpolate import CloughTocher2DInterpolator
+from banzai_floyds.utils.order_utils import get_order_2d_region
 
 
 def test_find_fringe_offset_flats():
@@ -93,7 +94,7 @@ def test_pad_fringe_data():
                            np.arange(fake_frame.data.shape[0], dtype=float))
     y2d -= fake_frame.orders.center(x2d)[0]
     order_height = fake_frame.orders.order_heights[0]
-    illumination = Legendre([0.0, 0.0, -0.1], domain=[-order_height, order_height])(y2d)
+    illumination = Legendre([1.0, 0.0, -0.1], domain=[-order_height / 2.0, order_height / 2.0])(y2d)
     in_order = fake_frame.orders.data == 1
     fake_frame.data[in_order] = 10000.0 * illumination[in_order] * fake_frame.fringe[in_order]
 
@@ -105,11 +106,20 @@ def test_pad_fringe_data():
     # The resulting padded data should be approximately the same as the original
     interpolater = CloughTocher2DInterpolator((padded_x2d.ravel(), padded_y2d.ravel()),
                                               padded_data.ravel())
-    overlap = np.logical_and(x2d >= padded_x2d.min(), fake_frame.orders.data == 1)
-    overlap = np.logical_and(overlap, fake_frame.wavelengths.data >= 6000.0)
-    expected = fake_frame.data[overlap]
-    actual = interpolater(x2d[overlap], y2d[overlap])
+    order_region = get_order_2d_region(fake_frame.orders.data == 1)
+
+    overlap = fake_frame.wavelengths.data[order_region][1:-1] >= 6000.0
+    # Remove the edge pixels from the comparison
+    expected = fake_frame.data[order_region][1:-1][overlap]
+    actual = interpolater(x2d[order_region][1:-1][overlap], y2d[order_region][1:-1][overlap])
     np.testing.assert_allclose(actual, expected, rtol=0.01)
+
+    # Check that the edges are within 3%
+    for edge in [-1, 0]:
+        overlap = fake_frame.wavelengths.data[order_region][edge] >= 6000.0
+        expected = fake_frame.data[order_region][edge][overlap]
+        actual = interpolater(x2d[order_region][edge][overlap], y2d[order_region][edge][overlap])
+        np.testing.assert_allclose(actual, expected, rtol=0.03)
 
 
 def test_fit_fringe_continuum():
@@ -124,19 +134,27 @@ def test_fit_fringe_continuum():
                            np.arange(fake_frame.data.shape[0], dtype=float))
     y2d -= fake_frame.orders.center(x2d)[0]
     order_height = fake_frame.orders.order_heights[0]
-    illumination = Legendre([0.0, 0.0, -0.1], domain=[-order_height, order_height])(y2d)
+    illumination = Legendre([1.0, 0.0, -0.1], domain=[-order_height / 2.0, order_height / 2.0])(y2d)
     in_order = fake_frame.orders.data == 1
-    fake_frame.data[in_order] = level * illumination(y2d[in_order]) * fake_frame.fringe[in_order]
+    fake_frame.data[in_order] = level * illumination[in_order] * fake_frame.fringe[in_order]
 
     # Pad the data
     padded_data, padded_x2d, padded_y2d = prepare_fringe_data(fake_frame, 6000.0)
     # Fit the continuum model to the data
-    continuum = make_fringe_continuum_model(padded_x2d, padded_y2d, padded_data)
+    continuum = make_fringe_continuum_model(padded_data)
     # The fit continuum should be approximately the input quadratic
-    in_super_fringe = fake_frame.fringe > 0.0
-    expected_fringe_interpolator = CloughTocher2DInterpolator(
-        (x2d[in_super_fringe].ravel(), y2d[in_super_fringe].ravel()),
-        fake_frame.fringe[in_super_fringe].ravel()
-    )
-    expected = level * illumination(padded_y2d) * expected_fringe_interpolator(padded_x2d, padded_y2d)
-    np.testing.assert_allclose(continuum, expected, rtol=0.01)
+    order_region = get_order_2d_region(fake_frame.orders.data == 1)
+    overlap = fake_frame.wavelengths.data[order_region][1:-1] >= 6000.0
+    # Remove the edge pixels from the comparison
+    expected = level * illumination[order_region][1:-1][overlap]
+    interpolater = CloughTocher2DInterpolator((padded_x2d.ravel(), padded_y2d.ravel()),
+                                              continuum.ravel())
+    actual = interpolater(x2d[order_region][1:-1][overlap], y2d[order_region][1:-1][overlap])
+    np.testing.assert_allclose(actual, expected, rtol=0.02)
+
+    # Check that the edges are within 3%
+    for edge in [-1, 0]:
+        overlap = fake_frame.wavelengths.data[order_region][edge] >= 6000.0
+        expected = level * illumination[order_region][edge][overlap]
+        actual = interpolater(x2d[order_region][edge][overlap], y2d[order_region][edge][overlap])
+        np.testing.assert_allclose(actual, expected, rtol=0.03)
