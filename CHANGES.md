@@ -1,3 +1,7 @@
+0.25.0 (2026-02-20)
+-------------------
+- Fix to the k8s cron call to stack fringe frames
+
 0.24.0 (2026-02-19)
 -------------------
 - Fixes to edge effects and nans in reductions
