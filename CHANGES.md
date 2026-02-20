@@ -1,3 +1,7 @@
+0.24.0 (2026-02-19)
+-------------------
+- Fixes to edge effects and nans in reductions
+
 0.23.0 (2025-12-08)
 -------------------
 - Propagate masked pixels to the 1d extraction

@@ -66,4 +66,4 @@ OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']
 LOSSLESS_EXTENSIONS = ['WAVELENGTH']
 
 # We just need to be redward of the dichroic cutoff which is ~4500 Angstroms
-FRINGE_CUTOFF_WAVELENGTH = 4700.0
+FRINGE_CUTOFF_WAVELENGTH = 5200.0

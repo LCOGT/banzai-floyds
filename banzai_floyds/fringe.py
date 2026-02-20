@@ -104,62 +104,90 @@ def fit_smooth_fringe_spline(image, data_region):
                                       image[data_region], fill_value=0.0)
 
 
-def get_fringe_region_data(image, cutoff):
-    # Get data from the red order that is blue of the cutoff, is rectangular, and is
-    # fully contained by pixels (no extrapolation at the edges)
-    order = 1
-    x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-    wavelengths = image.wavelengths.data
-    order_region = get_order_2d_region(image.orders.data == order)
-    # Get the minimum x-value that has a wavelength > cutoff. The dichroic causes problems
-    # if we fit the whole order
-    if (wavelengths[order_region] < cutoff).sum() == 0:
-        x_cutoff = 0
-    else:
-        search_region = np.logical_and(image.mask[order_region] == 0, wavelengths[order_region] < cutoff)
-        x_cutoff = np.max(x2d[order_region][search_region]) + 1
-    x_to_grid = np.arange(int(x_cutoff), np.max(x2d[order_region]) + 1, dtype=float)
-    order_center = image.orders.center(x2d[order_region])[order - 1]
-    y_min = int(np.ceil(np.max(y2d[order_region][0] - order_center[0])))
-    y_max = int(np.floor(np.min(y2d[order_region][-1] - order_center[-1])))
-    y_to_grid = np.arange(y_min, y_max + 1, dtype=float)
-    # Resample the data in this region to be on a grid that is fully enclosed by the edge pixels
-    # Set the center of the order at zero
-    to_fit = image.mask[order_region] == 0
-    interpolator = CloughTocher2DInterpolator((x2d[order_region][to_fit].ravel(),
-                                              (y2d[order_region][to_fit] - order_center[to_fit]).ravel()),
-                                              image.data[order_region][to_fit].ravel())
-    x_grid, y_grid = np.meshgrid(x_to_grid, y_to_grid)
-    data = interpolator(np.array([x_grid.ravel(), y_grid.ravel()]).T).reshape(x_grid.shape)
-    y_grid += image.orders.center(x_grid)[order - 1]
-    return data, x_grid, y_grid
-
-
-def make_fringe_continuum_model(data, wavelet, level):
+def make_fringe_continuum_model(data, wavelet='sym8', level=5):
     # Fit wavelets to the data and get the lowest order coefficients.
-    coeffs = pywt.wavedec2(data, wavelet=wavelet, level=level,
-                           mode='symmetric')
+    coeffs = pywt.swt2(data, wavelet=(wavelet, wavelet), level=level)
 
-    continuum_coeffs = [coeffs[0]] + [(np.zeros_like(d[0]), np.zeros_like(d[1]),
-                                       np.zeros_like(d[2])) for d in coeffs[1:]]
+    # Coeffs are structured like the following (from the docs):
+    # [
+    #     (cA_m+level,
+    #         (cH_m+level, cV_m+level, cD_m+level)
+    #     ),
+    #     ...,
+    #     (cA_m+1,
+    #         (cH_m+1, cV_m+1, cD_m+1)
+    #     ),
+    #     (cA_m,
+    #         (cH_m, cV_m, cD_m)
+    #     )
+    # ]
+    # H is X, V is Y, D is Diagonal
 
-    continuum_model = pywt.waverec2(continuum_coeffs, wavelet=wavelet,
-                                    mode='symmetric')
+    # We need to remove all the x-details. We probably need to keep some of the lowest y-details
+    # because the y dimension is so much shorter than the x if we want to fit any illumination pattern
+    filtered_coeffs = []
+
+    for i, (cA, details) in enumerate(coeffs):
+        cH, cV, cD = details
+        filtered_coeffs.append((cA, (np.zeros_like(cH), np.zeros_like(cV), np.zeros_like(cD))))
+    continuum_model = pywt.iswt2(filtered_coeffs, wavelet=(wavelet, wavelet))
 
     h, w = data.shape
-    continuum_model = continuum_model[:h, :w]
-    return continuum_model
+    return continuum_model[:h, :w]
+
+
+def prepare_fringe_data(image, blue_cutoff, level=5):
+    # Resample the fringe data using the min of the top row and max of the bottom row
+    # to define the grid so that the interpolation is well defined
+    x2d, y2d = np.meshgrid(np.arange(image.shape[1], dtype=float), np.arange(image.shape[0], dtype=float))
+    y2d -= image.orders.center(x2d)[0]
+    red_order = image.orders.data == 1
+    cutoff_region = np.logical_and(red_order, image.wavelengths.data < blue_cutoff)
+    if not np.any(cutoff_region):
+        raise ValueError('No data in the cutoff region. Set the cutoff value to be larger.')
+    x_cutoff = np.max(x2d[cutoff_region]) + 1
+    # The x cutoff is almost always a soft cutoff, so we make sure we are at a multiple of 2^level (32)
+    # so that we don't have to pad the array in that direction
+    pad_length = 2 ** level - int(np.max(x2d[red_order]) + 1 - x_cutoff) % (2 ** level)
+    x_range = np.arange(x_cutoff - pad_length, np.max(x2d[red_order]) + 1)
+    red_order2d = get_order_2d_region(image.orders.data == 1)
+    y_min = int(np.ceil(np.max(y2d[red_order2d][0])))
+    y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
+    to_interpolate = np.logical_and(red_order, image.mask == 0)
+    interpolator = CloughTocher2DInterpolator((x2d[to_interpolate].ravel(), y2d[to_interpolate].ravel()),
+                                              image.data[to_interpolate].ravel(), fill_value=1.0)
+    fringe_x2d, fringe_y2d = np.meshgrid(x_range, np.arange(y_min, y_max + 1))
+
+    fringe_data = interpolator(fringe_x2d.ravel(), fringe_y2d.ravel()).reshape(fringe_x2d.shape)
+    # Pad the data to get to 2^N size in both dimensions for the wavelet transform
+    pad_height = (2 ** level - fringe_data.shape[0] % (2 ** level)) % (2 ** level)
+
+    pad_height_low = pad_height // 2
+    pad_height_high = pad_height - pad_height_low
+
+    # There is a bug in padding data when one dimension has a pad of zero so we have to be tricky
+    def pad_1d_smooth(slice_1d):
+        return pywt.pad(slice_1d, (pad_height_low, pad_height_high), mode='smooth')
+    # Smoothly pad the data along the first axis to reach a 2^N size and reduce edge artifacts
+    padded_data = np.apply_along_axis(pad_1d_smooth, axis=0, arr=fringe_data)
+
+    # Calculate the ranges of the new padded array
+    padded_x2d, padded_y2d = np.meshgrid(
+        x_range,
+        np.arange(y_min - pad_height_low, y_max + pad_height_high + 1)
+    )
+    return padded_data, padded_x2d, padded_y2d
 
 
 class FringeContinuumFitter(Stage):
-    WAVELET_CLASS = 'db8'
+    WAVELET_CLASS = 'sym8'
     # This appears to be specific to our data and the code does produce a warning
     # but the results look the best with this level of decomposition
     WAVELET_LEVEL = 5
 
     def do_stage(self, image):
         cutoff = self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
-        fringe_data, fringe_x2d, fringe_y2d = get_fringe_region_data(image, cutoff=cutoff)
+        fringe_data, fringe_x2d, fringe_y2d = prepare_fringe_data(image, cutoff)
 
         continuum_model = make_fringe_continuum_model(fringe_data, self.WAVELET_CLASS,
                                                       self.WAVELET_LEVEL)
@@ -167,23 +195,22 @@ class FringeContinuumFitter(Stage):
                                                           fringe_y2d.ravel()),
                                                          continuum_model.ravel(),
                                                          fill_value=1)
-        continuum_data = np.zeros_like(image.data)
-        continuum_data[image.orders.data == 1] = image.data[image.orders.data == 1]
-        x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-        to_interpolate = []
-        for x_column, y_column in zip(fringe_x2d.T, fringe_y2d.T):
-            interp_range = np.arange(int(np.ceil(np.min(y_column))), int(np.floor(np.max(y_column))))
-            to_interpolate += [(y, x_column[0]) for y in interp_range]
-        ys, xs = zip(*to_interpolate)
-        ys, xs = np.array(ys, dtype=int), np.array(xs, dtype=int)
-        continuum_data[ys, xs] = fringe_interpolator(x2d[ys, xs], y2d[ys, xs])
-        image.data[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
-        image.uncertainty[image.orders.data == 1] /= continuum_data[image.orders.data == 1]
+        # Outside of the fringe region, we just set the values to the data so that the fringe correction is
+        # just one in those regions to make the data prettier to look at
+        continuum_data = image.data.copy()
+        x2d, y2d = np.meshgrid(np.arange(image.shape[1], dtype=float), np.arange(image.shape[0], dtype=float))
+        y2d -= image.orders.center(x2d)[0]
+        to_interpolate = np.logical_and(cutoff <= image.wavelengths.data, image.orders.data == 1)
+        to_interpolate = np.logical_and(to_interpolate, y2d <= np.max(fringe_y2d))
+        to_interpolate = np.logical_and(to_interpolate, y2d >= np.min(fringe_y2d))
+        continuum_data[to_interpolate] = fringe_interpolator(x2d[to_interpolate], y2d[to_interpolate])
+        image.data[:, :] /= continuum_data
+        image.uncertainty[:, :] /= continuum_data
         # Normalize out the continuum such that the remaining fringe pattern has a median of 1
-        fringe_norm = np.median(image.data[ys, xs])
-        image.data[ys, xs] /= fringe_norm
-        image.uncertainty[ys, xs] /= fringe_norm
-        continuum_data[ys, xs] *= fringe_norm
+        fringe_norm = np.median(image.data[to_interpolate])
+        image.data[to_interpolate] /= fringe_norm
+        image.uncertainty[to_interpolate] /= fringe_norm
+        continuum_data[to_interpolate] *= fringe_norm
         image.add_or_update(ArrayData(continuum_data, name='CONTINUUM', meta=fits.Header({})))
         return image
 
