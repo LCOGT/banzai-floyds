@@ -31,7 +31,7 @@ spec:
               {{- include "banzaiFloyds.Env" $root | nindent 12 }}
             args:
             - banzai_floyds_stack_flats
-            - --site {{ .site }}
+            - "--site={{ .site }}"
             - "--post-to-archive"
             - "--post-to-opensearch"
             - "--fpack"
