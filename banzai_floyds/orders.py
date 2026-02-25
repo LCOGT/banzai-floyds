@@ -10,6 +10,7 @@ from scipy.special import expit
 from banzai_floyds.dbs import get_order_location
 from banzai_floyds.matched_filter import optimize_match_filter
 from copy import deepcopy
+from banzai_floyds import dbs
 
 
 class Orders:
@@ -402,11 +403,8 @@ class OrderSolver(Stage):
     A stage to map out the orders on sky flats. This would in principle work on lamp filters that do not have the
     dichroic as well but needs good signal to noise to get the curvature to converge well.
     """
-    # Currently, we hard code the order height to 93. If we wanted to measure it I recommend using a Canny filter and
-    # taking the edge closest to the previous guess of the edge.
-    ORDER_HEIGHT = 93
     CENTER_CUT_WIDTH = 31
-    POLYNOMIAL_ORDER = 3
+    POLYNOMIAL_ORDER = 4
 
     def do_stage(self, image):
         if image.orders is None:
@@ -414,14 +412,20 @@ class OrderSolver(Stage):
             # Take a vertical slice down about the middle of the chip
             # Find the two biggest peaks in summing the signal to noise
             # This is effectively a match filter with a top hat kernel
+            order_height = dbs.get_order_height(
+                image.instrument,
+                image.dateobs,
+                image.slit_width,
+                db_address=self.runtime_context.db_address
+            )
             center_section = slice(None), slice(image.data.shape[1] // 2 - self.CENTER_CUT_WIDTH // 2,
                                                 image.data.shape[1] // 2 + self.CENTER_CUT_WIDTH // 2 + 1, 1)
             order_centers = estimate_order_centers(image.data[center_section], image.uncertainty[center_section],
-                                                   order_height=self.ORDER_HEIGHT)
+                                                   order_height=order_height)
             order_estimates = []
             for i, order_center in enumerate(order_centers):
                 x, order_locations = trace_order(image.data, image.uncertainty,
-                                                 self.ORDER_HEIGHT,
+                                                 order_height,
                                                  order_center,
                                                  image.data.shape[1] // 2)
                 order_region = get_order_location(image.dateobs, i + 1, image.instrument,
@@ -433,7 +437,7 @@ class OrderSolver(Stage):
                                              y=order_locations[good_region],
                                              domain=(order_region[0],
                                                      order_region[1]))
-                order_estimates.append((initial_model.coef, self.ORDER_HEIGHT, initial_model.domain))
+                order_estimates.append((initial_model.coef, order_height, initial_model.domain))
         else:
             # Load from previous solve
             order_estimates = [(coeff, height, domain)

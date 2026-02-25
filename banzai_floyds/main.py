@@ -125,3 +125,30 @@ def banzai_floyds_stack_flats():
     stacking_max_date = max_date.strftime(TIMESTAMP_FORMAT)
     stack_flats_task.apply_async(args=(stacking_min_date, stacking_max_date,
                                        instrument_to_stack.id, vars(runtime_context)))
+
+
+def add_order_height():
+    parser = argparse.ArgumentParser(inspect.getdoc(banzai_floyds.dbs.add_order_height))
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    parser.add_argument('--instrument-id', dest='instrument_id', type=int, required=True,
+                        help='Instrument ID from the database to add a new order height for')
+    parser.add_argument('--height', dest='height', type=int, required=True,
+                        help='Order height in pixels')
+    parser.add_argument('--slit-width', dest='slit_width', type=float, required=True,
+                        help='Slit width in arcseconds')
+    parser.add_argument('--good-after', dest='good_after', default='1000-01-01T00:00:00',
+                        help='Use this order height for frames only taken after this date')
+    parser.add_argument('--good-until', dest='good_until', default='3000-01-01T00:00:00',
+                        help='Use this order height for frames only taken before this date')
+    banzai_floyds.dbs.add_order_height(**vars(parser.parse_args()))
+
+
+def populate_order_heights_locations():
+    parser = argparse.ArgumentParser("Populate order heights table and order locations (x domains) from existing data.")
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    args = parser.parse_args()
+    banzai_floyds.dbs.populate_order_heights_locations(args.db_address)

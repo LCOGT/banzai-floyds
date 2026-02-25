@@ -6,7 +6,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "banzai-floyds"
-version = "0.25.0"
+version = "0.26.0"
 requires-python = ">=3.10,<4"
 description = "BANZAI Data Reduction for FLOYDS spectra"
 readme = "docs/README.rst"
@@ -19,11 +19,12 @@ urls = { "Documentation" = "https://banzai-floyds.readthedocs.io/", "Source" = "
 
 dependencies = [
     "astropy>=6.0",
-    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.24.6",
+    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.29.0",
     "matplotlib",
     "torch",
     "ipython",
-    "pywavelets"
+    "pywavelets",
+    "alembic"
 ]
 [project.optional-dependencies]
 test = [
@@ -71,3 +72,5 @@ banzai_floyds_create_db = "banzai_floyds.main:create_db"
 banzai_floyds_populate_standards = "banzai_floyds.main:populate_photometric_standards"
 banzai_floyds_stack_flats = "banzai_floyds.main:banzai_floyds_stack_flats"
 banzai_floyds_add_order_location = "banzai_floyds.main:add_order_location"
+banzai_floyds_add_order_height = "banzai_floyds.main:add_order_height"
+banzai_floyds_populate_order_heights_locations = "banzai_floyds.main:populate_order_heights_locations"

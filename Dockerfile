@@ -1,4 +1,4 @@
-FROM ghcr.io/lcogt/banzai:1.24.6
+FROM ghcr.io/lcogt/banzai:1.29.0
 
 USER root
 

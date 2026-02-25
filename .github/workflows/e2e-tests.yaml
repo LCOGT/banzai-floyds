@@ -38,6 +38,7 @@ jobs:
         run: |
           # Deploy banzai stack
           kubectl apply -f banzai_floyds/tests/e2e-k8s.yaml 
+          kubectl rollout status deployment/banzai-floyds-e2e
           POD=$(kubectl get pod -l app.kubernetes.io/name=banzai-floyds-e2e -o jsonpath="{.items[0].metadata.name}")
           echo "POD=${POD}" >> $GITHUB_ENV
           # Wait for banzai to be ready
