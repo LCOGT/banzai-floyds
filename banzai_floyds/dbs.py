@@ -1,4 +1,4 @@
-from banzai.dbs import Base, add_or_update_record, get_session, CalibrationImage
+from banzai.dbs import Base, add_or_update_record, get_session, CalibrationImage, get_instruments_at_site
 from sqlalchemy import Column, Integer, String, Float, create_engine, ForeignKey, DateTime, desc, func
 from astropy.coordinates import SkyCoord
 from astropy import units
@@ -6,7 +6,7 @@ from banzai.utils.fits_utils import open_fits_file
 from astropy.table import Table
 from glob import glob
 import os
-from astropy.io import fits
+from astropy.io import fits, ascii
 import datetime
 from banzai.utils.date_utils import parse_date_obs
 import importlib.resources
@@ -70,6 +70,17 @@ class OrderLocation(Base):
     xdomainmax = Column(Integer)
 
 
+class OrderHeight(Base):
+    __tablename__ = 'orderheights'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), index=True)
+    order_id = Column(Integer)
+    height = Column(Integer)
+    slit_width = Column(Float)
+    good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
+    good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
+
+
 def create_db(db_address):
     # Create an engine for the database
     engine = create_engine(db_address)
@@ -105,7 +116,15 @@ def get_order_location(dateobs, order_id, instrument, db_address):
 def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
                        order_id, good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
     """ Add the x range (location) to use for a given order/instrument.
+    """
+    insert_instrument_config_info(OrderLocation, instrument_id, 
+                                  {'xdomainmin': xdomainmin, 'xdomainmax': xdomainmax, 'order_id': order_id},
+                                  good_until, good_after, {'order_id': order_id}, db_address)
 
+
+def insert_instrument_config_info(record_type, instrument_id, config_values, 
+                                  good_until, good_after, match_criteria, db_address):
+    """
     We cover 4 cases:
     - Replace the current running location (good until = inf):
         - The new location will become the current running location
@@ -125,56 +144,89 @@ def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
     with get_session(db_address) as db_session:
         # Case 1: Replace the current running location
         if good_until > datetime.datetime(2100, 1, 1):
-            running_location = db_session.query(OrderLocation).filter(OrderLocation.instrument_id == instrument_id)
-            running_location = running_location.filter(OrderLocation.order_id == order_id)
-            running_location = running_location.filter(OrderLocation.good_until >= datetime.datetime(2100, 1, 1))
-            running_location = running_location.first()
-            if running_location is not None:
-                running_location.good_until = good_after
-                db_session.add(running_location)
+            running_config = db_session.query(record_type).filter(record_type.instrument_id == instrument_id)
+            for criterion in match_criteria:
+                comparison = getattr(record_type, criterion) == match_criteria[criterion]
+                running_config = running_config.filter(comparison)
+            running_config = running_config.filter(record_type.good_until >= datetime.datetime(2100, 1, 1))
+            running_config = running_config.first()
+            if running_config is not None:
+                running_config.good_until = good_after
+                db_session.add(running_config)
             db_session.commit()
         else:
             # Case 2: New record falls entirely inside an existing one
-            overlapping_locations = db_session.query(OrderLocation).filter(OrderLocation.instrument_id == instrument_id)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.order_id == order_id)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.good_after <= good_after)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.good_until >= good_until)
-            overlapping_locations = overlapping_locations.all()
-            for location in overlapping_locations:
-                split_location = OrderLocation(instrument_id=instrument_id,
-                                               xdomainmin=location.xdomainmin, xdomainmax=location.xdomainmax,
-                                               order_id=order_id, good_after=good_until, good_until=location.good_until)
-                db_session.add(split_location)
-                location.good_until = good_after
-                db_session.add(location)
+            overlapping_configs = db_session.query(record_type).filter(record_type.instrument_id == instrument_id)
+            for criterion in match_criteria:
+                comparison = getattr(record_type, criterion) == match_criteria[criterion]
+                overlapping_configs = overlapping_configs.filter(comparison)
+            overlapping_configs = overlapping_configs.filter(record_type.good_after <= good_after)
+            overlapping_configs = overlapping_configs.filter(record_type.good_until >= good_until)
+            overlapping_configs = overlapping_configs.all()
+            for config in overlapping_configs:
+                split_config = record_type(instrument_id=instrument_id, **config_values,
+                                           good_after=good_until, good_until=config.good_until)
+                db_session.add(split_config)
+                config.good_until = good_after
+                db_session.add(config)
                 db_session.commit()
             # Case 3: New record starts and ends before an overlapping location
-            overlapping_locations = db_session.query(OrderLocation).filter(OrderLocation.instrument_id == instrument_id)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.order_id == order_id)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.good_after >= good_after)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.good_until >= good_until)
-            overlapping_locations = overlapping_locations.all()
-            for location in overlapping_locations:
-                location.good_after = good_until
-                db_session.add(location)
+            overlapping_configs = db_session.query(record_type).filter(record_type.instrument_id == instrument_id)
+            for criterion in match_criteria:
+                comparison = getattr(record_type, criterion) == match_criteria[criterion]
+                overlapping_configs = overlapping_configs.filter(comparison)
+            overlapping_configs = overlapping_configs.filter(record_type.good_after >= good_after)
+            overlapping_configs = overlapping_configs.filter(record_type.good_until >= good_until)
+            overlapping_configs = overlapping_configs.all()
+            for config in overlapping_configs:
+                config.good_after = good_until
+                db_session.add(config)
                 db_session.commit()
             # Case 4: New record starts and ends after an overlapping location
-            overlapping_locations = db_session.query(OrderLocation).filter(OrderLocation.instrument_id == instrument_id)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.order_id == order_id)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.good_after <= good_after)
-            overlapping_locations = overlapping_locations.filter(OrderLocation.good_until <= good_until)
-            overlapping_locations = overlapping_locations.all()
-            for location in overlapping_locations:
-                location.good_until = good_after
-                db_session.add(location)
+            overlapping_configs = db_session.query(record_type).filter(record_type.instrument_id == instrument_id)
+            for criterion in match_criteria:
+                comparison = getattr(record_type, criterion) == match_criteria[criterion]
+                overlapping_configs = overlapping_configs.filter(comparison)
+            overlapping_configs = overlapping_configs.filter(record_type.good_after <= good_after)
+            overlapping_configs = overlapping_configs.filter(record_type.good_until <= good_until)
+            overlapping_configs = overlapping_configs.all()
+            for config in overlapping_configs:
+                config.good_until = good_after
+                db_session.add(config)
                 db_session.commit()
 
         # After all that create the new location record
-        new_location = OrderLocation(instrument_id=instrument_id, xdomainmin=xdomainmin,
-                                     xdomainmax=xdomainmax, order_id=order_id,
-                                     good_after=good_after, good_until=good_until)
-        db_session.add(new_location)
+        new_config = record_type(instrument_id=instrument_id, **config_values,
+                                 good_after=good_after, good_until=good_until)
+        db_session.add(new_config)
         db_session.commit()
+
+
+def add_order_height(db_address, instrument_id, height, slit_width, 
+                     good_until='3000-01-01T00:00:00', good_after='1000-01-01T00:00:00'):
+    insert_instrument_config_info(OrderHeight, instrument_id, {'height': height, 'slit_width': slit_width},
+                                  good_after=good_after, good_until=good_until,
+                                  match_criteria={'slit_width': slit_width},
+                                  db_address=db_address)
+
+
+def get_order_height(instrument, dateobs, slit_width, db_address):
+    with get_session(db_address) as db_session:
+        if 'postgres' in db_session.bind.dialect.name:
+            order_func = func.abs(func.extract("epoch", FLOYDSCalibrationImage.dateobs) -
+                                  func.extract("epoch", dateobs))
+        elif 'sqlite' in db_session.bind.dialect.name:
+            order_func = func.abs(func.julianday(FLOYDSCalibrationImage.dateobs) - func.julianday(dateobs))
+        else:
+            raise NotImplementedError("Only postgres and sqlite are supported")
+
+        height_query = db_session.query(OrderHeight).filter(OrderHeight.instrument_id == instrument.id)
+        height_query = height_query.filter(OrderHeight.slit_width == slit_width)
+        height_query = height_query.filter(OrderHeight.good_after <= dateobs)
+        height_query = height_query.filter(OrderHeight.good_until >= dateobs)
+        height_query.order_by(order_func)
+        order_height = height_query.first()
+        return order_height.height
 
 
 def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selection_criteria: list, db_address: str):
@@ -246,3 +298,29 @@ def save_calibration_info(calibration_image: FLOYDSCalibrationImage, db_address)
         add_or_update_record(db_session, FLOYDSCalibrationImage, {'filename': record_attributes['filename']},
                              record_attributes)
         db_session.commit()
+
+
+def populate_order_heights_locations(db_address):
+    """Populate the order heights and order location tables with data in the banzai-floyds repo"""
+    order_locations_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'order_locations.dat')
+    order_locations = ascii.read(order_locations_file)
+    for order_location in order_locations:
+        instruments_at_site = get_instruments_at_site(order_location['site'], db_address=db_address)
+        for instrument in instruments_at_site:
+            if 'floyds' in instrument.type.lower():
+                floyds_instrument = instrument
+                break
+        add_order_location(db_address, floyds_instrument.id, order_location['xdomainmin'],
+                           order_location['xdomainmax'], order_location['order_id'],
+                           order_location['xdomainmax'], order_location['order_id'],
+                           good_after=order_location['good_after'], good_until=order_location['good_until'])
+    order_heights_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'order_heights.dat')
+    order_heights = ascii.read(order_heights_file)
+    for order_height in order_heights:
+        instruments_at_site = get_instruments_at_site(order_height['site'], db_address=db_address)
+        for instrument in instruments_at_site:
+            if 'floyds' in instrument.type.lower():
+                floyds_instrument = instrument
+                break
+        add_order_height(db_address, floyds_instrument.id, order_height['height'], order_height['slit_width'],
+                         good_after=order_height['good_after'], good_until=order_height['good_until'])

@@ -252,16 +252,19 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     return frame
 
 
-def load_manual_region(region_filename, site_id, order_id, shape, order_height):
+def load_manual_region(region_filename, site_id, flat_filename, order_id, shape, order_height):
     with open(region_filename) as region_file:
         region_fits = json.load(region_file)
-
+    if flat_filename == '*':
+        flat_filename = list(region_fits[site_id].keys())[0]
+    if flat_filename not in region_fits[site_id]:
+        return None
     # Ensure that overlap is 99% between the manual fits and the automatic order fits
     manual_order_region = np.zeros(shape, dtype=bool)
     x2d, y2d = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
-    order_fit = Legendre(coef=region_fits[site_id][order_id]['coef'],
-                         domain=region_fits[site_id][order_id]['domain'],
-                         window=region_fits[site_id][order_id]['window'])
+    order_fit = Legendre(coef=region_fits[site_id][flat_filename][order_id]['coef'],
+                         domain=region_fits[site_id][flat_filename][order_id]['domain'],
+                         window=region_fits[site_id][flat_filename][order_id]['window'])
     order_center = np.round(order_fit(x2d)).astype(int)
     manual_order_region = np.logical_and(x2d >= order_fit.domain[0], x2d <= order_fit.domain[1])
     manual_order_region = np.logical_and(manual_order_region, y2d >= order_center - order_height // 2)
