@@ -302,7 +302,8 @@ def save_calibration_info(calibration_image: FLOYDSCalibrationImage, db_address)
 
 def populate_order_heights_locations(db_address):
     """Populate the order heights and order location tables with data in the banzai-floyds repo"""
-    order_locations_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'order_locations.dat')
+    pkg_location = importlib.resources.files('banzai_floyds')
+    order_locations_file = os.path.join(pkg_location, 'data', 'orders', 'order_locations.dat')
     order_locations = ascii.read(order_locations_file)
     for order_location in order_locations:
         instruments_at_site = get_instruments_at_site(order_location['site'], db_address=db_address)
@@ -314,7 +315,7 @@ def populate_order_heights_locations(db_address):
                            order_location['xdomainmax'], order_location['order_id'],
                            order_location['xdomainmax'], order_location['order_id'],
                            good_after=order_location['good_after'], good_until=order_location['good_until'])
-    order_heights_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'order_heights.dat')
+    order_heights_file = os.path.join(pkg_location, 'data', 'orders', 'order_heights.dat')
     order_heights = ascii.read(order_heights_file)
     for order_height in order_heights:
         instruments_at_site = get_instruments_at_site(order_height['site'], db_address=db_address)
