@@ -47,6 +47,9 @@ style = ["pycodestyle"]
 packages = [
   { include = "banzai_floyds" }
 ]
+include = [
+  "banzai_floyds/data/**/*"
+]
 
 [tool.poetry.dependencies]
 torch = [
