@@ -57,14 +57,14 @@ def test_fit_orders():
 @mock.patch('banzai_floyds.orders.dbs.get_order_height')
 @mock.patch('banzai_floyds.orders.get_order_location')
 def test_order_solver_stage(mock_location, mock_get_order_height):
-    mock_get_order_height.return_value = 93
+    order_height = 87
+    mock_get_order_height.return_value = order_height
     np.random.seed(1923142)
     ny, nx = 516, 503
     data = np.zeros((ny, nx))
     mock_location.return_value = (0, nx)
     input_centers = 145, 371
     input_center_params = [[input_centers[0], 15, 15], [input_centers[1], 17, 12]]
-    order_height = 87
     read_noise = 5  # everything is gain = 1
     data += np.random.normal(0.0, scale=read_noise, size=data.shape)
     input_order_regions = [order_region(order_height, Legendre(params, domain=(0, data.shape[1] - 1)),
@@ -77,7 +77,7 @@ def test_order_solver_stage(mock_location, mock_get_order_height):
     order_solver = OrderSolver(FakeContext())
     order_solver.ORDER_HEIGHT = order_height
     order_solver.CENTER_CUT_WIDTH = 21
-    order_solver.POLYNOMIAL_ORDER = 5
+    order_solver.POLYNOMIAL_ORDER = 3
     image = FLOYDSObservationFrame([CCDData(data=data, uncertainty=error,
                                             meta=fits.Header({'SITEID': 'ogg',
                                                               'DATE-OBS': '2024-10-01T00:00:00.000000',
