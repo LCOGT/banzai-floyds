@@ -170,7 +170,8 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                             fits.Header({'DAY-OBS': '20230101',
                                                          'DATE-OBS': '2023-01-01 12:41:56.11',
                                                          'HEIGHT': 0,
-                                                         'AIRMASS': 1.0}),
+                                                         'AIRMASS': 1.0,
+                                                         'APERWID': 2.0}),
                                             uncertainty=errors)],
                                    'foo.fits')
     frame.input_profile_centers = profile_centers

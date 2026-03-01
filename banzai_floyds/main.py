@@ -5,7 +5,7 @@ from banzai import logs
 import banzai_floyds.dbs
 import banzai.dbs
 import logging
-from banzai.celery import app
+from banzai.scheduling import app
 from banzai import calibrations
 from banzai.utils.date_utils import TIMESTAMP_FORMAT
 import datetime
