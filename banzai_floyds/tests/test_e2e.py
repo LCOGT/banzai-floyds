@@ -68,9 +68,10 @@ def run_reduce_individual_frames(filename_pattern, extra_checks=None):
         if extra_checks is not None:
             frame_passes = frame_passes and extra_checks(frame)
         if frame_passes:
-            file_utils.post_to_archive_queue(frame['filename'], frame['frameid'],
+            file_utils.post_to_archive_queue(frame['filename'], 
                                              os.getenv('FITS_BROKER'),
                                              exchange_name=os.getenv('FITS_EXCHANGE'),
+                                             frameid=frame['frameid'],
                                              SITEID=frame['site'], INSTRUME=frame['instrument'])
     celery_join()
     logger.info('Finished reducing individual frames for filenames: {filenames}'.format(filenames=filename_pattern))
