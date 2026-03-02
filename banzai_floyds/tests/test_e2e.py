@@ -30,6 +30,7 @@ app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 DATA_FILELIST = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_data.dat')
 CONFIGDB_FILENAME = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'configdb.json')
 TEST_FRAMES = ascii.read(DATA_FILELIST)
+FLATLIST = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflats.dat')
 ORDER_HEIGHT = 95
 
 
@@ -108,7 +109,7 @@ class TestOrderDetection:
     @pytest.fixture(autouse=True, scope='module')
     def process_skyflat(self, init):
         # Pull down our experimental skyflat
-        skyflat_files = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflats.dat'))
+        skyflat_files = ascii.read(FLATLIST)
         for skyflat in skyflat_files:
             skyflat_info = dict(skyflat)
             context = banzai.main.parse_args(settings, parse_system_args=False)
@@ -142,9 +143,9 @@ class TestOrderDetection:
             # Note there are only two orders in floyds
             assert np.max(hdu['ORDERS'].data) == 2
 
-    def test_that_order_mask_overlaps_manual_reducion(self):
+    def test_that_order_mask_overlaps_manual_reduction(self):
         # This uses the by hand measurements in chacterization_testing/ManualReduction.ipynb
-        test_data = ascii.read(os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'skyflats.dat'))
+        test_data = ascii.read(FLATLIST)
         for row in test_data:
             row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
 
