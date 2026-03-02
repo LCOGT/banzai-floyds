@@ -1,1 +1,1 @@
-Generic single-database configuration.
+This folder contains database migrations for BANZAI-FLOYDS. They are managed by Alembic https://alembic.sqlalchemy.org/en/latest/
