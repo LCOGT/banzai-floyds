@@ -25,7 +25,6 @@ def upgrade() -> None:
         'orderheights',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
         sa.Column('instrument_id', sa.Integer(), nullable=True),
-        sa.Column('order_id', sa.Integer(), nullable=True),
         sa.Column('height', sa.Integer(), nullable=True),
         sa.Column('slit_width', sa.Float(), nullable=True),
         sa.Column('good_until', sa.DateTime(), nullable=True),

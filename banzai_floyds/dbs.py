@@ -74,7 +74,6 @@ class OrderHeight(Base):
     __tablename__ = 'orderheights'
     id = Column(Integer, primary_key=True, autoincrement=True)
     instrument_id = Column(Integer, ForeignKey("instruments.id"), index=True)
-    order_id = Column(Integer)
     height = Column(Integer)
     slit_width = Column(Float)
     good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
@@ -117,12 +116,12 @@ def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
                        order_id, good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
     """ Add the x range (location) to use for a given order/instrument.
     """
-    insert_instrument_config_info(OrderLocation, instrument_id, 
-                                  {'xdomainmin': xdomainmin, 'xdomainmax': xdomainmax, 'order_id': order_id},
+    insert_instrument_config_info(OrderLocation, instrument_id,
+                                  {'xdomainmin': xdomainmin, 'xdomainmax': xdomainmax},
                                   good_until, good_after, {'order_id': order_id}, db_address)
 
 
-def insert_instrument_config_info(record_type, instrument_id, config_values, 
+def insert_instrument_config_info(record_type, instrument_id, config_values,
                                   good_until, good_after, match_criteria, db_address):
     """
     We cover 4 cases:
@@ -138,7 +137,6 @@ def insert_instrument_config_info(record_type, instrument_id, config_values,
     - The new location starts and ends after an overlapping location:
         - The existing location's good until is set to the good after of the new location
     """
-
     good_until = parse_date_obs(good_until)
     good_after = parse_date_obs(good_after)
     with get_session(db_address) as db_session:
@@ -150,7 +148,7 @@ def insert_instrument_config_info(record_type, instrument_id, config_values,
                 running_config = running_config.filter(comparison)
             running_config = running_config.filter(record_type.good_until >= datetime.datetime(2100, 1, 1))
             running_config = running_config.first()
-            if running_config is not None:
+            if running_config is not None and running_config.good_after != good_after:
                 running_config.good_until = good_after
                 db_session.add(running_config)
             db_session.commit()
@@ -164,6 +162,9 @@ def insert_instrument_config_info(record_type, instrument_id, config_values,
             overlapping_configs = overlapping_configs.filter(record_type.good_until >= good_until)
             overlapping_configs = overlapping_configs.all()
             for config in overlapping_configs:
+                if config.good_after == good_after and config.good_until == good_until:
+                    # In this case we just update the existing record
+                    continue
                 split_config = record_type(instrument_id=instrument_id, **config_values,
                                            good_after=good_until, good_until=config.good_until)
                 db_session.add(split_config)
@@ -196,15 +197,17 @@ def insert_instrument_config_info(record_type, instrument_id, config_values,
                 db_session.commit()
 
         # After all that create the new location record
-        new_config = record_type(instrument_id=instrument_id, **config_values,
-                                 good_after=good_after, good_until=good_until)
-        db_session.add(new_config)
+        equivalence_criteria = dict(instrument_id=instrument_id, good_after=good_after, good_until=good_until,
+                                    **match_criteria)
+        record_attributes = dict(instrument_id=instrument_id, good_after=good_after, good_until=good_until,
+                                 **match_criteria, **config_values)
+        add_or_update_record(db_session, record_type, equivalence_criteria, record_attributes)
         db_session.commit()
 
 
-def add_order_height(db_address, instrument_id, height, slit_width, 
+def add_order_height(db_address, instrument_id, height, slit_width,
                      good_until='3000-01-01T00:00:00', good_after='1000-01-01T00:00:00'):
-    insert_instrument_config_info(OrderHeight, instrument_id, {'height': height, 'slit_width': slit_width},
+    insert_instrument_config_info(OrderHeight, instrument_id, {'height': height},
                                   good_after=good_after, good_until=good_until,
                                   match_criteria={'slit_width': slit_width},
                                   db_address=db_address)
@@ -219,7 +222,6 @@ def get_order_height(instrument, dateobs, slit_width, db_address):
             order_func = func.abs(func.julianday(FLOYDSCalibrationImage.dateobs) - func.julianday(dateobs))
         else:
             raise NotImplementedError("Only postgres and sqlite are supported")
-
         height_query = db_session.query(OrderHeight).filter(OrderHeight.instrument_id == instrument.id)
         height_query = height_query.filter(OrderHeight.slit_width == slit_width)
         height_query = height_query.filter(OrderHeight.good_after <= dateobs)
@@ -311,10 +313,11 @@ def populate_order_heights_locations(db_address):
             if 'floyds' in instrument.type.lower():
                 floyds_instrument = instrument
                 break
-        add_order_location(db_address, floyds_instrument.id, order_location['xdomainmin'],
-                           order_location['xdomainmax'], order_location['order_id'],
-                           order_location['xdomainmax'], order_location['order_id'],
+
+        add_order_location(db_address, floyds_instrument.id, int(order_location['xdomainmin']),
+                           int(order_location['xdomainmax']), int(order_location['order_id']),
                            good_after=order_location['good_after'], good_until=order_location['good_until'])
+
     order_heights_file = os.path.join(pkg_location, 'data', 'orders', 'order_heights.dat')
     order_heights = ascii.read(order_heights_file)
     for order_height in order_heights:
@@ -323,5 +326,7 @@ def populate_order_heights_locations(db_address):
             if 'floyds' in instrument.type.lower():
                 floyds_instrument = instrument
                 break
-        add_order_height(db_address, floyds_instrument.id, order_height['height'], order_height['slit_width'],
+        add_order_height(db_address, floyds_instrument.id,
+                         int(order_height['height']),
+                         float(order_height['slit_width']),
                          good_after=order_height['good_after'], good_until=order_height['good_until'])

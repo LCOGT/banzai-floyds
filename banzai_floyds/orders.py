@@ -376,6 +376,7 @@ class OrderLoader(FLOYDSCalibrationUser):
         image.orders = master_calibration_image.orders
         image.add_or_update(master_calibration_image['ORDER_COEFFS'])
         image.add_or_update(master_calibration_image['ORDERS'])
+        image.meta['L1ORDRID'] = master_calibration_image.filename, 'ID of Orders frame'
         return image
 
 
@@ -473,7 +474,7 @@ class OrderSolver(Stage):
 
         image.add_or_update(
             DataTable(coeff_table, name='ORDER_COEFFS',
-                      meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': self.ORDER_HEIGHT}))
+                      meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': order_heights[0]}))
         )
         image.is_master = True
 
