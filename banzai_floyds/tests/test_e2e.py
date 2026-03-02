@@ -132,7 +132,7 @@ class TestOrderDetection:
         celery_join()
 
     def test_that_order_mask_exists(self):
-        test_data = ascii.read(os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'skyflats.dat'))
+        test_data = ascii.read(FLATLIST)
         for row in test_data:
             row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
         filenames = expected_filenames(test_data)
@@ -154,9 +154,8 @@ class TestOrderDetection:
                                             'orders_e2e_fits.dat')
         for filename in filenames:
             hdu = fits.open(filename)
-            site_id = hdu['SCI'].header['SITEID']
             for order_id in [1, 2]:
-                manual_order_region = load_manual_region(manual_fits_filename, site_id,
+                manual_order_region = load_manual_region(manual_fits_filename,
                                                          filename.replace('.fits', '').replace('.fz', ''),
                                                          str(order_id),
                                                          hdu['SCI'].data.shape,
