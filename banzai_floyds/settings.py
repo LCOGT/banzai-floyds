@@ -58,7 +58,7 @@ CALIBRATION_IMAGE_TYPES = ['BIAS', 'DARK', 'SKYFLAT', 'BPM', 'LAMPFLAT', 'ARC', 
 
 CALIBRATION_LOOKBACK = {'LAMPFLAT': 2.5}
 
-CALIBRATION_SET_CRITERIA = {'SKYFLAT': [], 'LAMPFLAT': ['slit_width'], 'ARC': ['slit_width'],
+CALIBRATION_SET_CRITERIA = {'SKYFLAT': ['slit_width'], 'LAMPFLAT': ['slit_width'], 'ARC': ['slit_width'],
                             'FRINGE': ['slit_width']}
 
 OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']

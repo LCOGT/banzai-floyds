@@ -1,3 +1,7 @@
+0.26.0 (2026-02-25)
+-------------------
+- Set the order height and initial order shape fit to be specific to each slit mask (aperture width)
+
 0.25.0 (2026-02-20)
 -------------------
 - Fix to the k8s cron call to stack fringe frames

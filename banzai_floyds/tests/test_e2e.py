@@ -1,6 +1,6 @@
 import pytest
 import time
-from banzai.celery import app, stack_calibrations
+from banzai.scheduling import app, stack_calibrations
 from banzai.tests.utils import FakeResponse
 from banzai_floyds.tests.utils import load_manual_region
 import banzai.dbs
@@ -30,6 +30,7 @@ app.conf.update(CELERY_TASK_ALWAYS_EAGER=True)
 DATA_FILELIST = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_data.dat')
 CONFIGDB_FILENAME = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'configdb.json')
 TEST_FRAMES = ascii.read(DATA_FILELIST)
+FLATLIST = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflats.dat')
 ORDER_HEIGHT = 95
 
 
@@ -67,9 +68,10 @@ def run_reduce_individual_frames(filename_pattern, extra_checks=None):
         if extra_checks is not None:
             frame_passes = frame_passes and extra_checks(frame)
         if frame_passes:
-            file_utils.post_to_archive_queue(frame['filename'], frame['frameid'],
+            file_utils.post_to_archive_queue(frame['filename'], 
                                              os.getenv('FITS_BROKER'),
                                              exchange_name=os.getenv('FITS_EXCHANGE'),
+                                             frameid=frame['frameid'],
                                              SITEID=frame['site'], INSTRUME=frame['instrument'])
     celery_join()
     logger.info('Finished reducing individual frames for filenames: {filenames}'.format(filenames=filename_pattern))
@@ -98,30 +100,7 @@ def expected_filenames(file_table, one_d=False):
 def init(mock_configdb):
     banzai.dbs.create_db(os.environ["DB_ADDRESS"])
     banzai.dbs.populate_instrument_tables(db_address=os.environ["DB_ADDRESS"], configdb_address='http://fakeconfigdb')
-    ogg_instruments = banzai.dbs.get_instruments_at_site('ogg', os.environ["DB_ADDRESS"])
-    for instrument in ogg_instruments:
-        if 'floyds' in instrument.type.lower():
-            ogg_instrument = instrument
-            break
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id,
-                                         xdomainmin=0, xdomainmax=1550, order_id=1)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=ogg_instrument.id,
-                                         xdomainmin=500, xdomainmax=1835, order_id=2)
-
-    coj_instruments = banzai.dbs.get_instruments_at_site('coj', os.environ["DB_ADDRESS"])
-    for instrument in coj_instruments:
-        if 'floyds' in instrument.type.lower():
-            coj_instrument = instrument
-            break
-
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
-                                         xdomainmin=0, xdomainmax=1550, order_id=1)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
-                                         xdomainmin=615, xdomainmax=1965, order_id=2)
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
-                                         xdomainmin=55, xdomainmax=1600, order_id=1, good_after="2024-12-01T00:00:00.000000")
-    banzai_floyds.dbs.add_order_location(db_address=os.environ["DB_ADDRESS"], instrument_id=coj_instrument.id,
-                                         xdomainmin=615, xdomainmax=1920, order_id=2, good_after="2024-12-01T00:00:00.000000")
+    banzai_floyds.dbs.populate_order_heights_locations(db_address=os.environ["DB_ADDRESS"])
     banzai_floyds.dbs.ingest_standards(db_address=os.environ["DB_ADDRESS"])
 
 
@@ -131,7 +110,7 @@ class TestOrderDetection:
     @pytest.fixture(autouse=True, scope='module')
     def process_skyflat(self, init):
         # Pull down our experimental skyflat
-        skyflat_files = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
+        skyflat_files = ascii.read(FLATLIST)
         for skyflat in skyflat_files:
             skyflat_info = dict(skyflat)
             context = banzai.main.parse_args(settings, parse_system_args=False)
@@ -154,7 +133,7 @@ class TestOrderDetection:
         celery_join()
 
     def test_that_order_mask_exists(self):
-        test_data = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
+        test_data = ascii.read(FLATLIST)
         for row in test_data:
             row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
         filenames = expected_filenames(test_data)
@@ -165,24 +144,26 @@ class TestOrderDetection:
             # Note there are only two orders in floyds
             assert np.max(hdu['ORDERS'].data) == 2
 
-    def test_that_order_mask_overlaps_manual_reducion(self):
+    def test_that_order_mask_overlaps_manual_reduction(self):
         # This uses the by hand measurements in chacterization_testing/ManualReduction.ipynb
-        test_data = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'test_skyflat.dat'))
+        test_data = ascii.read(FLATLIST)
         for row in test_data:
             row['filename'] = row['filename'].replace("x00.fits", "f00.fits")
 
         filenames = expected_filenames(test_data)
-        manual_fits_filename = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data', 'orders_e2e_fits.dat')
+        manual_fits_filename = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data',
+                                            'orders_e2e_fits.dat')
         for filename in filenames:
             hdu = fits.open(filename)
-            site_id = hdu['SCI'].header['SITEID']
             for order_id in [1, 2]:
                 manual_order_region = load_manual_region(manual_fits_filename,
-                                                         site_id, str(order_id),
+                                                         filename.replace('.fits', '').replace('.fz', ''),
+                                                         str(order_id),
                                                          hdu['SCI'].data.shape,
                                                          ORDER_HEIGHT)
                 found_order = hdu['ORDERS'].data == order_id
-                assert np.logical_and(manual_order_region, found_order).sum() / found_order.sum() >= 0.95
+                if manual_order_region is not None:
+                    assert np.logical_and(manual_order_region, found_order).sum() / found_order.sum() >= 0.95
 
 
 @pytest.mark.e2e
@@ -212,7 +193,7 @@ class TestWavelengthSolutionCreation:
             site_id = os.path.basename(expected_file)[:3]
             for order_id in [1, 2]:
                 order_region = load_manual_region(order_fits_file,
-                                                  site_id, str(order_id),
+                                                  site_id, '*', str(order_id),
                                                   hdu['SCI'].data.shape,
                                                   ORDER_HEIGHT)
                 region = get_order_2d_region(order_region)
