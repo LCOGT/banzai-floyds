@@ -148,7 +148,7 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     x_cutoff = np.max(x2d[cutoff_region]) + 1
     # The x cutoff is almost always a soft cutoff, so we make sure we are at a multiple of 2^level (32)
     # so that we don't have to pad the array in that direction
-    pad_length = 2 ** level - int(np.max(x2d[red_order]) + 1 - x_cutoff) % (2 ** level)
+    pad_length = (2 ** level - int(np.max(x2d[red_order]) + 1 - x_cutoff) % (2 ** level)) % (2 ** level)
     x_range = np.arange(x_cutoff - pad_length, np.max(x2d[red_order]) + 1)
     red_order2d = get_order_2d_region(image.orders.data == 1)
     y_min = int(np.ceil(np.max(y2d[red_order2d][0])))

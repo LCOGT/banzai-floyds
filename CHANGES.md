@@ -1,6 +1,6 @@
 0.27.0 (2026-03-03)
 -------------------
-- Adding UI docs to the readthedocs.
+- Adding UI docs to Read the Docs.
 
 0.26.0 (2026-02-25)
 -------------------

@@ -192,8 +192,7 @@ class TestWavelengthSolutionCreation:
             hdu = fits.open(expected_file)
             site_id = os.path.basename(expected_file)[:3]
             for order_id in [1, 2]:
-                order_region = load_manual_region(order_fits_file,
-                                                  site_id, '*', str(order_id),
+                order_region = load_manual_region(order_fits_file, '*', str(order_id),
                                                   hdu['SCI'].data.shape,
                                                   ORDER_HEIGHT)
                 region = get_order_2d_region(order_region)

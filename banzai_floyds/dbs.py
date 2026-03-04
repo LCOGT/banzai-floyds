@@ -165,7 +165,7 @@ def insert_instrument_config_info(record_type, instrument_id, config_values,
                 if config.good_after == good_after and config.good_until == good_until:
                     # In this case we just update the existing record
                     continue
-                split_config = record_type(instrument_id=instrument_id, **config_values,
+                split_config = record_type(instrument_id=instrument_id, **match_criteria, **config_values,
                                            good_after=good_until, good_until=config.good_until)
                 db_session.add(split_config)
                 config.good_until = good_after
