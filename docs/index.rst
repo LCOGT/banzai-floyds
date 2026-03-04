@@ -1,15 +1,11 @@
-Documentation
-=============
-
-This is the documentation for banzai-floyds.
+.. include:: README.rst
 
 .. toctree::
-  :maxdepth: 1
+  :maxdepth: 2
   :titlesonly:
+  :hidden:
 
   banzai_floyds/processing.rst
   banzai_floyds/ExampleReduction.ipynb
   banzai_floyds/data-products.rst
-  banzai_floyds-ui/docs/ui-guide.rst
-
-.. include:: README.rst
+  banzai-floyds-ui/docs/ui-guide.rst
