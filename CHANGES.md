@@ -1,3 +1,7 @@
+0.27.0 (2026-03-03)
+-------------------
+- Adding UI docs to Read the Docs.
+
 0.26.0 (2026-02-25)
 -------------------
 - Set the order height and initial order shape fit to be specific to each slit mask (aperture width)

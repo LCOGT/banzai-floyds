@@ -1,5 +1,7 @@
-BANZAI-FLOYDS: Data Reduction for FLOYDS spectra
-------------------------------------------------
+=============
+BANZAI-FLOYDS
+=============
+.. rubric:: Data Reduction for FLOYDS spectra
 
 .. image:: http://img.shields.io/badge/powered%20by-AstroPy-orange.svg?style=flat
     :target: http://www.astropy.org

@@ -83,7 +83,7 @@ html_theme_options = {
 #html_static_path = ['_static']
 
 html_sidebars = {
-    '**': ['localtoc.html'],
+    '**': ['globaltoc.html'],
     'search': [],
     'genindex': [],
     'py-modindex': [],
@@ -93,3 +93,6 @@ html_sidebars = {
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = 'AstropyPackageTemplatedoc'
+
+html_short_title = "BANZAI-FLOYDS"
+html_title = "BANZAI-FLOYDS"
