@@ -1,3 +1,7 @@
+1.0.0 (2026-03-04)
+------------------
+- Initial production release
+
 0.27.0 (2026-03-03)
 -------------------
 - Adding UI docs to Read the Docs.
