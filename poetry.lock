@@ -2305,7 +2305,7 @@ test = ["pytest (>=7.4)", "pytest-cov (>=4.1)"]
 
 [[package]]
 name = "lco-banzai"
-version = "1.29.0"
+version = "1.30.0"
 description = "Python data reduction package for LCOGT data"
 optional = false
 python-versions = ">=3.10,<4"
@@ -2354,8 +2354,8 @@ test = ["coverage", "pytest (>=4.0)", "pytest-astropy"]
 [package.source]
 type = "git"
 url = "https://github.com/lcogt/banzai.git"
-reference = "1.29.0"
-resolved_reference = "a8fca2baccab2bb333b7625752eff312741eaef2"
+reference = "1.30.0"
+resolved_reference = "518a7e5c19a80ff8c3ccc334399c56a3c5e4edf9"
 
 [[package]]
 name = "lcogt-logging"
@@ -6893,4 +6893,4 @@ test = ["coverage", "mock", "pytest", "pytest-astropy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4"
-content-hash = "ef64c2870853400a51e28423f25d89f82a3de14fae48341b74b6904bbfc02adb"
+content-hash = "612153a90cebd3a4b423c07dde51c57dc1fbd245254dbb443fd8b435cbfa05f7"
