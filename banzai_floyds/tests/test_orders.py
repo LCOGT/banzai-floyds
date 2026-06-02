@@ -1,4 +1,4 @@
-from banzai_floyds.orders import estimate_order_centers, order_region, fit_order_curve, OrderSolver, trace_order
+from banzai_floyds.orders import estimate_order_centers, order_region, OrderSolver, trace_order
 from banzai_floyds.orders import OrderTweaker, Orders
 import numpy as np
 from numpy.polynomial.legendre import Legendre
@@ -24,8 +24,9 @@ def test_blind_center_search():
         error[order_slice] = 100.0
 
     found_centers = estimate_order_centers(data, error, order_height)
+    # Centers are now sub-pixel, so check proximity rather than exact integer membership
     for i in order_centers:
-        assert i in found_centers
+        assert np.min(np.abs(found_centers - i)) < 0.5
 
 
 def test_order_region():
@@ -34,24 +35,6 @@ def test_order_region():
     expected = np.zeros((ny, nx), dtype=np.uint8)
     expected[25:-25, :501] = 1
     np.testing.assert_allclose(orders.data, expected)
-
-
-def test_fit_orders():
-    data = np.zeros((512, 501))
-    error = np.ones((512, 501))
-    order_center = 151
-    input_center_params = [order_center, 10, 20]
-    order_height = 85
-    input_order_region = order_region(order_height, Legendre(input_center_params, domain=(0, data.shape[1] - 1)),
-                                      data.shape)
-    data[input_order_region] = 1000.0
-    error[input_order_region] = 100.0
-    x2d, y2d = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
-    # Give an initial guess of the center, but zero curvature to make sure we converge
-    fitted_order_model = fit_order_curve(data, error, order_height, [order_center, 5, 15],
-                                         (x2d, y2d), (np.min(x2d), np.max(x2d)))
-    fitted_order_region = order_region(order_height, fitted_order_model, data.shape)
-    assert (input_order_region != fitted_order_region).sum() < 150
 
 
 @mock.patch('banzai_floyds.orders.dbs.get_order_height')
