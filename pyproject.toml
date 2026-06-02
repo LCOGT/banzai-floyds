@@ -38,8 +38,7 @@ docs = [
     "nbsphinx",
     "ipykernel"
 ]
-cpu  = ["torch"]
-cuda = ["torch"]
+
 style = ["pycodestyle"]
 
 [tool.setuptools.packages.find]

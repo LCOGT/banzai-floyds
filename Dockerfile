@@ -12,6 +12,8 @@ RUN uv sync --locked --directory=/lco/banzai-floyds --no-install-project
 
 COPY pytest.ini /home/archive/pytest.ini
 
-RUN uv sync --locked --directory /lco/banzai-floyds
+COPY . /lco/banzai-floyds
+
+RUN uv sync --locked --directory=/lco/banzai-floyds
 
 USER archive
