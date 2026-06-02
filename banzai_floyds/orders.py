@@ -110,13 +110,8 @@ def tophat_filter_metric(data, error, region):
     -------
     float: Metric of the likelihood for the matched top-hat filter
     """
-    inverse_variance = 1.0 / error[region] / error[region]
-    normalization = inverse_variance.sum()
-    # If there are no (good) pixels in the region the metric is undefined; treat it as a non-detection.
-    if normalization <= 0:
-        return -np.inf
-    metric = (data[region] * inverse_variance).sum()
-    metric /= normalization ** 0.5
+    metric = (data[region] / error[region] / error[region]).sum()
+    metric /= ((1.0 / error[region] / error[region]).sum())**0.5
     return metric
 
 
@@ -483,19 +478,17 @@ class OrderSolver(Stage):
                                                 image.data.shape[1] // 2 + self.CENTER_CUT_WIDTH // 2 + 1, 1)
             order_centers = estimate_order_centers(image.data[center_section], image.uncertainty[center_section],
                                                    order_height=order_height, mask=image.mask[center_section])
-            order_estimates = []
+            order_curves = []
+            order_heights = []
             for i, order_center in enumerate(order_centers):
-                # The valid x range for this order; use it to bound the trace so we don't wander into
-                # columns where the order has fallen off the chip or the other order dominates.
+                # Get the x domain where the order is defined so we don't hit weird edge effects
                 order_region = get_order_location(image.dateobs, i + 1, image.instrument,
                                                   self.runtime_context.db_address)
-                # Start the trace at the chip center, clamped into the order's x range so the seed column
-                # is always somewhere the order actually exists.
-                start_x = int(np.clip(image.data.shape[1] // 2, order_region[0], order_region[1]))
+                # Start the trace at the chip center
                 x, order_locations = trace_order(image.data, image.uncertainty,
                                                  order_height,
                                                  order_center,
-                                                 start_x,
+                                                 image.data.shape[1] // 2,
                                                  mask=image.mask,
                                                  x_min=order_region[0],
                                                  x_max=order_region[1])
@@ -504,18 +497,14 @@ class OrderSolver(Stage):
                                              y=order_locations,
                                              domain=(order_region[0],
                                                      order_region[1]))
-                order_estimates.append((initial_model.coef, order_height, initial_model.domain))
+                order_curves.append(initial_model)
+                order_heights.append(order_height)
         else:
             # Load from previous solve
-            order_estimates = [(coeff, height, domain)
-                               for coeff, height, domain in
-                               zip(image.orders.coeffs, image.orders.order_heights, image.orders.domains)]
-        # The sub-pixel trace points already pin down the curvature of the slit, so the polynomial fit to
-        # those points (built above) is our order curve. We no longer run a full 2-d matched-filter
-        # parameter estimation on top of it: it was sensitive to its initial guess and prone to settling
-        # in local optima, and the trace fit recovers the same curve more robustly.
-        order_curves = [Legendre(coeff, domain=domain) for coeff, _, domain in order_estimates]
-        order_heights = [height for _, height, _ in order_estimates]
+            order_curves = [Legendre(coeff, domain=domain)
+                            for coeff, domain in zip(image.orders.coeffs, image.orders.domains)]
+            order_heights = [height for height in image.orders.order_heights]
+
         image.orders = Orders(order_curves, image.data.shape, order_heights)
         image.add_or_update(ArrayData(image.orders.data, name='ORDERS'))
         coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(coeffs)}

@@ -24,7 +24,6 @@ def test_blind_center_search():
         error[order_slice] = 100.0
 
     found_centers = estimate_order_centers(data, error, order_height)
-    # Centers are now sub-pixel, so check proximity rather than exact integer membership
     for i in order_centers:
         assert np.min(np.abs(found_centers - i)) < 0.5
 
