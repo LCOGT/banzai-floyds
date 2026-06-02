@@ -1,13 +1,11 @@
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0",
-            "cython", "extension-helpers",
-            "numpy>=1.24"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61", "cython", "extension-helpers", "numpy>=2"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "banzai-floyds"
 version = "1.0.2"
-requires-python = ">=3.12,<4"
+requires-python = ">=3.11,<4"
 description = "BANZAI Data Reduction for FLOYDS spectra"
 readme = "docs/README.rst"
 authors = [
@@ -19,13 +17,14 @@ urls = { "Documentation" = "https://banzai-floyds.readthedocs.io/", "Source" = "
 
 dependencies = [
     "astropy>=6.0",
-    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.32.1",
+    "lco-banzai @ git+https://github.com/lcogt/banzai.git@1.36.2",
     "matplotlib",
     "torch",
     "ipython",
     "pywavelets",
     "alembic"
 ]
+
 [project.optional-dependencies]
 test = [
     "pytest>=4.0",
@@ -43,31 +42,25 @@ cpu  = ["torch"]
 cuda = ["torch"]
 style = ["pycodestyle"]
 
-[tool.poetry]
-packages = [
-  { include = "banzai_floyds" }
-]
-include = [
-  "banzai_floyds/data/**/*"
-]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["banzai_floyds*"]
 
-[tool.poetry.dependencies]
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+banzai_floyds = ["data/**/*"]
+
+[tool.uv.sources]
 torch = [
-    { version = "^2.3", source = "PyPI", markers = "sys_platform=='darwin'" },
-    { version = "^2.3", source = "pytorch-cpu", markers = "sys_platform!='darwin' and extra!='cuda'" },
-    { version = "^2.3", source = "pytorch-cuda", markers = "sys_platform!='darwin' and extra=='cuda'" }
+    { index = "pytorch-cpu", marker = "sys_platform != 'darwin'" },
 ]
 
-
-[[tool.poetry.source]]
-    name     = "pytorch-cuda"
-    priority = "explicit"
-    url      = "https://download.pytorch.org/whl/cu121"
-
-[[tool.poetry.source]]
-    name     = "pytorch-cpu"
-    priority = "explicit"
-    url      = "https://download.pytorch.org/whl/cpu"
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [project.scripts]
 banzai_floyds_run_realtime_pipeline = "banzai_floyds.main:floyds_run_realtime_pipeline"

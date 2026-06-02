@@ -1,21 +1,17 @@
-FROM ghcr.io/lcogt/banzai:1.32.1
+FROM ghcr.io/lcogt/banzai:1.36.2
 
 USER root
 
-RUN poetry config virtualenvs.create false
-
-COPY pytest.ini /home/archive/pytest.ini
+ENV UV_PROJECT_ENVIRONMENT=/lco/banzai/.venv
 
 RUN mkdir -p /home/archive/.cache/matplotlib
 
-RUN chown -R archive:domainusers /home/archive
+COPY pyproject.toml uv.lock /lco/banzai-floyds/
 
-COPY pyproject.toml poetry.lock /lco/banzai-floyds/
+RUN uv sync --locked --directory=/lco/banzai-floyds --no-install-project
 
-RUN poetry install --directory=/lco/banzai-floyds -E cpu --no-root --no-cache
+COPY pytest.ini /home/archive/pytest.ini
 
-COPY . /lco/banzai-floyds
-
-RUN poetry install --directory /lco/banzai-floyds -E cpu --no-cache
+RUN uv sync --locked --directory /lco/banzai-nres
 
 USER archive
