@@ -8,9 +8,9 @@ build:
   tools:
     python: "3.12"
   commands:
-    - pip install poetry
-    - poetry install -E docs
-    - poetry run sphinx-build -b html docs/ ${READTHEDOCS_OUTPUT}/html/
+    - pip install uv
+    - uv sync --extra docs --locked
+    - uv run sphinx-build -b html docs $READTHEDOCS_OUTPUT/html
 
 submodules:
   include: all

@@ -13,15 +13,13 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install Poetry
-        run: pip install poetry
       - name: Set up project
-        run: poetry install -E cpu -E test
+        run: uv sync --locked --extra test
       - name: Run tests
-        run: poetry run pytest --pyargs banzai_floyds.tests -m "not e2e"
+        run: uv run pytest --pyargs banzai_floyds -m "not e2e"
   macos:
     runs-on: macos-latest
     strategy:
@@ -29,12 +27,10 @@ jobs:
         python-version: ['3.12']  
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install Poetry
-        run: pip install poetry
       - name: Set up project
-        run: poetry install -E cpu -E test
+        run: uv sync --locked --extra test
       - name: Run tests
-        run: poetry run pytest --pyargs banzai_floyds.tests -m "not e2e"
+        run: uv run pytest --pyargs banzai_floyds -m "not e2e"
