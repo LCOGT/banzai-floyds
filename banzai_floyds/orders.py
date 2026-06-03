@@ -188,9 +188,9 @@ def order_region(order_height, center, image_size):
     return order_mask
 
 
-def refine_peak_parabolic(metric, peak_indices):
+def refine_metric_peak_center(metric, peak_indices):
     """
-    Refine integer peak locations to sub-pixel precision with a 3-point parabolic interpolation.
+    Refine integer peak locations to sub-pixel precision with a parabolic interpolation.
 
     Parameters
     ----------
@@ -205,31 +205,21 @@ def refine_peak_parabolic(metric, peak_indices):
 
     Notes
     -----
-    Fitting a parabola to the metric value at the peak and its two neighbours moves the peak to the vertex,
-    which is exact for a locally quadratic metric. We fall back to the integer index whenever the parabola
-    is ill-conditioned: at the array edges (no neighbour), if a neighbour is not finite (e.g. a rejected
-    -inf row), if the curvature is not concave-down (not a real maximum), or if the implied shift exceeds
-    half a pixel (a 3-point fit can't justify moving the peak further than that).
+    We fall back to the integer index whenever at the edges.
     """
     refined = []
     n = len(metric)
     for i in peak_indices:
-        if i <= 0 or i >= n - 1:
-            refined.append(float(i))
+        # Fit a parabola to up to 3 points on either side, using whatever lands on the array and is finite
+        if i == 0 or i == n - 1:
+            refined.append(i)
             continue
-        y_minus, y_0, y_plus = metric[i - 1], metric[i], metric[i + 1]
-        if not (np.isfinite(y_minus) and np.isfinite(y_0) and np.isfinite(y_plus)):
-            refined.append(float(i))
-            continue
-        curvature = y_minus - 2.0 * y_0 + y_plus
-        # curvature < 0 for a concave-down maximum; anything else is not a peak we can refine
-        if curvature >= 0:
-            refined.append(float(i))
-            continue
-        offset = 0.5 * (y_minus - y_plus) / curvature
-        if np.abs(offset) > 0.5:
-            refined.append(float(i))
-            continue
+        low, high = max(i - 3, 0), min(i + 4, n)
+        x = np.arange(low, high) - i
+        metrics_to_fit = metric[low:high]
+        finite = np.isfinite(metrics_to_fit)
+        fit_metric = np.polyfit(x[finite], metrics_to_fit[finite], 2)
+        offset = -fit_metric[1] / (2 * fit_metric[0])
         refined.append(i + offset)
     return np.array(refined)
 
@@ -278,9 +268,9 @@ def estimate_order_centers(data, error, order_height, peak_separation=10, min_si
     matched_filtered = np.full(data.shape[0], -np.inf)
     for i in np.arange(data.shape[0]):
         # Run a matched filter using a top hat filter, dropping masked pixels from the region
-        filter_model = Legendre([i], domain=(0, data.shape[1] - 1))
+        filter_center = Legendre([i], domain=(0, data.shape[1] - 1))
 
-        filter_region = np.logical_and(order_region(order_height, filter_model, data.shape), good_pixels)
+        filter_region = np.logical_and(order_region(order_height, filter_center, data.shape), good_pixels)
         if filter_region.sum() < min_good_pixels:
             continue
         matched_filtered[i] = tophat_filter_metric(data, error, filter_region)
@@ -292,7 +282,7 @@ def estimate_order_centers(data, error, order_height, peak_separation=10, min_si
     # Why we have to use flatnonzero here instead of argwhere behaving the way I want is a mystery
     peak_indices = np.flatnonzero(peaks)
     # Refine the integer peaks to sub-pixel so the trace points are good enough to be the final order curve
-    return refine_peak_parabolic(matched_filtered, peak_indices)
+    return refine_metric_peak_center(matched_filtered, peak_indices)
 
 
 def trace_order(data, error, order_height, initial_center, initial_center_x,
@@ -333,53 +323,41 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
     centers = []
     xs = []
 
-    def find_center(x, previous_center):
-        # The previous center can be sub-pixel, so round it to place the integer search window. Clamp the
-        # window to the detector: without this, a center close to the bottom of the chip makes the slice
-        # start negative, which numpy silently wraps to the top of the array and produces a garbage center.
-        # We also use the clamped start when converting back to absolute coordinates.
-        previous_center = int(np.round(previous_center))
-        y_start = max(0, previous_center - search_height - order_height // 2)
-        y_stop = min(data.shape[0], previous_center + search_height + order_height // 2 + 1)
-        section = slice(y_start, y_stop, 1), slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
-        section_mask = None if mask is None else mask[section]
-        cut_center = estimate_order_centers(data[section], error[section], order_height, mask=section_mask)
-        # There wasn't a maximum here that was high enough s/n. Under this narrow search window there should
-        # otherwise be a single maximum, so we take it.
-        if len(cut_center) == 0:
-            return None
-        return cut_center[0] + y_start
-
-    # We can never trace within filter_width // 2 of the chip edge. Optionally tighten that to the order's
-    # valid x range so we don't step into columns where the order has fallen off or the other order dominates.
-    forward_stop = data.shape[1] - filter_width // 2
-    backward_stop = filter_width // 2
-    if x_max is not None:
-        forward_stop = min(forward_stop, int(np.floor(x_max)) + 1)
-    if x_min is not None:
-        backward_stop = max(backward_stop, int(np.ceil(x_min)) - 1)
-
+    if mask is None:
+        mask = np.zeros(data.shape, dtype=bool)
+    if x_min is None:
+        x_min = 0
+    if x_max is None:
+        x_max = data.shape[1]
+    # The matched filter needs filter_width // 2 columns on each side, so stay that far from the chip edge
+    x_min = int(max(x_min, filter_width // 2))
+    x_max = int(min(x_max, data.shape[1] - filter_width // 2))
+    # Start at the center where you know the approximate center
     # keep stepping until you reach the right edge of the trace region
-    for x in range(initial_center_x, forward_stop, step_size):
-        previous_center = initial_center if len(centers) == 0 else centers[-1]
-        center = find_center(x, previous_center)
-        if center is None:
-            continue
-        centers.append(center)
-        xs.append(x)
+    # walk right, then left
+    for steps in [(initial_center_x, x_max, step_size), (initial_center_x - step_size, x_min, -step_size)]:
+        previous_center = initial_center
 
-    # If we never found the order stepping to the right, there is no anchor to step left from.
-    if len(centers) == 0:
-        return np.array(xs), np.array(centers)
+        for x in range(*steps):
+            previous_center = int(np.round(previous_center))
+            # Clamp y_start so a low center can't make the slice start negative.
+            y_start = max(previous_center - order_height // 2 - search_height, 0)
+            section = (
+                slice(y_start, previous_center + order_height // 2 + 1 + search_height),
+                slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
+            )
+            center_estimates = estimate_order_centers(data[section], error[section], order_height, mask=mask[section])
+            if len(center_estimates) == 0:
+                continue
+            else:
+                this_center = center_estimates[0] + y_start
 
-    # Go back to the center and start stepping toward the left edge of the trace region
-    for x in range(initial_center_x - step_size, backward_stop, -step_size):
-        center = find_center(x, centers[0])
-        if center is None:
-            continue
-        centers.insert(0, center)
-        xs.insert(0, x)
-    return np.array(xs), np.array(centers)
+            centers.append(this_center)
+            xs.append(x)
+            previous_center = this_center
+
+    sorted_inds = np.argsort(xs)
+    return np.array(xs)[sorted_inds], np.array(centers)[sorted_inds]
 
 
 def fit_order_tweak(data, error, order_height, coeffs, x, domain):
