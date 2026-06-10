@@ -115,8 +115,10 @@ diagnostic purposes. The 'fluxraw' and 'fluxrawerror' columns are given in elect
 give the wavelength bin center and width respectively in Angstroms. The 'background' column is not currently used but in the 
 future will contain continuum values that can be subtracted when fitting the arc lines. The ***LINESUSED*** extension is a fits 
 binary table with the 'measured_wavelength' and 'reference_wavelength' columns both in Angstroms. The measured wavelength column 
-is derived by centroiding individual lines. The residuals between these can be used for diagnostic purposes. The final wavelength 
-solution is produced by a full 2-D fit to the data so small residuals here may not be indivicative of a poor wavelength solution.
+is derived by centroiding individual lines. The residuals between these can be used for diagnostic purposes. 
+The ***LSF*** extension is a data table with a sampled version of the line spread function (LSF) with
+columns, order, x, and lsf. The parameters for the Gauss-Hermite fit of the LSF are included in the
+header with the order id appended. 
 
 Standard Star Calibrations
 --------------------------

@@ -2,7 +2,32 @@
 This whole framework is adapted from Zackay et al. 2017, ApJ, 836, 187
 https://ui.adsabs.harvard.edu/abs/2017ApJ...836..187Z/abstract
 """
+import numpy as np
 from scipy import optimize
+
+
+def _finite_difference_hessian(func, x, rel_step=1e-3):
+    """
+    Numerical Hessian of a scalar function via central differences.
+
+    Used to get the parameter covariance from the matched-filter fit. The step in each parameter is scaled
+    by the parameter value (with a floor of 1) so it behaves for both small offsets and large polynomial
+    coefficients.
+    """
+    x = np.asarray(x, dtype=float)
+    n = x.size
+    steps = rel_step * np.maximum(np.abs(x), 1.0)
+    hessian = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i, n):
+            x_pp, x_pm, x_mp, x_mm = x.copy(), x.copy(), x.copy(), x.copy()
+            x_pp[i] += steps[i]; x_pp[j] += steps[j]
+            x_pm[i] += steps[i]; x_pm[j] -= steps[j]
+            x_mp[i] -= steps[i]; x_mp[j] += steps[j]
+            x_mm[i] -= steps[i]; x_mm[j] -= steps[j]
+            hessian[i, j] = (func(x_pp) - func(x_pm) - func(x_mp) + func(x_mm)) / (4.0 * steps[i] * steps[j])
+            hessian[j, i] = hessian[i, j]
+    return hessian
 
 
 def matched_filter_signal(data, error, weights):
@@ -47,12 +72,14 @@ def matched_filter_normalization(data, error, weights, norm_data=False):
 
     Notes
     -----
-    Note that the normalization includes the square of the weights. The propagation of uncertainty for a weighted
-    sum of independent measurements is variance = Σ (w / σ²)² σ² =  Σ w² / σ²
+    With norm_data=False this is the standard deviation of the signal: the propagation of uncertainty for a
+    weighted sum of independent measurements is variance = Σ (w / σ²)² σ² = Σ w² / σ², so the metric is a
+    true signal-to-noise.
 
-    The additional option to normalize the signal with the data was taken from
-    https://scribblethink.org/Work/nvisionInterface/nip.html#eq3:xform by Lewis from Industrial Light and Magic.
-
+    With norm_data=True the data are folded into the normalization (Σ w² d² / σ²). This is the normalized
+    cross-correlation of Lewis (https://scribblethink.org/Work/nvisionInterface/nip.html#eq3:xform, Industrial
+    Light and Magic), a robustness heuristic for template registration. In that mode the normalization is NOT
+    the standard deviation of the signal, so the metric is a correlation-style score rather than a S/N.
     """
     norm = weights * weights
     if norm_data:
@@ -141,6 +168,14 @@ def optimize_match_filter(initial_guess, data, error, weights_function, x,
     )
 
     if covariance:
-        return best_fit.x, best_fit.hess_inv.todense()
+        # The optimizer minimizes -(S/N), so best_fit.hess_inv is the inverse Hessian of (S/N), which is NOT
+        # the parameter covariance. The profiled likelihood is -2 ln L = const - (S/N)^2, so the observed
+        # information is -0.5 * Hessian[(S/N)^2] and the covariance is its inverse. We compute that Hessian
+        # explicitly at the best fit rather than reusing the L-BFGS-B approximation, which is unreliable here.
+        def metric_squared(params):
+            return matched_filter_metric(params, data, error, weights_function, x, *args,
+                                         norm_data=norm_data) ** 2
+        information = -0.5 * _finite_difference_hessian(metric_squared, best_fit.x)
+        return best_fit.x, np.linalg.inv(information)
     else:
         return best_fit.x

@@ -25,6 +25,15 @@ under the same program, and finally to any arc taken in the same configuration t
 We employ a matched filter model that uses lines in `banzai_floyds.arc_lines` as the reference spectrum. 
 We fit the wavelength solution in 2-D including a global value for the line tilt angle. 
 
+We use a linear match filter with a guess for the dispersion to find the initial offset of the wavelength
+solution and match lines in the reference catalog to existing features. We then trace those features up and
+down the order to find the 2-D wavelength solution. The y-variation is captured entirely by the tilt angle,
+so we compute a rectified coordinate and then fit a normal 1-D Legendre polynomial to that coordinate. Due to
+gaps in the arc lines, we impose a curvature penalty to prevent the fit from going wild in gaps allowing us
+to fit a higher order polynomial to capture the true higher order curvature of the wavelength solution.
+We fit the penalty strength and tilt as hyper parameters, and then fit the wavelength polynomial using
+closed form least squares.
+
 Fringe Correction
 -----------------
 We have found that the fringe pattern shifts on the chip likely due to flexure. Oddly though, the fringe pattern
