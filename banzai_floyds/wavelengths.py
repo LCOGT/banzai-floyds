@@ -167,52 +167,6 @@ def correlate_peaks(peaks, linear_model, lines, match_threshold):
     return corresponding_lines
 
 
-def isolated_line_mask(line_wavelengths, catalog, contamination_radius, relative_strength_threshold=0.05):
-    """
-    Flag lines that have no other catalog line strong and close enough to contaminate a single-line fit.
-
-    A single Gauss-Hermite fit to a window that contains a comparably bright second line biases the
-    centroid by an appreciable fraction of a pixel, which is more than enough to corrupt the
-    wavelength solution. Known blends are handled by the dedicated blend fitter; this mask drops
-    matched "single" lines whose fitting window is contaminated by another catalog entry with a
-    strength of at least `relative_strength_threshold` of the line itself. Neighbors with unknown
-    (nan) strengths are assumed to be too faint to matter: they were too weak to measure when the
-    catalog was assembled, and dropping every line with a faint neighbor would leave the blue order
-    without enough anchors.
-
-    Parameters
-    ----------
-    line_wavelengths : array
-        Catalog wavelengths of the matched lines to check.
-    catalog : Table
-        The full line catalog (used, unused, and blended) with 'wavelength' and 'strength' columns.
-    contamination_radius : float
-        Maximum separation (Angstroms) at which a neighbor can contaminate the fitting window.
-    relative_strength_threshold : float
-        Minimum strength of a neighbor, relative to the line, to count as contaminating.
-
-    Returns
-    -------
-    boolean array, True for lines safe to fit as single lines.
-    """
-    mask = []
-    catalog_wavelengths = np.asarray(catalog['wavelength'], dtype=float)
-    catalog_strengths = np.asarray(catalog['strength'], dtype=float)
-    for line in line_wavelengths:
-        separations = np.abs(catalog_wavelengths - line)
-        line_match = separations <= 1e-3
-        line_strength = catalog_strengths[line_match].max() if line_match.any() else np.nan
-        neighbors = np.logical_and(separations > 1e-3, separations < contamination_radius)
-        if np.isfinite(line_strength):
-            neighbors = np.logical_and(neighbors,
-                                       catalog_strengths >= relative_strength_threshold * line_strength)
-        else:
-            # If the line's own strength is unknown, only worry about neighbors with measured strengths
-            neighbors = np.logical_and(neighbors, np.isfinite(catalog_strengths))
-        mask.append(not neighbors.any())
-    return np.array(mask, dtype=bool)
-
-
 def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separation, lines, match_threshold,
                    domain=None, snr_threshold=5.0):
     peaks = identify_peaks(flux, flux_error, fwhm, min_line_separation, domain=domain, snr_threshold=snr_threshold)
@@ -794,9 +748,6 @@ class CalibrateWavelengths(Stage):
     FIT_ORDERS = {1: 6, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
-    # A neighbor within this many line-sigmas can contaminate a single-line fit:
-    # the fitting window is +-4 sigma plus ~2 sigma for the neighbor's own width
-    CONTAMINATION_WINDOW_SIGMA = 6.0
     """
     Stage that uses Arcs to fit wavelength solution
     """
@@ -833,20 +784,6 @@ class CalibrateWavelengths(Stage):
                 match_threshold=self.MATCH_THRESHOLDS[order],
                 snr_threshold=self.PEAK_SNR_THRESHOLD
             )
-
-            # Drop matched lines whose single-line fitting window is contaminated by another catalog
-            # line (even a weak unused one, e.g. ArI 6937.66 next to the bright 6965.43): the blended
-            # centroid is biased by a fraction of a pixel, which corrupts the whole solution. Flagged
-            # blends are recovered separately by add_blends below.
-            contamination_radius = (self.CONTAMINATION_WINDOW_SIGMA * fwhm_to_sigma(initial_fwhm)
-                                    * self.INITIAL_DISPERSIONS[order])
-            isolated = isolated_line_mask(corresponding_lines, self.LINES, contamination_radius)
-            if not isolated.all():
-                dropped = np.asarray(corresponding_lines)[np.logical_not(isolated)]
-                logger.info(f'Dropping blend-contaminated lines from the single-line fit in order {order}: '
-                            f'{np.round(dropped, 1)}')
-            peaks = np.asarray(peaks)[isolated]
-            corresponding_lines = np.asarray(corresponding_lines)[isolated]
 
             if len(peaks) < self.MATCH_SUCCESS_THRESHOLD:
                 logger.warning(f'Order {order} has too few matching lines for a good wavelength solution.')
