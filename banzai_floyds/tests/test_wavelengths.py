@@ -323,9 +323,8 @@ def test_fit_arc_lines_recovers_shape_and_centroids():
     amplitudes = np.array([900.0, 1200.0, 700.0])
     data, uncertainty, mask, x2d, order_y, tan_tilt = make_tilted_arc_order(positions, amplitudes, lsf, tilt,
                                                                             seed=1)
-    in_order = np.ones_like(mask, dtype=bool)
-    lsf_params, centroids = fit_arc_lines(data, uncertainty, mask, x2d, tilt, order_y, in_order,
-                                          positions, wavelengths, initial_fwhm=sigma_to_fwhm(lsf['sigma']))
+    lsf_params, centroids = fit_arc_lines(data, uncertainty, mask, x2d, tilt, order_y, positions, wavelengths,
+                                          initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The shared LSF shape is recovered
     np.testing.assert_allclose(lsf_params['sigma'], lsf['sigma'], atol=0.15)
     np.testing.assert_allclose(lsf_params['h3'], lsf['h3'], atol=0.03)
@@ -349,9 +348,8 @@ def test_fit_arc_lines_is_robust_to_a_cosmic_ray():
     cosmic_row = 25
     cosmic_column = int(round(positions[0] - order_y[cosmic_row, 0] * tan_tilt)) + 1
     data[cosmic_row, cosmic_column] += 8000.0
-    in_order = np.ones_like(mask, dtype=bool)
-    _, centroids = fit_arc_lines(data, uncertainty, mask, x2d, tilt, order_y, in_order, positions,
-                                 wavelengths, initial_fwhm=sigma_to_fwhm(lsf['sigma']))
+    _, centroids = fit_arc_lines(data, uncertainty, mask, x2d, tilt, order_y, positions, wavelengths,
+                                 initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The Huber loss should keep every centroid (including the cosmic row) on the line
     residuals = [abs(c['x'] - (positions[0] - c['order_y'] * tan_tilt)) for c in centroids]
     assert np.max(residuals) < 0.5
@@ -383,8 +381,7 @@ def test_add_blends_fits_a_doublet():
     mask = np.zeros((ny, nx), dtype=int)
     blended_lines = Table({'wavelength': component_wavelengths, 'strength': component_strengths})
 
-    centroids = add_blends(data, uncertainty, mask, x2d.astype(float), order_y,
-                           np.ones_like(mask, dtype=bool), blended_lines,
+    centroids = add_blends(data, uncertainty, mask, x2d.astype(float), order_y, blended_lines,
                            wavelength_solution, lsf, tilt)
     assert len(centroids) > 0
     # Every blend centroid is tagged with the mean wavelength of the blend and traces its position

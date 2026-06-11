@@ -9,6 +9,7 @@ from banzai_floyds.matched_filter import optimize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import DataTable
 from banzai_floyds.utils.binning_utils import bin_data
+from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
 from banzai_floyds.arc_lines import arc_lines_table
 from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, fwhm_to_sigma, to_window, curvature_penalty, \
@@ -357,7 +358,7 @@ def _blend_parameter_bounds(column, amplitude, background, half_width, n_compone
     return guess, lower, upper
 
 
-def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt, anchor_position,
+def _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, anchor_position,
                      anchor_wavelength, residuals, residual_args, parameter_bounds, parameter_bounds_args,
                      window_half, min_snr, huber_scale):
     """
@@ -366,7 +367,12 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt
     Parameters
     ----------
     data: 2-d array
-        2-d data (should be a rectangular cutout of the order)
+        2-d data. This must be the rectified cutout of the order being fit (see
+        `banzai_floyds.utils.order_utils.get_order_2d_region`), *not* the full frame: rows of the
+        full frame belonging to the other order can contain a bright arc line at the same x (e.g.
+        HgI 3650 in the blue order lines up with ArI 6965 in the red order), and those high
+        signal-to-noise centroids land at the wrong position with small errors, dragging the
+        wavelength solution by several Angstroms.
     uncertainty: 2-d array
         Uncertainty array (same shape as data)
     mask : 2-d array
@@ -375,12 +381,6 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt
         The x pixel coordinates (same shape as data).
     order_y : 2-d array
         Y position relative to order center (same shape as data)
-    in_order : 2-d array
-        Boolean array flagging the pixels that belong to the order being fit (same shape as data).
-        Without this restriction the row loop runs over the full frame: rows in the *other* order
-        can contain a bright arc line at the same x (e.g. HgI 3650 in the blue order lines up with
-        ArI 6965 in the red order), and those high signal-to-noise centroids land at the wrong
-        position with small errors, dragging the wavelength solution by several Angstroms.
     initial_tilt : float
         Initial line tilt angle in degrees.
     anchor_position : float
@@ -409,7 +409,7 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt
     fits: list of least_squares fit results for each successfully fit (feature, row)
     """
     centroids, fits = [], []
-    good_pixels = np.logical_and(mask == 0, in_order)
+    good_pixels = mask == 0
     for row in range(data.shape[0]):
         center_guess = tilt_coordinates(initial_tilt, anchor_position, -order_y[row])
         fit_region = np.where(np.logical_and(np.abs(x[row] - center_guess) < window_half, good_pixels[row]))[0]
@@ -425,12 +425,6 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt
             continue
         predicted_column = np.median(center_guess[fit_region])
         guess, lower, upper = parameter_bounds(predicted_column, amplitude, background, *parameter_bounds_args)
-        # Require enough points that the fit has real degrees of freedom. Rows at the order edge with
-        # barely more points than parameters fit the data essentially perfectly, so their estimated
-        # centroid variances are ~0 and their (junk) centroids would get unbounded weight in the
-        # wavelength solution.
-        if len(fit_region) < len(guess) + 4:
-            continue
         fit = least_squares(residuals, guess, args=(window_x, flux, error) + residual_args,
                             bounds=(lower, upper), loss='huber', f_scale=huber_scale)
         # A degenerate fit (e.g. the amplitude pinned at its zero bound in a noise-only window, which
@@ -452,7 +446,7 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt
     return centroids, fits
 
 
-def fit_arc_lines(data, uncertainty, mask, x, initial_tilt, order_y, in_order, initial_positions,
+def fit_arc_lines(data, uncertainty, mask, x, initial_tilt, order_y, initial_positions,
                   reference_wavelengths, initial_fwhm=4.0, fitting_window=4.0, min_snr=3.0, huber_scale=1.345):
     """
     Centroid the matched arc lines and measure the line spread function (Gauss-Hermite) across the order.
@@ -502,7 +496,7 @@ def fit_arc_lines(data, uncertainty, mask, x, initial_tilt, order_y, in_order, i
 
     line_centroids, fitted_shapes, fitted_shape_variances = [], [], []
     for position, wavelength in zip(initial_positions, reference_wavelengths):
-        centroids, fits = _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt,
+        centroids, fits = _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt,
                                            position, wavelength, _gauss_hermite_residuals, (),
                                            _gauss_hermite_parameter_bounds, (sigma_guess, half_width),
                                            half_width, min_snr, huber_scale)
@@ -528,7 +522,7 @@ def _blend_residuals(params, x, flux, error, offsets, sigma, h3, h4):
     return (model - flux) / error
 
 
-def add_blends(data, uncertainty, mask, x, order_y, in_order, blended_lines, wavelength_solution,
+def add_blends(data, uncertainty, mask, x, order_y, blended_lines, wavelength_solution,
                lsf_params, initial_tilt, fitting_window=4.0, min_snr=3.0, huber_scale=1.345,
                group_threshold=50.0):
     """
@@ -600,7 +594,7 @@ def add_blends(data, uncertainty, mask, x, order_y, in_order, blended_lines, wav
         window_half = half_width + np.max(np.abs(offsets))
         n_components = len(offsets)
 
-        centroids, _ = _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt,
+        centroids, _ = _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt,
                                         anchor_position, anchor_wavelength, _blend_residuals,
                                         (offsets, sigma, h3, h4), _blend_parameter_bounds,
                                         (half_width, n_components), window_half, min_snr, huber_scale)
@@ -859,18 +853,24 @@ class CalibrateWavelengths(Stage):
                 image.is_bad = True
                 return image
 
-            # Trace each matched line up the order, fitting a shared Gauss-Hermite LSF and per-row centroids
-            order_y = y2d - image.orders.center(x2d)[order - 1]
-            in_this_order = image.orders.data == order
+            # Trace each matched line up the order, fitting a shared Gauss-Hermite LSF and per-row
+            # centroids. We work on the rectified cutout of the order rather than the full frame:
+            # rows of the full frame that belong to the other order can contain a bright arc line at
+            # the same x (e.g. HgI 3650 in the blue order lines up with ArI 6965 in the red order),
+            # which would otherwise be fit as a high signal-to-noise centroid at the wrong position.
+            order_region = get_order_2d_region(image.orders.data == order)
+            order_x = x2d[order_region].astype(float)
+            order_y = y2d[order_region] - image.orders.center(order_x)[order - 1]
             lsf_params, line_centroids = fit_arc_lines(
-                image.data, image.uncertainty, image.mask, x2d,
-                self.INITIAL_LINE_TILTS[order], order_y, in_this_order, peaks,
+                image.data[order_region], image.uncertainty[order_region], image.mask[order_region],
+                order_x, self.INITIAL_LINE_TILTS[order], order_y, peaks,
                 corresponding_lines, initial_fwhm=initial_fwhm
             )
             best_fit_lsf.append(lsf_params)
 
-            line_centroids += add_blends(image.data, image.uncertainty, image.mask, x2d, order_y,
-                                         in_this_order, self.LINES[self.LINES['blend']], linear_solution,
+            line_centroids += add_blends(image.data[order_region], image.uncertainty[order_region],
+                                         image.mask[order_region], order_x, order_y,
+                                         self.LINES[self.LINES['blend']], linear_solution,
                                          lsf_params, self.INITIAL_LINE_TILTS[order])
             line_centroids = Table(line_centroids)
 
