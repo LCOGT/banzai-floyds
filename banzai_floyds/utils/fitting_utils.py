@@ -94,20 +94,27 @@ def to_window(values, domain):
     return 2.0 * (np.asarray(values, dtype=float) - domain[0]) / (domain[1] - domain[0]) - 1.0
 
 
-def curvature_penalty(degree):
+def curvature_penalty(degree, derivative_order=2):
     """
-    Build the integrated-curvature roughness penalty matrix for a Legendre series.
+    Build the integrated-roughness penalty matrix for a Legendre series.
 
-    The penalty matrix is P_kl = integral L_k''(u) L_l''(u) du over the window [-1, 1], where L_k is
-    the k-th Legendre polynomial and L_k'' is its second derivative. Since L_0'' = L_1'' = 0, the
-    constant and linear terms are unpenalized: the penalty's null space is the linear functions, so a
-    fit penalized with this matrix reverts to a straight line wherever the data don't constrain the
-    higher-order terms (e.g. in gaps).
+    The penalty matrix is P_kl = integral L_k^(m)(u) L_l^(m)(u) du over the window [-1, 1], where
+    L_k is the k-th Legendre polynomial and m is `derivative_order`. Polynomials of degree < m have
+    a vanishing m-th derivative, so the penalty's null space is the polynomials of degree m - 1: a
+    fit penalized with this matrix reverts to a degree m - 1 polynomial wherever the data don't
+    constrain the higher-order terms (e.g. in gaps or when extrapolating past the last data point).
+
+    With the default m = 2 this is the classic integrated-curvature (smoothing spline) penalty and
+    the fit reverts to a straight line. Pass a larger m when the quantity being fit is known to be
+    intrinsically a low-order polynomial: e.g. m = 5 penalizes only the terms beyond a quartic, so
+    extrapolation follows the best-fit quartic instead of flattening to a line.
 
     Parameters
     ----------
     degree : int
         Degree of the Legendre series the penalty applies to.
+    derivative_order : int
+        Order m of the derivative whose integrated square is penalized.
 
     Returns
     -------
@@ -115,12 +122,14 @@ def curvature_penalty(degree):
         The roughness penalty matrix P, indexed by Legendre coefficient order.
     """
     nodes, weights = leggauss(degree + 2)
-    second_derivatives = np.zeros((degree + 1, len(nodes)))
+    derivatives = np.zeros((degree + 1, len(nodes)))
     for k in range(degree + 1):
+        if k < derivative_order:
+            continue
         basis = np.zeros(degree + 1)
         basis[k] = 1.0
-        second_derivatives[k] = legval(nodes, legder(basis, m=2))
-    return (second_derivatives * weights) @ second_derivatives.T
+        derivatives[k] = legval(nodes, legder(basis, m=derivative_order))
+    return (derivatives * weights) @ derivatives.T
 
 
 def _penalized_fit_matrices(u, values, weights, degree, penalty, lam):

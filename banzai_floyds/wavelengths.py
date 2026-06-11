@@ -166,6 +166,52 @@ def correlate_peaks(peaks, linear_model, lines, match_threshold):
     return corresponding_lines
 
 
+def isolated_line_mask(line_wavelengths, catalog, contamination_radius, relative_strength_threshold=0.05):
+    """
+    Flag lines that have no other catalog line strong and close enough to contaminate a single-line fit.
+
+    A single Gauss-Hermite fit to a window that contains a comparably bright second line biases the
+    centroid by an appreciable fraction of a pixel, which is more than enough to corrupt the
+    wavelength solution. Known blends are handled by the dedicated blend fitter; this mask drops
+    matched "single" lines whose fitting window is contaminated by another catalog entry with a
+    strength of at least `relative_strength_threshold` of the line itself. Neighbors with unknown
+    (nan) strengths are assumed to be too faint to matter: they were too weak to measure when the
+    catalog was assembled, and dropping every line with a faint neighbor would leave the blue order
+    without enough anchors.
+
+    Parameters
+    ----------
+    line_wavelengths : array
+        Catalog wavelengths of the matched lines to check.
+    catalog : Table
+        The full line catalog (used, unused, and blended) with 'wavelength' and 'strength' columns.
+    contamination_radius : float
+        Maximum separation (Angstroms) at which a neighbor can contaminate the fitting window.
+    relative_strength_threshold : float
+        Minimum strength of a neighbor, relative to the line, to count as contaminating.
+
+    Returns
+    -------
+    boolean array, True for lines safe to fit as single lines.
+    """
+    mask = []
+    catalog_wavelengths = np.asarray(catalog['wavelength'], dtype=float)
+    catalog_strengths = np.asarray(catalog['strength'], dtype=float)
+    for line in line_wavelengths:
+        separations = np.abs(catalog_wavelengths - line)
+        line_match = separations <= 1e-3
+        line_strength = catalog_strengths[line_match].max() if line_match.any() else np.nan
+        neighbors = np.logical_and(separations > 1e-3, separations < contamination_radius)
+        if np.isfinite(line_strength):
+            neighbors = np.logical_and(neighbors,
+                                       catalog_strengths >= relative_strength_threshold * line_strength)
+        else:
+            # If the line's own strength is unknown, only worry about neighbors with measured strengths
+            neighbors = np.logical_and(neighbors, np.isfinite(catalog_strengths))
+        mask.append(not neighbors.any())
+    return np.array(mask, dtype=bool)
+
+
 def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separation, lines, match_threshold,
                    domain=None, snr_threshold=5.0):
     peaks = identify_peaks(flux, flux_error, fwhm, min_line_separation, domain=domain, snr_threshold=snr_threshold)
@@ -311,8 +357,8 @@ def _blend_parameter_bounds(column, amplitude, background, half_width, n_compone
     return guess, lower, upper
 
 
-def _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, anchor_position, anchor_wavelength,
-                     residuals, residual_args, parameter_bounds, parameter_bounds_args,
+def _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt, anchor_position,
+                     anchor_wavelength, residuals, residual_args, parameter_bounds, parameter_bounds_args,
                      window_half, min_snr, huber_scale):
     """
     Trace each feature up the order, row by row, doing one robust (Huber) fit per feature per row.
@@ -329,6 +375,12 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, anchor_p
         The x pixel coordinates (same shape as data).
     order_y : 2-d array
         Y position relative to order center (same shape as data)
+    in_order : 2-d array
+        Boolean array flagging the pixels that belong to the order being fit (same shape as data).
+        Without this restriction the row loop runs over the full frame: rows in the *other* order
+        can contain a bright arc line at the same x (e.g. HgI 3650 in the blue order lines up with
+        ArI 6965 in the red order), and those high signal-to-noise centroids land at the wrong
+        position with small errors, dragging the wavelength solution by several Angstroms.
     initial_tilt : float
         Initial line tilt angle in degrees.
     anchor_position : float
@@ -357,7 +409,7 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, anchor_p
     fits: list of least_squares fit results for each successfully fit (feature, row)
     """
     centroids, fits = [], []
-    good_pixels = mask == 0
+    good_pixels = np.logical_and(mask == 0, in_order)
     for row in range(data.shape[0]):
         center_guess = tilt_coordinates(initial_tilt, anchor_position, -order_y[row])
         fit_region = np.where(np.logical_and(np.abs(x[row] - center_guess) < window_half, good_pixels[row]))[0]
@@ -373,18 +425,35 @@ def _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, anchor_p
             continue
         predicted_column = np.median(center_guess[fit_region])
         guess, lower, upper = parameter_bounds(predicted_column, amplitude, background, *parameter_bounds_args)
+        # Require enough points that the fit has real degrees of freedom. Rows at the order edge with
+        # barely more points than parameters fit the data essentially perfectly, so their estimated
+        # centroid variances are ~0 and their (junk) centroids would get unbounded weight in the
+        # wavelength solution.
+        if len(fit_region) < len(guess) + 4:
+            continue
         fit = least_squares(residuals, guess, args=(window_x, flux, error) + residual_args,
                             bounds=(lower, upper), loss='huber', f_scale=huber_scale)
+        # A degenerate fit (e.g. the amplitude pinned at its zero bound in a noise-only window, which
+        # zeroes the Jacobian columns of the shape parameters) has a singular J^T J. Such a fit does
+        # not constrain the centroid, so skip the window rather than crash on the inversion. Variances
+        # of essentially zero are equally untrustworthy (a centroid is never good to < ~1e-3 pixels)
+        # and would dominate the wavelength fit.
+        try:
+            x_variance = parameter_variances(fit)[0]
+        except np.linalg.LinAlgError:
+            continue
+        if not np.isfinite(x_variance) or x_variance < 1e-6:
+            continue
         centroids.append({'x': fit.x[0],
                           'order_y': np.interp(fit.x[0], x[row], order_y[row]),
-                          'x_err': np.sqrt(parameter_variances(fit)[0]),
+                          'x_err': np.sqrt(x_variance),
                           'wavelength': anchor_wavelength})
         fits.append(fit)
     return centroids, fits
 
 
-def fit_arc_lines(data, uncertainty, mask, x, initial_tilt, order_y, initial_positions, reference_wavelengths,
-                  initial_fwhm=4.0, fitting_window=4.0, min_snr=3.0, huber_scale=1.345):
+def fit_arc_lines(data, uncertainty, mask, x, initial_tilt, order_y, in_order, initial_positions,
+                  reference_wavelengths, initial_fwhm=4.0, fitting_window=4.0, min_snr=3.0, huber_scale=1.345):
     """
     Centroid the matched arc lines and measure the line spread function (Gauss-Hermite) across the order.
 
@@ -433,8 +502,8 @@ def fit_arc_lines(data, uncertainty, mask, x, initial_tilt, order_y, initial_pos
 
     line_centroids, fitted_shapes, fitted_shape_variances = [], [], []
     for position, wavelength in zip(initial_positions, reference_wavelengths):
-        centroids, fits = _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, position,
-                                           wavelength, _gauss_hermite_residuals, (),
+        centroids, fits = _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt,
+                                           position, wavelength, _gauss_hermite_residuals, (),
                                            _gauss_hermite_parameter_bounds, (sigma_guess, half_width),
                                            half_width, min_snr, huber_scale)
         line_centroids += centroids
@@ -459,7 +528,7 @@ def _blend_residuals(params, x, flux, error, offsets, sigma, h3, h4):
     return (model - flux) / error
 
 
-def add_blends(data, uncertainty, mask, x, order_y, blended_lines, wavelength_solution,
+def add_blends(data, uncertainty, mask, x, order_y, in_order, blended_lines, wavelength_solution,
                lsf_params, initial_tilt, fitting_window=4.0, min_snr=3.0, huber_scale=1.345,
                group_threshold=50.0):
     """
@@ -531,10 +600,10 @@ def add_blends(data, uncertainty, mask, x, order_y, blended_lines, wavelength_so
         window_half = half_width + np.max(np.abs(offsets))
         n_components = len(offsets)
 
-        centroids, _ = _trace_centroids(data, uncertainty, mask, x, order_y, initial_tilt, anchor_position,
-                                        anchor_wavelength, _blend_residuals, (offsets, sigma, h3, h4),
-                                        _blend_parameter_bounds, (half_width, n_components),
-                                        window_half, min_snr, huber_scale)
+        centroids, _ = _trace_centroids(data, uncertainty, mask, x, order_y, in_order, initial_tilt,
+                                        anchor_position, anchor_wavelength, _blend_residuals,
+                                        (offsets, sigma, h3, h4), _blend_parameter_bounds,
+                                        (half_width, n_components), window_half, min_snr, huber_scale)
         line_centroids += centroids
     return line_centroids
 
@@ -624,15 +693,19 @@ def _fit_wavelength_polynomial(x, y, wavelengths, weights, domain, degree, penal
 
 
 def fit_wavelength_solution(x, y, wavelengths, pixel_errors, domain, dispersion_guess,
-                            tilt_order=1, initial_tilt=8.0, degree=6):
+                            tilt_order=1, initial_tilt=8.0, degree=6, penalty_derivative_order=5):
     """
-    Fit a wavelength solution that is penalized for large curvature
+    Fit a wavelength solution that is penalized for roughness
 
     The model is wavelength = f(s) with s = x + y*tan(tilt(x)). We fit a Legendre polynomial of highish
-    `degree` and penalize its integrated curvature; the penalty strength is chosen by generalized
-    cross-validation (GCV). This is a smoothing spline -- mathematically the curvature-Gaussian Process,
-    solved in closed form -- so it reverts to linear through gaps and the linear dispersion
-    (the penalty's null space) is unpenalized. (x, y) are the measured centroid pixel coordinates
+    `degree` and penalize the integrated square of its `penalty_derivative_order`-th derivative; the
+    penalty strength is chosen by generalized cross-validation (GCV). This is a smoothing spline
+    solved in closed form, so the fit reverts to the penalty's null space (polynomials of degree
+    `penalty_derivative_order` - 1) through gaps and beyond the last measured line. The default of 5
+    leaves a quartic unpenalized: FLOYDS dispersions are well described by a quartic (the legacy
+    fit degree), so extrapolation past the bluest/reddest arc lines follows the best-fit quartic
+    instead of flattening to a straight line, which matters for the ~1000 Angstroms of the red order
+    blueward of the 5460 line. (x, y) are the measured centroid pixel coordinates
     (y relative to the order center), `wavelengths` their catalog wavelengths, and `pixel_errors`
     the centroid uncertainties in pixels.
 
@@ -654,6 +727,9 @@ def fit_wavelength_solution(x, y, wavelengths, pixel_errors, domain, dispersion_
         Initial guess for the tilt (degrees), used as the constant term of the tilt polynomial.
     degree : int
         Degree of the wavelength Legendre series.
+    penalty_derivative_order : int
+        Order of the derivative whose integrated square is penalized (see
+        `banzai_floyds.utils.fitting_utils.curvature_penalty`).
 
     Returns
     -------
@@ -661,12 +737,12 @@ def fit_wavelength_solution(x, y, wavelengths, pixel_errors, domain, dispersion_
         Wavelength as a function of x along the order center, and tilt (degrees) as a function of x.
     """
     weights = 1.0 / (dispersion_guess * pixel_errors) ** 2
-    penalty = curvature_penalty(degree)
+    penalty = curvature_penalty(degree, derivative_order=penalty_derivative_order)
 
     tilt_coeffs, lam = _fit_tilt_and_penalty(x, y, wavelengths, weights, domain, degree, penalty,
                                              tilt_order, initial_tilt)
     wavelength_polynomial = _fit_wavelength_polynomial(x, y, wavelengths, weights, domain, degree, penalty,
-                                                        tilt_coeffs, lam)
+                                                       tilt_coeffs, lam)
     tilt_polynomial = Legendre(tilt_coeffs, domain=domain)
     return wavelength_polynomial, tilt_polynomial
 
@@ -724,6 +800,9 @@ class CalibrateWavelengths(Stage):
     FIT_ORDERS = {1: 6, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
+    # A neighbor within this many line-sigmas can contaminate a single-line fit:
+    # the fitting window is +-4 sigma plus ~2 sigma for the neighbor's own width
+    CONTAMINATION_WINDOW_SIGMA = 6.0
     """
     Stage that uses Arcs to fit wavelength solution
     """
@@ -761,6 +840,20 @@ class CalibrateWavelengths(Stage):
                 snr_threshold=self.PEAK_SNR_THRESHOLD
             )
 
+            # Drop matched lines whose single-line fitting window is contaminated by another catalog
+            # line (even a weak unused one, e.g. ArI 6937.66 next to the bright 6965.43): the blended
+            # centroid is biased by a fraction of a pixel, which corrupts the whole solution. Flagged
+            # blends are recovered separately by add_blends below.
+            contamination_radius = (self.CONTAMINATION_WINDOW_SIGMA * fwhm_to_sigma(initial_fwhm)
+                                    * self.INITIAL_DISPERSIONS[order])
+            isolated = isolated_line_mask(corresponding_lines, self.LINES, contamination_radius)
+            if not isolated.all():
+                dropped = np.asarray(corresponding_lines)[np.logical_not(isolated)]
+                logger.info(f'Dropping blend-contaminated lines from the single-line fit in order {order}: '
+                            f'{np.round(dropped, 1)}')
+            peaks = np.asarray(peaks)[isolated]
+            corresponding_lines = np.asarray(corresponding_lines)[isolated]
+
             if len(peaks) < self.MATCH_SUCCESS_THRESHOLD:
                 logger.warning(f'Order {order} has too few matching lines for a good wavelength solution.')
                 image.is_bad = True
@@ -768,16 +861,17 @@ class CalibrateWavelengths(Stage):
 
             # Trace each matched line up the order, fitting a shared Gauss-Hermite LSF and per-row centroids
             order_y = y2d - image.orders.center(x2d)[order - 1]
+            in_this_order = image.orders.data == order
             lsf_params, line_centroids = fit_arc_lines(
                 image.data, image.uncertainty, image.mask, x2d,
-                self.INITIAL_LINE_TILTS[order], order_y, peaks,
+                self.INITIAL_LINE_TILTS[order], order_y, in_this_order, peaks,
                 corresponding_lines, initial_fwhm=initial_fwhm
             )
             best_fit_lsf.append(lsf_params)
 
             line_centroids += add_blends(image.data, image.uncertainty, image.mask, x2d, order_y,
-                                         self.LINES[self.LINES['blend']], linear_solution, lsf_params,
-                                         self.INITIAL_LINE_TILTS[order])
+                                         in_this_order, self.LINES[self.LINES['blend']], linear_solution,
+                                         lsf_params, self.INITIAL_LINE_TILTS[order])
             line_centroids = Table(line_centroids)
 
             # Fit the tilt + polynomial wavelength solution (penalized fit) to the centroids and get back
