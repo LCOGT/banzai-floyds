@@ -1,6 +1,7 @@
 from banzai_floyds.wavelengths import linear_wavelength_solution, identify_peaks, correlate_peaks
 from banzai_floyds.wavelengths import refine_peak_centers, CalibrateWavelengths
 from banzai_floyds.wavelengths import fit_arc_lines, add_blends, fit_wavelength_solution
+from banzai_floyds.wavelengths import fit_feature_tilts, fit_tilt_polynomial
 from banzai_floyds.utils.fitting_utils import gauss_hermite
 import numpy as np
 from astropy.table import Table
@@ -251,9 +252,18 @@ def test_full_wavelength_solution():
     stage = CalibrateWavelengths(input_context)
     frame = stage.do_stage(frame)
 
-    in_order = frame.orders.data > 0
-    np.testing.assert_allclose(frame.wavelengths.data[in_order], input_wavelengths[in_order],
-                               atol=1.0)
+    # The solution is only constrained where there are arc lines; beyond the bluest/reddest measured
+    # line the penalized fit deliberately reverts to a quadratic. Check accuracy over the x-range
+    # spanned by the fitted centroids of each order.
+    x2d, _ = np.meshgrid(np.arange(frame.data.shape[1]), np.arange(frame.data.shape[0]))
+    features = frame['FEATURES2D'].data
+    for order_id in [1, 2]:
+        order_features = features[features['order'] == order_id]
+        in_order = np.logical_and(frame.orders.data == order_id,
+                                  np.logical_and(x2d >= order_features['x'].min(),
+                                                 x2d <= order_features['x'].max()))
+        np.testing.assert_allclose(frame.wavelengths.data[in_order], input_wavelengths[in_order],
+                                   atol=1.0)
 
 
 def test_empty_calibrate_wavelengths_stage():
@@ -302,7 +312,7 @@ def make_tilted_arc_order(positions, amplitudes, lsf, tilt, ny=40, nx=320, seed=
     data += rng.normal(0.0, 1.0, (ny, nx))
     uncertainty = np.sqrt(np.abs(data) + 1.0)
     mask = np.zeros((ny, nx), dtype=int)
-    return data, uncertainty, mask, x2d.astype(float), order_y, tan_tilt
+    return data, uncertainty, mask, x2d.astype(float), y2d.astype(float), order_y, tan_tilt
 
 
 def test_gauss_hermite_matches_analytic():
@@ -321,16 +331,16 @@ def test_fit_arc_lines_recovers_shape_and_centroids():
     positions = np.array([60.0, 150.0, 240.0])
     wavelengths = np.array([5001.0, 5400.0, 5610.0])
     amplitudes = np.array([900.0, 1200.0, 700.0])
-    data, uncertainty, mask, x2d, order_y, tan_tilt = make_tilted_arc_order(positions, amplitudes, lsf, tilt,
-                                                                            seed=1)
-    lsf_params, centroids = fit_arc_lines(data, uncertainty, mask, x2d, tilt, order_y, positions, wavelengths,
+    data, uncertainty, mask, x2d, y2d, order_y, tan_tilt = make_tilted_arc_order(positions, amplitudes, lsf, tilt,
+                                                                                 seed=1)
+    lsf_params, centroids = fit_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
                                           initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The shared LSF shape is recovered
     np.testing.assert_allclose(lsf_params['sigma'], lsf['sigma'], atol=0.15)
     np.testing.assert_allclose(lsf_params['h3'], lsf['h3'], atol=0.03)
-    # Each centroid carries the four keys and traces its line up the order
+    # Each centroid carries the five keys and traces its line up the order
     assert len(centroids) > 0
-    assert set(centroids[0]) == {'x', 'order_y', 'x_err', 'wavelength'}
+    assert set(centroids[0]) == {'x', 'y', 'order_y', 'x_err', 'wavelength'}
     position_for_wavelength = dict(zip(wavelengths, positions))
     residuals = [abs(c['x'] - (position_for_wavelength[c['wavelength']] - c['order_y'] * tan_tilt))
                  for c in centroids]
@@ -342,13 +352,13 @@ def test_fit_arc_lines_is_robust_to_a_cosmic_ray():
     tilt = 8.0
     positions = np.array([150.0])
     wavelengths = np.array([5400.0])
-    data, uncertainty, mask, x2d, order_y, tan_tilt = make_tilted_arc_order(positions, [1000.0], lsf, tilt,
-                                                                            seed=2)
+    data, uncertainty, mask, x2d, y2d, order_y, tan_tilt = make_tilted_arc_order(positions, [1000.0], lsf, tilt,
+                                                                                 seed=2)
     # Drop a bright cosmic ray on one row, one pixel off the line center
     cosmic_row = 25
     cosmic_column = int(round(positions[0] - order_y[cosmic_row, 0] * tan_tilt)) + 1
     data[cosmic_row, cosmic_column] += 8000.0
-    _, centroids = fit_arc_lines(data, uncertainty, mask, x2d, tilt, order_y, positions, wavelengths,
+    _, centroids = fit_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
                                  initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The Huber loss should keep every centroid (including the cosmic row) on the line
     residuals = [abs(c['x'] - (positions[0] - c['order_y'] * tan_tilt)) for c in centroids]
@@ -381,7 +391,7 @@ def test_add_blends_fits_a_doublet():
     mask = np.zeros((ny, nx), dtype=int)
     blended_lines = Table({'wavelength': component_wavelengths, 'strength': component_strengths})
 
-    centroids = add_blends(data, uncertainty, mask, x2d.astype(float), order_y, blended_lines,
+    centroids = add_blends(data, uncertainty, mask, x2d.astype(float), y2d.astype(float), order_y, blended_lines,
                            wavelength_solution, lsf, tilt)
     assert len(centroids) > 0
     # Every blend centroid is tagged with the mean wavelength of the blend and traces its position
@@ -392,9 +402,9 @@ def test_add_blends_fits_a_doublet():
     assert np.max(residuals) < 0.25
 
 
-def test_fit_wavelength_solution_recovers_tilt_and_curved_dispersion():
+def test_fit_wavelength_solution_recovers_curved_dispersion():
     rng = np.random.default_rng(4)
-    dispersion, lam0, domain_max, true_tilt = 2.2, 5000.0, 1800.0, 8.0
+    dispersion, lam0, domain_max = 2.2, 5000.0, 1800.0
 
     def true_wavelength(s):
         return lam0 + dispersion * s + 20.0 * np.sin(np.pi * s / domain_max)
@@ -405,20 +415,65 @@ def test_fit_wavelength_solution_recovers_tilt_and_curved_dispersion():
     line_positions = np.interp(catalog, wave_grid, s_grid)
     gap = (800.0, 1150.0)
     keep = ~((line_positions > gap[0]) & (line_positions < gap[1]))
-    rows = np.array([-30, -15, 0, 15, 30])
     pixel_error = 0.1
-    tan_tilt = np.tan(np.deg2rad(true_tilt))
-    x, y, wavelengths, errors = [], [], [], []
-    for position, wavelength in zip(line_positions[keep], catalog[keep]):
-        for row in rows:
-            x.append(position - row * tan_tilt + rng.normal(0.0, pixel_error))
-            y.append(row)
-            wavelengths.append(wavelength)
-            errors.append(pixel_error)
-    wavelength_polynomial, tilt_polynomial = fit_wavelength_solution(
-        np.array(x), np.array(y), np.array(wavelengths), np.array(errors),
-        domain=(0.0, domain_max), dispersion_guess=dispersion, tilt_order=0, initial_tilt=6.0)
-    # Tilt and the curved dispersion are recovered
-    np.testing.assert_allclose(tilt_polynomial(900.0), true_tilt, atol=0.3)
-    evaluation = np.linspace(0, domain_max, 300)
+    centroids = line_positions[keep] + rng.normal(0.0, pixel_error, size=keep.sum())
+    wavelengths = catalog[keep]
+    errors = np.full(keep.sum(), pixel_error)
+
+    wavelength_polynomial = fit_wavelength_solution(
+        centroids, wavelengths, errors,
+        domain=(0.0, domain_max), dispersion_guess=dispersion, degree=6)
+    # The curved dispersion is recovered where there are lines
+    evaluation = np.linspace(line_positions[keep].min(), line_positions[keep].max(), 300)
     assert np.std(wavelength_polynomial(evaluation) - true_wavelength(evaluation)) < 0.3
+
+
+def test_fit_tilt_polynomial_recovers_quadratic_tilt():
+    domain = (0.0, 1800.0)
+    centroids = np.linspace(50.0, 1750.0, 15)
+    true_tilt = Legendre([8.0, 0.5, -0.3], domain=domain)
+    rng = np.random.default_rng(11)
+    tilt_error = 0.02
+    tilts = true_tilt(centroids) + rng.normal(0.0, tilt_error, size=centroids.size)
+    errors = np.full(centroids.size, tilt_error)
+
+    tilt_polynomial = fit_tilt_polynomial(centroids, tilts, errors, domain=domain, degree=2)
+    evaluation = np.linspace(domain[0], domain[1], 100)
+    np.testing.assert_allclose(tilt_polynomial(evaluation), true_tilt(evaluation), atol=0.05)
+
+
+def test_fit_feature_tilts_recovers_per_line_tilt_and_centroid():
+    rng = np.random.default_rng(7)
+    true_tilt = 8.0
+    tan_tilt = np.tan(np.deg2rad(true_tilt))
+    rows = np.arange(-40, 41, 1.0)
+    pixel_error = 0.05
+    true_centroids = {6000.0: 250.0, 7000.0: 700.0, 8000.0: 1200.0}
+
+    centroids = {'wavelength': [], 'x': [], 'order_y': [], 'x_err': []}
+    for wavelength, center in true_centroids.items():
+        for row in rows:
+            # x = x_tilt - order_y * tan(tilt), with x_tilt the centroid at order_y = 0
+            centroids['wavelength'].append(wavelength)
+            centroids['x'].append(center - row * tan_tilt + rng.normal(0.0, pixel_error))
+            centroids['order_y'].append(row)
+            centroids['x_err'].append(pixel_error)
+
+    line_tilts = fit_feature_tilts(centroids)
+    assert len(line_tilts) == len(true_centroids)
+    for row in line_tilts:
+        np.testing.assert_allclose(row['tilt'], true_tilt, atol=0.1)
+        np.testing.assert_allclose(row['centroid'], true_centroids[row['reference_wavelength']], atol=0.05)
+        assert row['centroid_err'] > 0
+        assert row['tilt_err'] > 0
+
+
+def test_fit_feature_tilts_skips_lines_with_too_few_rows():
+    centroids = {
+        'wavelength': [5000.0, 5000.0, 6000.0, 6000.0, 6000.0],
+        'x': [100.0, 101.0, 200.0, 201.0, 202.0],
+        'order_y': [-1.0, 1.0, -1.0, 0.0, 1.0],
+        'x_err': [0.1, 0.1, 0.1, 0.1, 0.1],
+    }
+    line_tilts = fit_feature_tilts(centroids, min_rows=3)
+    assert list(line_tilts['reference_wavelength']) == [6000.0]

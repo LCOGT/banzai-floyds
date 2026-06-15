@@ -144,3 +144,5 @@ manual_reduction/
 test.db
 debug.db
 .DS_Store
+
+.worktrees

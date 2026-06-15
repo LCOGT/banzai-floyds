@@ -62,15 +62,15 @@ def parameter_variances(fit):
     Returns
     -------
     array, shape (len(fit.x),)
-        Approximate variance of each fit parameter, clipped to be non-negative.
-
-    Raises
-    ------
-    numpy.linalg.LinAlgError
-        If `J^T J` is singular and can't be inverted, rather than silently returning nans.
+        Approximate variance of each fit parameter, clipped to be non-negative. nan if the Jacobian is singular (e.g. a
+        degenerate fit with some parameters unconstrained).
     """
-    degrees_of_freedom = max(fit.fun.size - fit.x.size, 1)
-    covariance = np.linalg.inv(fit.jac.T @ fit.jac) * 2.0 * fit.cost / degrees_of_freedom
+    try:
+        degrees_of_freedom = max(fit.fun.size - fit.x.size, 1)
+        covariance = np.linalg.inv(fit.jac.T @ fit.jac) * 2.0 * fit.cost / degrees_of_freedom
+    except np.linalg.LinAlgError:
+        return np.full(fit.x.shape, np.nan)
+
     return np.clip(np.diag(covariance), 0.0, None)
 
 

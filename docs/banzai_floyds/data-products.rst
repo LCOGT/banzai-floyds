@@ -114,11 +114,17 @@ L1IDARC header keyword. The ***EXTRACTED*** extension provides an unweighted bin
 diagnostic purposes. The 'fluxraw' and 'fluxrawerror' columns are given in electrons. The 'wavelength' and 'binwidth' columns 
 give the wavelength bin center and width respectively in Angstroms. The 'background' column is not currently used but in the 
 future will contain continuum values that can be subtracted when fitting the arc lines. The ***LINESUSED*** extension is a fits 
-binary table with the 'measured_wavelength' and 'reference_wavelength' columns both in Angstroms. The measured wavelength column 
-is derived by centroiding individual lines. The residuals between these can be used for diagnostic purposes. 
+binary table with the 'measured_wavelength' and 'reference_wavelength' columns both in Angstroms. The measured wavelength column
+is derived by centroiding individual lines. The residuals between these can be used for diagnostic purposes. This extension also
+includes per-line tilt fits derived from the row-by-row centroids in the FEATURES2D extension: 'centroid' and 'centroid_err' give
+the line centroid (in pixels) and its uncertainty at the order center (order_y = 0), and 'tilt' and 'tilt_err' give the line tilt
+and its uncertainty in degrees. These are fit independently per line (a weighted straight-line fit of x against order_y) and are
+NaN for lines with too few row centroids to fit.
 The ***LSF*** extension is a data table with a sampled version of the line spread function (LSF) with
 columns, order, x, and lsf. The parameters for the Gauss-Hermite fit of the LSF are included in the
 header with the order id appended. 
+The ***FEATURES2D*** extension is a data table with the row-by-row fits
+to the centroids of the arc lines. The columns are 'order', 'wavelength', 'x', 'y', 'x_err', and 'order_y'.
 
 Standard Star Calibrations
 --------------------------
