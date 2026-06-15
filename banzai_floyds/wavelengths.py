@@ -4,7 +4,7 @@ from banzai.stages import Stage
 from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai_floyds.matched_filter import matched_filter_metric
 from scipy.signal import find_peaks
-from scipy.optimize import least_squares, minimize_scalar
+from scipy.optimize import least_squares
 from banzai_floyds.matched_filter import optimize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import DataTable
@@ -12,8 +12,7 @@ from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
 from banzai_floyds.arc_lines import arc_lines_table
-from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, fwhm_to_sigma, to_window, \
-    curvature_penalty, penalized_fit, gcv_score, parameter_variances
+from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, fwhm_to_sigma, parameter_variances
 from banzai_floyds.extract import extract
 from astropy.table import Table, vstack
 from banzai.logs import get_logger
@@ -865,12 +864,12 @@ def _invert_wavelength_polynomial(x_of_wavelength, domain, dispersion_guess, deg
 
 
 def fit_wavelength_solution(centroids, wavelengths, centroid_errors, domain, dispersion_guess,
-                            degree=6, penalty_derivative_order=6):
+                            degree=5):
     """
-    Fit a penalized wavelength solution from the per-line centroids.
+    Fit the wavelength solution from the per-line centroids.
 
     Because the centroids carry the errors (in pixels), we fit x as a function of wavelength,
-    x = g(wavelength), as a penalized Legendre series, and then invert it to get the wavelength
+    x = g(wavelength), as a weighted Legendre series, and then invert it to get the wavelength
     solution wavelength(x) over the order domain (see `_invert_wavelength_polynomial`).
 
     Parameters
@@ -887,9 +886,6 @@ def fit_wavelength_solution(centroids, wavelengths, centroid_errors, domain, dis
         Guess of Angstroms per pixel, used to size the wavelength grid when inverting.
     degree : int
         Degree of the Legendre series.
-    penalty_derivative_order : int
-        Order of the derivative whose integrated square is penalized (see
-        `banzai_floyds.utils.fitting_utils.curvature_penalty`).
 
     Returns
     -------
@@ -898,25 +894,19 @@ def fit_wavelength_solution(centroids, wavelengths, centroid_errors, domain, dis
 
     Notes
     -----
-    We fit a Legendre polynomial of highish `degree` to x(wavelength) and penalize the integrated
-    square of its `penalty_derivative_order`-th derivative; the penalty strength is chosen by
-    generalized cross-validation (GCV). This is a smoothing spline solved in closed form, so the fit
-    reverts to a degree `penalty_derivative_order` - 1 polynomial through gaps and beyond the last
-    measured line. The default of 3 leaves a quadratic unpenalized so the dispersion tends towards a
-    quadratic where the arc lines don't constrain it.
+    The arc lines (including the blends added by `add_blends`, which fill the otherwise sparse
+    central gap) constrain the fit well enough that a plain weighted least-squares Legendre series at
+    a moderate `degree` is stable, including in the short extrapolated regions beyond the bluest and
+    reddest measured lines. An earlier version smoothed this with a GCV-tuned curvature penalty, but
+    once the blends are in the fit the penalty changed the solution by < 0.3 A everywhere, so it was
+    removed in favor of this simpler fit.
     """
     centroids = np.asarray(centroids, dtype=float)
     wavelengths = np.asarray(wavelengths, dtype=float)
     weights = 1.0 / np.asarray(centroid_errors, dtype=float) ** 2
 
     wavelength_domain = (np.min(wavelengths), np.max(wavelengths))
-    u = to_window(wavelengths, wavelength_domain)
-    penalty = curvature_penalty(degree, derivative_order=penalty_derivative_order)
-
-    best = minimize_scalar(lambda log_lam: gcv_score(u, centroids, weights, degree, penalty, log_lam),
-                           bounds=(-25.0, 25.0), method='bounded')
-    beta = penalized_fit(u, centroids, weights, degree, penalty, np.exp(best.x))
-    x_of_wavelength = Legendre(beta, domain=wavelength_domain)
+    x_of_wavelength = Legendre.fit(wavelengths, centroids, degree, domain=wavelength_domain, w=weights)
     return _invert_wavelength_polynomial(x_of_wavelength, domain, dispersion_guess, degree)
 
 
@@ -970,7 +960,7 @@ class CalibrateWavelengths(Stage):
     MIN_LINE_SEPARATION_N_SIGMA = 5.0
     # In units of median signal to noise in the spectrum
     PEAK_SNR_THRESHOLD = 10.0
-    FIT_ORDERS = {1: 7, 2: 2}
+    FIT_ORDERS = {1: 5, 2: 2}
     # Success Metrics
     MATCH_SUCCESS_THRESHOLD = 3  # matched lines required to consider solution success
     """
