@@ -1,8 +1,9 @@
 """Process every raw FLOYDS arc (a00) frame matching the archive queries and build a
 multi-page PDF of wavelength-solution residual plots with the RMSE printed on each panel.
 
-Uses the same query params as the last cell of WavelengthCalibration.ipynb (both sets:
-en06 2021-06-21..2021-07-01 and en12 2022-04-15..2022-04-19).
+Uses the same query params as the last cell of WavelengthCalibration.ipynb (en06
+2021-06-21..2021-07-01 and en12 2022-04-15..2022-04-19), plus a more modern epoch for
+both sites (en06 and en12, 2026-06-01..2026-06-15).
 
 Raw a00 frames are downloaded to test_data/raw and are only re-downloaded if the file is
 not already on disk. Run from the characterization_testing directory in the banzai-floyds
@@ -48,6 +49,9 @@ ARCHIVE_FRAMES_URL = 'https://archive-api.lco.global/frames/'
 QUERY_PARAMS_SETS = [
     {'start': '2021-06-21', 'end': '2021-07-01', 'instrument_id': 'en06', 'reduction_level': 0},
     {'start': '2022-04-15', 'end': '2022-04-19', 'instrument_id': 'en12', 'reduction_level': 0},
+    # More modern data for both sites
+    {'start': '2026-06-01', 'end': '2026-06-15', 'instrument_id': 'en06', 'reduction_level': 0},
+    {'start': '2026-06-01', 'end': '2026-06-15', 'instrument_id': 'en12', 'reduction_level': 0},
 ]
 RAW_DIR = 'test_data/raw'
 OUTPUT_PDF = 'wavelength_residuals.pdf'

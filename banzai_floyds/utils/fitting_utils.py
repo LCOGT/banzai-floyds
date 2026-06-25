@@ -89,3 +89,39 @@ def interp_with_errors(x, y, yerr, x_new):
     yerr_new = np.sqrt((1 - alpha)**2 * yerr[left_indices]**2 + alpha**2 * yerr[left_indices + 1]**2)
 
     return y_new, yerr_new
+
+
+def _weighted_linear_fit(t, x, x_err):
+    """
+    Weighted least-squares fit of a straight line x = a + b * t.
+
+    Parameters
+    ----------
+    t : array
+        Independent variable (here the y position relative to the order center).
+    x : array
+        Dependent variable (here the measured centroid x position).
+    x_err : array
+        1-sigma uncertainties on `x`, same shape as `x`.
+
+    Returns
+    -------
+    a, b : float
+        Intercept (x at t = 0) and slope (dx/dt).
+    var_a, var_b : float
+        Variances of the intercept and slope from the fit covariance matrix.
+    """
+    weights = 1.0 / np.asarray(x_err, dtype=float) ** 2
+    t = np.asarray(t, dtype=float)
+    x = np.asarray(x, dtype=float)
+    s = np.sum(weights)
+    s_t = np.sum(weights * t)
+    s_tt = np.sum(weights * t * t)
+    s_x = np.sum(weights * x)
+    s_tx = np.sum(weights * t * x)
+    delta = s * s_tt - s_t ** 2
+    a = (s_tt * s_x - s_t * s_tx) / delta
+    b = (s * s_tx - s_t * s_x) / delta
+    var_a = s_tt / delta
+    var_b = s / delta
+    return a, b, var_a, var_b

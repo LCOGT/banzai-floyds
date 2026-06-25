@@ -44,6 +44,38 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
         return None
 
 
+def get_order_func(db_session, dateobs, table):
+    """
+    Make an ordering function for closest to date obs depending
+    on the SQL dialect.
+
+    Parameters
+    ----------
+    db_session: SQLAlchemy session
+        The database session to use for the query
+    dateobs: datetime
+        The dateobs to compare against
+    table: SQLAlchemy table
+        The table to query
+
+    Returns
+    -------
+    order_func: SQLAlchemy function
+        The ordering function to use in the query
+    """
+    if 'postgres' in db_session.bind.dialect.name:
+        order_func = func.abs(
+            func.extract("epoch", table.dateobs) - func.extract("epoch", dateobs)
+        )
+    elif 'sqlite' in db_session.bind.dialect.name:
+        order_func = func.abs(
+            func.julianday(table.dateobs) - func.julianday(dateobs)
+        )
+    else:
+        raise NotImplementedError("Only postgres and sqlite are supported")
+    return order_func
+
+
 class FLOYDSCalibrationImage(CalibrationImage):
     blockid = Column(Integer, nullable=True)
     proposal = Column(String(50), nullable=True)
@@ -80,6 +112,24 @@ class OrderHeight(Base):
     good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
 
 
+class LSFParams(Base):
+    __tablename__ = 'lsfparams'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), index=True)
+    # One arc produces a record per order, so filename is not unique on its own (it is unique per order).
+    filename = Column(String(100))
+    order_id = Column(Integer)
+    # The LSF depends strongly on the slit width (the slit image dominates the line width on wide
+    # slits), so records are keyed on it the same way OrderHeight is.
+    slit_width = Column(Float)
+    dateobs = Column(DateTime)
+    sigma = Column(Float)
+    h3 = Column(Float)
+    h4 = Column(Float)
+    good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
+    good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
+
+
 def create_db(db_address):
     # Create an engine for the database
     engine = create_engine(db_address)
@@ -110,6 +160,38 @@ def get_order_location(dateobs, order_id, instrument, db_address):
         order_location = location_query.first()
         order_location = [order_location.xdomainmin, order_location.xdomainmax]
     return order_location
+
+
+def get_recent_lsf_params(dateobs, order_id, slit_width, instrument, db_address, limit=10):
+    """Return up to `limit` LSF records for this instrument/order/slit width, closest in time first."""
+    with get_session(db_address) as db_session:
+        lsf_query = db_session.query(LSFParams).filter(LSFParams.instrument_id == instrument.id)
+        lsf_query = lsf_query.filter(LSFParams.order_id == order_id)
+        lsf_query = lsf_query.filter(LSFParams.slit_width == slit_width)
+        lsf_query = lsf_query.filter(LSFParams.good_after <= dateobs)
+        lsf_query = lsf_query.filter(LSFParams.good_until >= dateobs)
+        lsf_query = lsf_query.order_by(get_order_func(db_session, dateobs, LSFParams))
+        lsf_params = lsf_query.limit(limit).all()
+    return lsf_params
+
+
+def add_lsf_params(db_address, instrument_id, filename, order_id, slit_width, dateobs, sigma, h3, h4,
+                   good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
+    """Store (or update) the fitted Gauss-Hermite LSF for one order of one arc frame.
+
+    Records are keyed on (filename, order_id) so re-processing a frame updates its row rather than
+    duplicating it. `get_recent_lsf_params` selects among records by instrument/order/slit width and
+    then proximity of `dateobs`.
+    """
+    if isinstance(dateobs, str):
+        dateobs = parse_date_obs(dateobs)
+    record_attributes = {'instrument_id': instrument_id, 'filename': filename, 'order_id': order_id,
+                         'slit_width': slit_width, 'dateobs': dateobs, 'sigma': sigma, 'h3': h3, 'h4': h4,
+                         'good_after': parse_date_obs(good_after), 'good_until': parse_date_obs(good_until)}
+    with get_session(db_address) as db_session:
+        add_or_update_record(db_session, LSFParams, {'filename': filename, 'order_id': order_id},
+                             record_attributes)
+        db_session.commit()
 
 
 def add_order_location(db_address, instrument_id, xdomainmin, xdomainmax,
@@ -215,18 +297,14 @@ def add_order_height(db_address, instrument_id, height, slit_width,
 
 def get_order_height(instrument, dateobs, slit_width, db_address):
     with get_session(db_address) as db_session:
-        if 'postgres' in db_session.bind.dialect.name:
-            order_func = func.abs(func.extract("epoch", FLOYDSCalibrationImage.dateobs) -
-                                  func.extract("epoch", dateobs))
-        elif 'sqlite' in db_session.bind.dialect.name:
-            order_func = func.abs(func.julianday(FLOYDSCalibrationImage.dateobs) - func.julianday(dateobs))
-        else:
-            raise NotImplementedError("Only postgres and sqlite are supported")
+        # OrderHeight is selected by validity window (good_after/good_until), not dateobs proximity --
+        # it has no dateobs column -- so we can't use get_order_func here. Take the most recently added
+        # matching record, the same way get_order_location does.
         height_query = db_session.query(OrderHeight).filter(OrderHeight.instrument_id == instrument.id)
         height_query = height_query.filter(OrderHeight.slit_width == slit_width)
         height_query = height_query.filter(OrderHeight.good_after <= dateobs)
         height_query = height_query.filter(OrderHeight.good_until >= dateobs)
-        height_query.order_by(order_func)
+        height_query = height_query.order_by(desc(OrderHeight.id))
         order_height = height_query.first()
         return order_height.height
 
@@ -330,3 +408,40 @@ def populate_order_heights_locations(db_address):
                          int(order_height['height']),
                          float(order_height['slit_width']),
                          good_after=order_height['good_after'], good_until=order_height['good_until'])
+
+
+def populate_lsf_params(db_address):
+    """Seed the LSF table with the hand-measured Gauss-Hermite shapes shipped in the repo.
+
+    These are the bootstrap LSFs that size the wavelength-fitting windows (one per site/slit
+    width/order, with the coj focus-change epoch split via good_after/good_until). Once an arc is
+    reduced, `CalibrateWavelengths` writes its own fitted LSF back to this table, so the seeds only
+    matter until a frame of the same configuration has been processed.
+    """
+    pkg_location = importlib.resources.files('banzai_floyds')
+    lsf_params_file = os.path.join(pkg_location, 'data', 'orders', 'lsf_params.dat')
+    lsf_params = ascii.read(lsf_params_file)
+
+    # Resolve each site's FLOYDS instrument once rather than per row.
+    instrument_ids = {}
+    for site in set(lsf_params['site']):
+        for instrument in get_instruments_at_site(site, db_address=db_address):
+            if 'floyds' in instrument.type.lower():
+                instrument_ids[site] = instrument.id
+                break
+
+    # Write every row in a single transaction so we take the database write lock once. Seeding is often
+    # run while a reduction is committing to the same sqlite file; one lock acquisition instead of one
+    # per row avoids stacking up the ~5 s busy-timeout wait on each of the 24 inserts.
+    with get_session(db_address) as db_session:
+        for lsf in lsf_params:
+            record_attributes = {'instrument_id': instrument_ids[lsf['site']], 'filename': lsf['filename'],
+                                 'order_id': int(lsf['order_id']), 'slit_width': float(lsf['slit_width']),
+                                 'dateobs': parse_date_obs(lsf['dateobs']), 'sigma': float(lsf['sigma']),
+                                 'h3': float(lsf['h3']), 'h4': float(lsf['h4']),
+                                 'good_after': parse_date_obs(lsf['good_after']),
+                                 'good_until': parse_date_obs(lsf['good_until'])}
+            add_or_update_record(db_session, LSFParams,
+                                 {'filename': lsf['filename'], 'order_id': int(lsf['order_id'])},
+                                 record_attributes)
+        db_session.commit()

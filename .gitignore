@@ -146,3 +146,5 @@ debug.db
 .DS_Store
 
 .worktrees
+
+CLAUDE.md

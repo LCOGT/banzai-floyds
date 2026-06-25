@@ -1,6 +1,6 @@
 from banzai_floyds.wavelengths import linear_wavelength_solution, identify_peaks, correlate_peaks
 from banzai_floyds.wavelengths import refine_peak_centers, CalibrateWavelengths
-from banzai_floyds.wavelengths import fit_arc_lines, add_blends, fit_wavelength_solution
+from banzai_floyds.wavelengths import fit_unblended_arc_lines, add_blends, fit_wavelength_solution
 from banzai_floyds.wavelengths import fit_feature_tilts, fit_tilt_polynomial
 from banzai_floyds.utils.fitting_utils import gauss_hermite
 import numpy as np
@@ -15,6 +15,13 @@ from banzai.data import CCDData
 from astropy.io import fits
 from banzai_floyds.utils.wavelength_utils import tilt_coordinates, WavelengthSolution
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, sigma_to_fwhm
+from banzai_floyds.dbs import create_db, add_lsf_params
+from types import SimpleNamespace
+import tempfile
+
+# 2"-slit line FWHMs (pixels) used to build the fake ogg arc and seed its bootstrap LSF. These used
+# to live on CalibrateWavelengths as INITIAL_LINE_FWHMS, but the real LSF now comes from the database.
+OGG_LINE_FWHMS = {1: 4.78, 2: 5.02}
 
 
 def build_random_spectrum(seed=None, min_wavelength=3200, line_sigma=3, dispersion=2.5, nlines=10, nx=1001):
@@ -79,6 +86,30 @@ def test_wavelength_solution_to_array():
     expected_data = np.zeros((ny, nx))
     expected_data[25:-25, :501] = np.arange(3200.0, 4451, 2.5)
     np.testing.assert_allclose(wavelength_solution.data, expected_data)
+
+
+def test_lsf_round_trips_through_header():
+    orders = Orders([Legendre([11,], domain=[0, 2431]), Legendre([51,], domain=[0, 2655])], [101, 2700], [11, 11])
+    wavelength_models = [Legendre([4796.5, 1215.5], domain=[0, 2431]), Legendre([7667, 2655], domain=[0, 2655])]
+    tilt_models = [Legendre([0.0,], domain=[0, 2431]), Legendre([0.0,], domain=[0, 2655])]
+    lsf_params = [{'sigma': 2.83, 'h3': 0.05, 'h4': -0.02}, {'sigma': 2.13, 'h3': -0.01, 'h4': 0.03}]
+    solution = WavelengthSolution(wavelength_models, tilt_models, orders, lsf_params)
+
+    reconstructed = WavelengthSolution.from_fits(solution.to_header(), orders)
+    assert reconstructed.lsf_params == lsf_params
+    np.testing.assert_allclose(reconstructed.lsf_sigma, [2.83, 2.13])
+    np.testing.assert_allclose(reconstructed.fwhm, [sigma_to_fwhm(2.83), sigma_to_fwhm(2.13)])
+
+
+def test_lsf_absent_for_legacy_headers():
+    # Calibrations written before the LSF was stored on the solution have no SIGMA_* keywords.
+    orders = Orders([Legendre([11,], domain=[0, 2431]), Legendre([51,], domain=[0, 2655])], [101, 2700], [11, 11])
+    wavelength_models = [Legendre([4796.5, 1215.5], domain=[0, 2431]), Legendre([7667, 2655], domain=[0, 2655])]
+    tilt_models = [Legendre([0.0,], domain=[0, 2431]), Legendre([0.0,], domain=[0, 2655])]
+    solution = WavelengthSolution(wavelength_models, tilt_models, orders)
+
+    reconstructed = WavelengthSolution.from_fits(solution.to_header(), orders)
+    assert reconstructed.lsf_params is None
 
 
 def test_linear_wavelength_solution():
@@ -200,7 +231,7 @@ def generate_fake_arc_frame():
     # make a reasonable wavelength model
     wavelength_model1 = Legendre((7425, 2950.5, 20., -5., 1.), domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    line_fwhms = [CalibrateWavelengths.INITIAL_LINE_FWHMS['ogg'][i] for i in range(1, 3)]
+    line_fwhms = [OGG_LINE_FWHMS[i] for i in range(1, 3)]
     line_tilts = [CalibrateWavelengths.INITIAL_LINE_TILTS[i] for i in range(1, 3)]
     dispersions = [CalibrateWavelengths.INITIAL_DISPERSIONS[i] for i in range(1, 3)]
     flux_scale = 80000.0
@@ -221,7 +252,7 @@ def generate_fake_arc_frame():
 
         input_wavelengths[input_order_region] = wavelength_model(tilted_x)
         # Fill in both used and unused lines that have strengths, setting a reasonable signal to noise
-        lines = arc_lines.used_lines + arc_lines.unused_lines + arc_lines.blended_lines
+        lines = arc_lines.used_lines + arc_lines.unused_lines
         for line in lines:
             if line['line_strength'] == 'nan':
                 continue
@@ -238,16 +269,31 @@ def generate_fake_arc_frame():
     errors = np.sqrt(errors * errors + read_noise)
     data += np.random.normal(0.0, read_noise, size=(ny, nx))
     # save the data, errors, and orders to a floyds frame
-    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({'SITEID': 'ogg', 'APERWID': 2.0}),
+    frame = FLOYDSObservationFrame([CCDData(data, fits.Header({'SITEID': 'ogg', 'APERWID': 2.0,
+                                                               'DATE-OBS': '2024-01-01T00:00:00'}),
                                             uncertainty=errors)], 'foo.fits')
     frame.orders = orders
+    frame.instrument = SimpleNamespace(id=1, site='ogg', camera='en06')
     # return the test frame and the input wavelength solution
     return frame, input_wavelengths
 
 
+def seed_lsf_database():
+    """Create a temporary database seeded with the initial LSF for each order (ogg, 2" slit)."""
+    db_file = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    db_file.close()
+    db_address = f'sqlite:///{db_file.name}'
+    create_db(db_address)
+    for order in (1, 2):
+        sigma = fwhm_to_sigma(OGG_LINE_FWHMS[order])
+        add_lsf_params(db_address, instrument_id=1, filename='seed.fits', order_id=order,
+                       slit_width=2.0, dateobs='2024-01-01T00:00:00', sigma=sigma, h3=0.0, h4=0.0)
+    return db_address
+
+
 def test_full_wavelength_solution():
     np.random.seed(234132)
-    input_context = context.Context({})
+    input_context = context.Context({'db_address': seed_lsf_database()})
     frame, input_wavelengths = generate_fake_arc_frame()
     stage = CalibrateWavelengths(input_context)
     frame = stage.do_stage(frame)
@@ -267,7 +313,7 @@ def test_full_wavelength_solution():
 
 
 def test_empty_calibrate_wavelengths_stage():
-    input_context = context.Context({})
+    input_context = context.Context({'db_address': None})
     nx = 2048
     ny = 512
     order_height = 93
@@ -333,7 +379,7 @@ def test_fit_arc_lines_recovers_shape_and_centroids():
     amplitudes = np.array([900.0, 1200.0, 700.0])
     data, uncertainty, mask, x2d, y2d, order_y, tan_tilt = make_tilted_arc_order(positions, amplitudes, lsf, tilt,
                                                                                  seed=1)
-    lsf_params, centroids = fit_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
+    lsf_params, centroids = fit_unblended_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
                                           initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The shared LSF shape is recovered
     np.testing.assert_allclose(lsf_params['sigma'], lsf['sigma'], atol=0.15)
@@ -358,7 +404,7 @@ def test_fit_arc_lines_is_robust_to_a_cosmic_ray():
     cosmic_row = 25
     cosmic_column = int(round(positions[0] - order_y[cosmic_row, 0] * tan_tilt)) + 1
     data[cosmic_row, cosmic_column] += 8000.0
-    _, centroids = fit_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
+    _, centroids = fit_unblended_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
                                  initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The Huber loss should keep every centroid (including the cosmic row) on the line
     residuals = [abs(c['x'] - (positions[0] - c['order_y'] * tan_tilt)) for c in centroids]
