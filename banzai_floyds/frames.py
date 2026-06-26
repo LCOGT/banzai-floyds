@@ -37,8 +37,16 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         # Load the orders if they exist
         if 'ORDER_COEFFS' in self:
             self.orders = orders_from_fits(self['ORDER_COEFFS'].data, self['ORDER_COEFFS'].meta, self.shape)
+
+        # We need both the WAVELENGTH and LSF extensions to construct the
+        # WavelengthSolution object
+        if ('WAVELENGTH' in self) != ('LSF' in self):
+            present, missing = ('WAVELENGTH', 'LSF') if 'WAVELENGTH' in self else ('LSF', 'WAVELENGTH')
+            raise ValueError(f'Found the {present} extension but not {missing}; the wavelength solution '
+                             f'needs both extensions.')
         if 'WAVELENGTH' in self:
-            self.wavelengths = WavelengthSolution.from_fits(self['WAVELENGTH'].meta, self.orders)
+            self.wavelengths = WavelengthSolution.from_fits(self['WAVELENGTH'].meta, self.orders,
+                                                            lsf_header=self['LSF'].meta)
         if 'PROFILEFITS' in self:
             self.profile = load_profile_fits(self['PROFILEFITS'])
         if 'BINNED2D' in self:
@@ -219,6 +227,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def wavelengths(self, value):
         self._wavelengths = value
         self.add_or_update(ArrayData(value.data, meta=value.to_header(), name='WAVELENGTH'))
+        if value.lsf_params is not None:
+            self.add_or_update(DataTable(value.lsf_to_table(), name='LSF', meta=value.lsf_to_header()))
 
     @property
     def elevation(self):

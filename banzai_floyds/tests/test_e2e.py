@@ -8,7 +8,6 @@ import os
 import importlib.resources
 from kombu import Connection, Exchange
 import mock
-import requests
 from astropy.io import fits, ascii
 import numpy as np
 from banzai.utils.fits_utils import download_from_s3
@@ -178,6 +177,23 @@ class TestWavelengthSolutionCreation:
         for expected_file in expected_filenames(test_data):
             if 'a91.fits' in expected_file:
                 assert os.path.exists(expected_file)
+
+    def test_if_wavelength_rmse_is_small(self):
+        # Regression guard: every order of every arc fit should land within 0.25 A RMSE.
+        test_data = ascii.read(DATA_FILELIST)
+        for expected_file in expected_filenames(test_data):
+            if 'a91' not in expected_file:
+                continue
+            hdu = fits.open(expected_file)
+            residuals = hdu['RESIDUALS'].data
+            for order_id in [1, 2]:
+                is_clean = np.logical_and(residuals['order'] == order_id,
+                                          np.logical_not(residuals['blend'].astype(bool)))
+                assert is_clean.sum() > 0, \
+                    f'{os.path.basename(expected_file)} order {order_id} has no unblended lines'
+                rmse = np.sqrt(np.mean(residuals['residual'][is_clean] ** 2))
+                assert rmse < 0.25, \
+                    f'{os.path.basename(expected_file)} order {order_id} wavelength RMSE {rmse:.3f} A'
 
     @pytest.mark.xfail(reason='Wavelengths are within a few angstroms of the manual fits, but we should do better.')
     def test_if_arc_solution_is_sensible(self):

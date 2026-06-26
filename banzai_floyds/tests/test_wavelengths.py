@@ -95,10 +95,18 @@ def test_lsf_round_trips_through_header():
     lsf_params = [{'sigma': 2.83, 'h3': 0.05, 'h4': -0.02}, {'sigma': 2.13, 'h3': -0.01, 'h4': 0.03}]
     solution = WavelengthSolution(wavelength_models, tilt_models, orders, lsf_params)
 
-    reconstructed = WavelengthSolution.from_fits(solution.to_header(), orders)
+    reconstructed = WavelengthSolution.from_fits(solution.to_header(), orders,
+                                                 lsf_header=solution.lsf_to_header())
     assert reconstructed.lsf_params == lsf_params
     np.testing.assert_allclose(reconstructed.lsf_sigma, [2.83, 2.13])
     np.testing.assert_allclose(reconstructed.fwhm, [sigma_to_fwhm(2.83), sigma_to_fwhm(2.13)])
+    # The LSF table samples the unit-amplitude (amplitude = 1) Gauss-Hermite shape for each order.
+    lsf_table = solution.lsf_to_table()
+    assert set(lsf_table.colnames) == {'order', 'x', 'lsf'}
+    for order_id, params in zip(orders.order_ids, lsf_params):
+        order_lsf = lsf_table[lsf_table['order'] == order_id]
+        expected = gauss_hermite(order_lsf['x'], 0.0, params['sigma'], 1.0, params['h3'], params['h4'])
+        np.testing.assert_allclose(order_lsf['lsf'], expected)
 
 
 def test_lsf_absent_for_legacy_headers():
@@ -311,6 +319,19 @@ def test_full_wavelength_solution():
         np.testing.assert_allclose(frame.wavelengths.data[in_order], input_wavelengths[in_order],
                                    atol=1.0)
 
+    # The residuals table carries one row per fitted feature (blends are a single composite row, not
+    # split into components) with the residual and the linear-term-removed residual.
+    residuals = Table(frame['RESIDUALS'].data)
+    for column in ['order', 'reference_wavelength', 'blend', 'centroid', 'measured_wavelength',
+                   'residual', 'linear_subtracted_residual']:
+        assert column in residuals.colnames
+    np.testing.assert_allclose(residuals['residual'],
+                               residuals['measured_wavelength'] - residuals['reference_wavelength'])
+    assert np.median(np.abs(residuals['residual'])) < 1.0
+    # Each blend appears once in RESIDUALS but is split into its components in CENTROIDS.
+    centroids = Table(frame['CENTROIDS'].data)
+    assert centroids['blend'].sum() >= residuals['blend'].sum()
+
 
 def test_empty_calibrate_wavelengths_stage():
     input_context = context.Context({'db_address': None})
@@ -440,8 +461,9 @@ def test_add_blends_fits_a_doublet():
     centroids = add_blends(data, uncertainty, mask, x2d.astype(float), y2d.astype(float), order_y, blended_lines,
                            wavelength_solution, lsf, tilt)
     assert len(centroids) > 0
-    # Every blend centroid is tagged with the mean wavelength of the blend and traces its position
-    anchor_wavelength = np.average(component_wavelengths)
+    # Every blend centroid is tagged with the strength-weighted mean wavelength of the blend (where the
+    # blended flux centroids) and the fitted centre traces that anchor's position.
+    anchor_wavelength = np.average(component_wavelengths, weights=component_strengths)
     np.testing.assert_allclose([c['wavelength'] for c in centroids], anchor_wavelength)
     anchor_position = (anchor_wavelength - lam0) / dispersion
     residuals = [abs(c['x'] - (anchor_position - c['order_y'] * tan_tilt)) for c in centroids]

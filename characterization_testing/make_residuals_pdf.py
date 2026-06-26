@@ -1,10 +1,6 @@
 """Process every raw FLOYDS arc (a00) frame matching the archive queries and build a
 multi-page PDF of wavelength-solution residual plots with the RMSE printed on each panel.
 
-Uses the same query params as the last cell of WavelengthCalibration.ipynb (en06
-2021-06-21..2021-07-01 and en12 2022-04-15..2022-04-19), plus a more modern epoch for
-both sites (en06 and en12, 2026-06-01..2026-06-15).
-
 Raw a00 frames are downloaded to test_data/raw and are only re-downloaded if the file is
 not already on disk. Run from the characterization_testing directory in the banzai-floyds
 environment:
@@ -18,15 +14,16 @@ test_data/test.db exists with the sites/instruments and processed skyflats (orde
 The pipeline workers all write calibration records to the same sqlite file; if you see
 "database is locked" errors, lower --workers.
 
-The residuals shown are exactly the line centroids stored in the LINESUSED extension of each
-processed frame: for each line we take its centroid (the x position at the order center,
-order_y = 0) and evaluate the saved 2-D WAVELENGTH solution there, so the plot reflects the
-same measurements the wavelength fit actually used. Blends (rows with no centroid) are shown
-using the measured_wavelength column from LINESUSED but excluded from the RMSE.
+The residuals shown are the line centroids stored in the CENTROIDS extension of each
+processed frame Blends (rows flagged in the CENTROIDS 'blend'
+column) are recorded one row per component -- each component's centroid is the single composite
+measurement spread back onto it by its fixed offset -- so they are shown using the
+measured_wavelength column from CENTROIDS but excluded from the RMSE.
 """
 import argparse
 import os
 import sys
+import importlib.resources
 from concurrent.futures import ProcessPoolExecutor
 from glob import glob
 
@@ -35,10 +32,9 @@ os.environ.setdefault('DB_ADDRESS', 'sqlite:///test_data/test.db')
 
 import numpy as np
 import requests
-from astropy.io import fits
+from astropy.io import fits, ascii
 from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
-from scipy.ndimage import map_coordinates
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -55,10 +51,6 @@ QUERY_PARAMS_SETS = [
 ]
 RAW_DIR = 'test_data/raw'
 OUTPUT_PDF = 'wavelength_residuals.pdf'
-# The Hg doublet used by add_blends in the wavelength fit. These are the only constraints inside
-# the 5461-6965 A gap of the red order. They show up in LINESUSED as blends (no centroid) and are
-# plotted as markers but excluded from the RMSE.
-BLEND_LINES = (5769.610, 5790.670)
 
 _context = None
 
@@ -66,7 +58,11 @@ _context = None
 def get_a00_frames(params):
     """Return the archive records for all a00 (raw arc) frames matching the query params."""
     frames = []
-    response = requests.get(ARCHIVE_FRAMES_URL, params={**params, 'limit': 100}, headers={'Authorization': f"Token {os.environ['ARCHIVE_AUTH_TOKEN']}"}).json()
+    response = requests.get(
+        ARCHIVE_FRAMES_URL, 
+        params={**params, 'limit': 100},
+        headers={'Authorization': f"Token {os.environ['ARCHIVE_AUTH_TOKEN']}"}
+    ).json()
     while True:
         frames += [frame for frame in response['results'] if 'a00' in frame['basename']]
         if response.get('next'):
@@ -99,11 +95,12 @@ def _init_worker():
     """Build a banzai context once per worker process."""
     global _context
     from banzai_floyds import settings
+    import banzai.main
+
     settings.processed_path = os.path.join(os.getcwd(), 'test_data')
     settings.fpack = True
     settings.db_address = os.environ['DB_ADDRESS']
     settings.RAW_DATA_FRAME_URL = 'https://archive-api.lco.global/frames'
-    import banzai.main
     _context = banzai.main.parse_args(settings, parse_system_args=False)
 
 
@@ -125,50 +122,78 @@ def process_frames(paths, workers):
                 print(f'Processed {os.path.basename(path)}')
 
 
-def _order_center_models(hdu):
-    """Build the Legendre order-center models (order 1, order 2) from the ORDER_COEFFS extension."""
-    orders_data = Table(hdu['ORDER_COEFFS'].data)
-    polynomial_order = hdu['ORDER_COEFFS'].header['POLYORD']
-    models = []
-    for row in orders_data:
-        coeffs = np.array([row[f'c{i}'] for i in range(polynomial_order + 1)])
-        models.append(Legendre(coeffs, domain=(row['domainmin'], row['domainmax'])))
-    return models
+def _skyflat_windows():
+    """Read the per-site order-solution (skyflat) validity windows from skyflats.dat so that we can do the same for the previous arc solution
+    """
+    from banzai.utils.date_utils import parse_date_obs
+    skyflats_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'orders', 'skyflats.dat')
+    skyflats = ascii.read(skyflats_file)
+    windows = {}
+    for row in skyflats:
+        window = (parse_date_obs(row['good_after']), parse_date_obs(row['good_until']))
+        windows.setdefault(row['site'], set()).add(window)
+    return {site: sorted(site_windows) for site, site_windows in windows.items()}
+
+
+def bound_arcs_to_skyflat_windows(db_address=None):
+    """Set each processed arc's validity window to the order-solution (skyflat) window to be used for the warm start arc fits.
+    """
+    from banzai.dbs import get_session, Instrument
+    from banzai_floyds.dbs import FLOYDSCalibrationImage
+    db_address = db_address or os.environ['DB_ADDRESS']
+    windows_by_site = _skyflat_windows()
+    with get_session(db_address) as db_session:
+        site_of = {instrument.id: instrument.site for instrument in db_session.query(Instrument).all()}
+        arcs = db_session.query(FLOYDSCalibrationImage).filter(FLOYDSCalibrationImage.type == 'ARC').all()
+        for arc in arcs:
+            covering = [window for window in windows_by_site.get(site_of.get(arc.instrument_id), [])
+                        if window[0] <= arc.dateobs <= window[1]]
+            if not covering:
+                continue
+            arc.good_after, arc.good_until = max(covering)
+            db_session.add(arc)
+        db_session.commit()
+    print(f'Bounded {len(arcs)} arc validity windows to their skyflat epochs')
 
 
 def measure_frame(filename):
-    """Compute residuals for both orders of one processed a91 frame from its LINESUSED centroids.
+    """Read the per-feature residuals for both orders of one processed a91 frame from its RESIDUALS table.
 
-    Each line's centroid (x at the order center, order_y = 0) is evaluated through the saved 2-D
-    WAVELENGTH solution to get the measured wavelength, so the residuals are exactly the
-    measurements the wavelength fit used. Blends (no centroid) use the measured_wavelength column.
+    Blends are a single composite row (the strength-weighted centroid),
+    flagged in the 'blend' column; they are plotted but kept out of the RMSE.
     """
     hdu = fits.open(filename)
-    lines_used = Table(hdu['LINESUSED'].data)
-    wavelength_image = np.asarray(hdu['WAVELENGTH'].data, dtype=float)
-    center_models = _order_center_models(hdu)
+    residuals_table = Table(hdu['RESIDUALS'].data)
+    wave_header = hdu['WAVELENGTH'].header
     header = hdu['SCI'].header
     result = {'filename': filename,
               'title': (f'{os.path.basename(filename)}  '
                         f'{header["SITEID"]} {header["DAY-OBS"]} request={header.get("REQNUM", "")}'),
               'orders': {}}
     for order in [1, 2]:
-        order_lines = lines_used[lines_used['order'] == order]
-        has_centroid = np.isfinite(order_lines['centroid'])
+        order_lines = residuals_table[residuals_table['order'] == order]
+        is_blend = np.asarray(order_lines['blend']).astype(bool)
+        clean = order_lines[~is_blend]
+        blends = order_lines[is_blend]
 
-        centroid_lines = order_lines[has_centroid]
-        x = np.asarray(centroid_lines['centroid'], dtype=float)
-        y = center_models[order - 1](x)
-        measured = map_coordinates(wavelength_image, [y, x], order=1)
-        reference = np.asarray(centroid_lines['reference_wavelength'], dtype=float)
-        residuals_wavelengths = reference
-        residuals = measured - reference
+        # The saved order-center wavelength(x) solution, so the dispersion-curvature page can draw its
+        # non-linear shape with the constant+slope term removed (coeffs[:2] is exactly that linear part).
+        if f'POLYORD{order}' in wave_header:
+            degree = int(wave_header[f'POLYORD{order}'])
+            coeffs = np.array([wave_header[f'WCOEF{order}_{j}'] for j in range(degree + 1)])
+            domain = eval(wave_header[f'POLYDOM{order}'])
+        else:
+            coeffs, domain = None, None
 
-        blend_lines = order_lines[~has_centroid]
-        blend_refs = np.asarray(blend_lines['reference_wavelength'], dtype=float)
-        blend_residuals = np.asarray(blend_lines['measured_wavelength'], dtype=float) - blend_refs
-
-        result['orders'][order] = (residuals_wavelengths, residuals, blend_refs, blend_residuals)
+        result['orders'][order] = {
+            'reference': np.asarray(clean['reference_wavelength'], dtype=float),
+            'residuals': np.asarray(clean['residual'], dtype=float),
+            'linear_residual': np.asarray(clean['linear_subtracted_residual'], dtype=float),
+            'blend_refs': np.asarray(blends['reference_wavelength'], dtype=float),
+            'blend_residuals': np.asarray(blends['residual'], dtype=float),
+            'blend_linear_residual': np.asarray(blends['linear_subtracted_residual'], dtype=float),
+            'coeffs': coeffs, 'domain': domain,
+        }
     hdu.close()
     return result
 
@@ -183,7 +208,9 @@ def make_pdf(processed_files, workers, output_pdf=OUTPUT_PDF):
             fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=False)
             fig.suptitle(frame['title'])
             for ax, order in zip(axes, [1, 2]):
-                wavelengths, residuals, blend_refs, blend_residuals = frame['orders'][order]
+                od = frame['orders'][order]
+                wavelengths, residuals = od['reference'], od['residuals']
+                blend_refs, blend_residuals = od['blend_refs'], od['blend_residuals']
                 rmse = np.sqrt(np.mean(residuals ** 2)) if len(residuals) else np.nan
                 ax.axhline(0.0, color='gray', lw=0.8, ls='--')
                 ax.plot(wavelengths, residuals, 'o', color=order_colors[order])
@@ -203,7 +230,41 @@ def make_pdf(processed_files, workers, output_pdf=OUTPUT_PDF):
             fig.tight_layout()
             pdf.savefig(fig)
             plt.close(fig)
+
+            make_dispersion_curvature_page(pdf, frame, order_names, order_colors)
     print(f'Wrote {output_pdf} ({len(measurements)} frames)')
+
+
+def make_dispersion_curvature_page(pdf, frame, order_names, order_colors):
+    """Add a page showing the wavelength solution and arc lines with the linear term removed.
+    """
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=False)
+    fig.suptitle(frame['title'] + '   (linear term removed)')
+    for ax, order in zip(axes, [1, 2]):
+        od = frame['orders'][order]
+        ax.set_ylabel(u'Wavelength − linear fit (Å)')
+        if od['coeffs'] is None or len(od['coeffs']) < 2:
+            ax.annotate(f'{order_names[order]} order   no saved solution',
+                        xy=(0.02, 0.92), xycoords='axes fraction', va='top')
+            continue
+        solution = Legendre(od['coeffs'], domain=od['domain'])
+        linear = Legendre(od['coeffs'][:2], domain=od['domain'])
+
+        x_grid = np.linspace(od['domain'][0], od['domain'][1], 400)
+        ax.plot(solution(x_grid), solution(x_grid) - linear(x_grid), '-', color=order_colors[order],
+                lw=1.4, label='solution − linear')
+
+        ax.plot(od['reference'], od['linear_residual'], 'o', color=order_colors[order], label='arc lines')
+        if len(od['blend_refs']):
+            ax.plot(od['blend_refs'], od['blend_linear_residual'], 'D',
+                    mfc='none', color=order_colors[order], label='blend')
+        ax.annotate(f'{order_names[order]} order   (n = {len(od["reference"])} lines)',
+                    xy=(0.02, 0.92), xycoords='axes fraction', va='top')
+        ax.legend(loc='lower right', fontsize=8, frameon=False)
+    axes[1].set_xlabel(u'Wavelength (Å)')
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 if __name__ == '__main__':
@@ -222,6 +283,7 @@ if __name__ == '__main__':
             print(f'Found {len(new_frames)} a00 frames in the archive for {params}')
             paths += [download_frame(frame) for frame in new_frames]
         process_frames(paths, args.workers)
+        bound_arcs_to_skyflat_windows()
 
     processed = sorted(glob('test_data/*/*/*/processed/*a91*.fits.fz'),
                        key=os.path.basename)

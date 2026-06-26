@@ -177,11 +177,7 @@ def get_recent_lsf_params(dateobs, order_id, slit_width, instrument, db_address,
 
 def add_lsf_params(db_address, instrument_id, filename, order_id, slit_width, dateobs, sigma, h3, h4,
                    good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
-    """Store (or update) the fitted Gauss-Hermite LSF for one order of one arc frame.
-
-    Records are keyed on (filename, order_id) so re-processing a frame updates its row rather than
-    duplicating it. `get_recent_lsf_params` selects among records by instrument/order/slit width and
-    then proximity of `dateobs`.
+    """Store (or update) the fitted Gauss-Hermite LSF for one order of one arc frame..
     """
     if isinstance(dateobs, str):
         dateobs = parse_date_obs(dateobs)
@@ -412,11 +408,6 @@ def populate_order_heights_locations(db_address):
 
 def populate_lsf_params(db_address):
     """Seed the LSF table with the hand-measured Gauss-Hermite shapes shipped in the repo.
-
-    These are the bootstrap LSFs that size the wavelength-fitting windows (one per site/slit
-    width/order, with the coj focus-change epoch split via good_after/good_until). Once an arc is
-    reduced, `CalibrateWavelengths` writes its own fitted LSF back to this table, so the seeds only
-    matter until a frame of the same configuration has been processed.
     """
     pkg_location = importlib.resources.files('banzai_floyds')
     lsf_params_file = os.path.join(pkg_location, 'data', 'orders', 'lsf_params.dat')
@@ -430,9 +421,6 @@ def populate_lsf_params(db_address):
                 instrument_ids[site] = instrument.id
                 break
 
-    # Write every row in a single transaction so we take the database write lock once. Seeding is often
-    # run while a reduction is committing to the same sqlite file; one lock acquisition instead of one
-    # per row avoids stacking up the ~5 s busy-timeout wait on each of the 24 inserts.
     with get_session(db_address) as db_session:
         for lsf in lsf_params:
             record_attributes = {'instrument_id': instrument_ids[lsf['site']], 'filename': lsf['filename'],

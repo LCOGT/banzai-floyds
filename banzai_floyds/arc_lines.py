@@ -1,7 +1,7 @@
 """
 Line lists from FLOYDS arc frames:
 Wavelengths, source, notes, and used lines are sourced from FLOYDS_lines.text
-Strengths are determined for the 2" slit using ogg2m001-en06-20220222-0036-a00.fits and are relative to strongest line.
+Strengths are determined for the 1.2" slit using ogg2m001-en06-20250714-0008-a00.fits and are relative to strongest line.
 Blue lines have been calibrated to match the red strengths based on the overlapping 5460.75 line.
 Lines without strengths could not be found, possibly too weak or blended with nearby lines.
 """
@@ -31,30 +31,6 @@ used_lines = [
         'line_strength': 0.031,
         'line_source': 'Hg',
         'line_notes': 'weak'
-    },
-    {
-        'wavelength': 4158.590,
-        'line_strength': 0.012,
-        'line_source': 'Ar I',
-        'line_notes': 'Weak and a blend'
-    },
-    {
-        'wavelength': 4164.180,
-        'line_strength': 0.0015,
-        'line_source': 'Ar I',
-        'line_notes': 'Weak and a blend'
-    },
-    {
-        'wavelength': 4198.317,
-        'line_strength': 0.00477,
-        'line_source': 'Ar I',
-        'line_notes': 'Weak and a blend'
-    },
-    {
-        'wavelength': 4200.674,
-        'line_strength': 0.009533,
-        'line_source': 'Ar I',
-        'line_notes': 'Weak and a blend'
     },
     {
         'wavelength': 4358.335,
@@ -247,6 +223,34 @@ unused_lines = [
         'line_notes': ''
     },
     {
+        'wavelength': 4158.590,
+        'line_strength': 0.012,
+        'line_source': 'Ar I',
+        'line_notes': 'Too weak/blended in FLOYDS to get a reliable centroid (median err ~0.5 AA); carries '
+                      'negligible fit weight so it only adds blue-end noise.'
+    },
+    {
+        'wavelength': 4164.180,
+        'line_strength': 0.0015,
+        'line_source': 'Ar I',
+        'line_notes': 'Too weak/blended in FLOYDS to get a reliable centroid (median err ~0.5 AA); carries '
+                      'negligible fit weight so it only adds blue-end noise.'
+    },
+    {
+        'wavelength': 4198.317,
+        'line_strength': 0.00477,
+        'line_source': 'Ar I',
+        'line_notes': 'Too weak/blended in FLOYDS to get a reliable centroid (median err ~1.3 AA); carries '
+                      'negligible fit weight so it only adds blue-end noise.'
+    },
+    {
+        'wavelength': 4200.674,
+        'line_strength': 0.009533,
+        'line_source': 'Ar I',
+        'line_notes': 'Too weak/blended in FLOYDS to get a reliable centroid (median err ~2.2 AA); carries '
+                      'negligible fit weight so it only adds blue-end noise.'
+    },
+    {
         'wavelength': 4339.2232,
         'line_strength': 'nan',
         'line_source': 'Hg',
@@ -432,14 +436,12 @@ def arc_lines_table():
     source = []
     notes = []
     used = []
-    blend = []
     for line in used_lines:
         wavelength.append(line['wavelength'])
         strength.append(float(line['line_strength']))
         source.append(line['line_source'])
         notes.append(line['line_notes'])
         used.append(True)
-        blend.append(False)
 
     for line in unused_lines:
         wavelength.append(line['wavelength'])
@@ -447,7 +449,6 @@ def arc_lines_table():
         source.append(line['line_source'])
         notes.append(line['line_notes'])
         used.append(False)
-        blend.append(False)
 
     lines_table = Table({
         'wavelength': wavelength,
@@ -455,7 +456,6 @@ def arc_lines_table():
         'source': source,
         'notes': notes,
         'used': used,
-        'blend': blend
     })
 
     return lines_table

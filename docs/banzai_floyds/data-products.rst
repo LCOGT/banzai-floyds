@@ -47,7 +47,8 @@ The non-extracted 2-D frames are in files with the '2d' suffix and 'SPECTRUM' OB
    their order of choice. 
 
 - ***WAVELENGTH*** Extension: 2-D image of the wavelengths per pixel in Angstroms. This extension can be used if users would
-  like to re-extract a spectrum or re-fit the data using a different technique.
+  like to re-extract a spectrum or re-fit the data using a different technique. It is always accompanied by the ***LSF***
+  extension (described below); the two together make up the wavelength solution, so a frame either has both or neither.
 
 - ***BINNED2D*** Extension: This extension is a binary fits table that is broken down into wavelength bins. This pre-binned
   data is provided as a convenience for users to re-extract their data to meet their specific science needs. The following
@@ -92,7 +93,7 @@ Lamp flat observations of a Tungsten Halogen source are taken primarily to corre
 useful for the red order. The blue order has a dichroic that blocks lines from the lamp, but also renders the blue order
 of the flat unusable. In the future, different lamps may be installed to flat field in the blue.
 
-The individual lamp flats have the 'SCI', 'BPM', 'ERR', 'ORDER_COEFFS', and 'WAVELENGTH' extensions. The 'SCI' extension
+The individual lamp flats have the 'SCI', 'BPM', 'ERR', 'ORDER_COEFFS', 'WAVELENGTH', and 'LSF' extensions. The 'SCI' extension
 contains the raw image data (bias subtracted and gain-corrected to electrons). The other extensions are the same structure
 as the 2-D spectroscopic images.
 
@@ -112,19 +113,25 @@ The only difference from the 2-D spectroscopic frames described above is that th
 this frame rather than being copied in. Science frames reference the arc that provided the WAVELENGTH extension via the 
 L1IDARC header keyword. The ***EXTRACTED*** extension provides an unweighted binned sum of the arc frame, typically for 
 diagnostic purposes. The 'fluxraw' and 'fluxrawerror' columns are given in electrons. The 'wavelength' and 'binwidth' columns 
-give the wavelength bin center and width respectively in Angstroms. The 'background' column is not currently used but in the 
-future will contain continuum values that can be subtracted when fitting the arc lines. The ***LINESUSED*** extension is a fits 
-binary table with the 'measured_wavelength' and 'reference_wavelength' columns both in Angstroms. The measured wavelength column
-is derived by centroiding individual lines. The residuals between these can be used for diagnostic purposes. This extension also
-includes per-line tilt fits derived from the row-by-row centroids in the FEATURES2D extension: 'centroid' and 'centroid_err' give
-the line centroid (in pixels) and its uncertainty at the order center (order_y = 0), and 'tilt' and 'tilt_err' give the line tilt
-and its uncertainty in degrees. These are fit independently per line (a weighted straight-line fit of x against order_y) and are
-NaN for lines with too few row centroids to fit.
+give the wavelength bin center and width respectively in Angstroms.
+The ***FEATURES2D*** extension is a data table with the row-by-row fits
+to the centroids of the arc lines. The columns are 'order', 'wavelength', 'x', 'y', 'x_err', and 'order_y'.
+The ***CENTROIDS*** extension is a fits
+binary table with one row per catalog line giving its centroid measurements. The 'centroid' and 'centroid_err' columns give the
+line centroid (in pixels) and its uncertainty at the order center (order_y = 0), and 'tilt' and 'tilt_err' give the line tilt and
+its uncertainty in degrees, all derived from the row-by-row centroids in the FEATURES2D extension.
+The 'width' column gives the fitting-window width in pixels.
+Blended lines are recorded one row per component (flagged by the 'blend' column): each component's 'centroid' is the single
+composite measurement spread back onto it by its fixed offset.
+The ***RESIDUALS*** extension is a fits binary table with one row per fitted feature (a blend is a single composite row, not
+split into components, flagged by the 'blend' column). It has the 'measured_wavelength' and 'reference_wavelength' columns (both in
+Angstroms; for a blend the reference is the strength-weighted mean of its components), the 'residual' (measured - reference), and
+the 'linear_subtracted_residual' (reference - the constant+slope part of the wavelength solution evaluated at the centroid), which
+isolates the dispersion curvature for diagnostic purposes. It also carries the 'centroid', 'centroid_err', 'tilt', and 'tilt_err'
+columns described above for the composite centroid.
 The ***LSF*** extension is a data table with a sampled version of the line spread function (LSF) with
 columns, order, x, and lsf. The parameters for the Gauss-Hermite fit of the LSF are included in the
 header with the order id appended. 
-The ***FEATURES2D*** extension is a data table with the row-by-row fits
-to the centroids of the arc lines. The columns are 'order', 'wavelength', 'x', 'y', 'x_err', and 'order_y'.
 
 Standard Star Calibrations
 --------------------------

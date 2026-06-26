@@ -12,7 +12,7 @@ from glob import glob
 os.environ['OPENTSDB_PYTHON_METRICS_TEST_MODE'] = 'True'
 os.environ.setdefault('DB_ADDRESS', 'sqlite:///test_data/test.db')
 
-from make_residuals_pdf import process_frames, RAW_DIR
+from make_residuals_pdf import process_frames, bound_arcs_to_skyflat_windows, RAW_DIR
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -23,3 +23,6 @@ if __name__ == '__main__':
     paths = sorted(glob(os.path.join(args.raw_dir, '*.fits.fz')))
     print(f'Re-processing {len(paths)} raw frames from {args.raw_dir}')
     process_frames(paths, args.workers)
+    # Tie each arc's validity window to its skyflat (order solution) epoch so an arc from before the
+    # orders moved is never picked as the initial solution for a later arc.
+    bound_arcs_to_skyflat_windows()

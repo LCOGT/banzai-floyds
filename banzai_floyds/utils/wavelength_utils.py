@@ -1,4 +1,5 @@
 from astropy.io import fits
+from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
 import numpy as np
 
@@ -78,13 +79,32 @@ class WavelengthSolution:
             header[f'TILTDOM{i + 1}'] = str(list(polynomial.domain)), f'Tilt angle domain for order {i}'
             for j, coef in enumerate(polynomial.coef):
                 header[f'TCOEF{i + 1}_{j}'] = coef, f'Tilt angle polynomial coef {j} for order {i}'
-        if self._lsf_params is not None:
-            for i, params in enumerate(self._lsf_params):
-                header[f'SIGMA_{i + 1}'] = params['sigma'], f'LSF Gauss-Hermite sigma (pix) for order {i}'
-                header[f'H3_{i + 1}'] = params['h3'], f'LSF Gauss-Hermite h3 for order {i}'
-                header[f'H4_{i + 1}'] = params['h4'], f'LSF Gauss-Hermite h4 for order {i}'
         header['EXTNAME'] = 'WAVELENGTH'
         return header
+
+    def lsf_to_header(self):
+        """The Gauss-Hermite LSF parameters (sigma, h3, h4) per order, for the LSF extension header."""
+        header = fits.Header()
+        for i, params in enumerate(self._lsf_params):
+            header[f'SIGMA_{i + 1}'] = params['sigma'], f'LSF Gauss-Hermite sigma (pix) for order {i + 1}'
+            header[f'H3_{i + 1}'] = params['h3'], f'LSF Gauss-Hermite h3 for order {i + 1}'
+            header[f'H4_{i + 1}'] = params['h4'], f'LSF Gauss-Hermite h4 for order {i + 1}'
+        header['EXTNAME'] = 'LSF'
+        return header
+
+    def lsf_to_table(self):
+        """The unit-amplitude LSF sampled on a pixel grid per order (columns 'order', 'x', 'lsf').
+
+        The shape parameters live in the header (`lsf_to_header`); this is the sampled curve those
+        parameters produce, so the LSF can be plotted/used without re-evaluating the Gauss-Hermite model.
+        """
+        orders, xs, values = [], [], []
+        for order_id in self._orders.order_ids:
+            x, value = self.line_spread_function(order_id)
+            orders.append(np.full(len(x), order_id, dtype=int))
+            xs.append(np.asarray(x, dtype=float))
+            values.append(np.asarray(value, dtype=float))
+        return Table({'order': np.concatenate(orders), 'x': np.concatenate(xs), 'lsf': np.concatenate(values)})
 
     @property
     def domains(self):
@@ -99,7 +119,13 @@ class WavelengthSolution:
         return wavelength_domains
 
     @classmethod
-    def from_fits(cls, header, orders):
+    def from_fits(cls, header, orders, lsf_header=None):
+        """Rebuild the solution from the WAVELENGTH header (polynomials) and the LSF header (shape).
+
+        The LSF parameters live in their own extension now, so `lsf_header` is the LSF extension's
+        header. It is optional: a header without the SIGMA_* keywords (or None) yields a solution with
+        no LSF, for calibrations written before the LSF was stored.
+        """
         wavelength_polynomials = []
         tilt_polynomials = []
         lsf_params = []
@@ -108,10 +134,10 @@ class WavelengthSolution:
             wavelength_polynomials.append(Legendre(wavelength_coeffs, domain=eval(header[f'POLYDOM{order_id}'])))
             tilt_coeffs = [header[f'TCOEF{order_id}_{j}'] for j in range(header[f'TILTORD{order_id}'] + 1)]
             tilt_polynomials.append(Legendre(tilt_coeffs, domain=eval(header[f'TILTDOM{order_id}'])))
-            if f'SIGMA_{order_id}' in header:
-                lsf_params.append({'sigma': header[f'SIGMA_{order_id}'],
-                                   'h3': header[f'H3_{order_id}'],
-                                   'h4': header[f'H4_{order_id}']})
+            if lsf_header is not None and f'SIGMA_{order_id}' in lsf_header:
+                lsf_params.append({'sigma': lsf_header[f'SIGMA_{order_id}'],
+                                   'h3': lsf_header[f'H3_{order_id}'],
+                                   'h4': lsf_header[f'H4_{order_id}']})
         return cls(wavelength_polynomials, tilt_polynomials, orders,
                    lsf_params=lsf_params if lsf_params else None)
 
