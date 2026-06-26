@@ -100,6 +100,7 @@ def init(mock_configdb):
     banzai.dbs.create_db(os.environ["DB_ADDRESS"])
     banzai.dbs.populate_instrument_tables(db_address=os.environ["DB_ADDRESS"], configdb_address='http://fakeconfigdb')
     banzai_floyds.dbs.populate_order_heights_locations(db_address=os.environ["DB_ADDRESS"])
+    banzai_floyds.dbs.populate_lsf_params(db_address=os.environ["DB_ADDRESS"])
     banzai_floyds.dbs.ingest_standards(db_address=os.environ["DB_ADDRESS"])
 
 
