@@ -188,7 +188,47 @@ def order_region(order_height, center, image_size):
     return order_mask
 
 
-def estimate_order_centers(data, error, order_height, peak_separation=10, min_signal_to_noise=200.0):
+def refine_metric_peak_center(metric, peak_indices):
+    """
+    Refine integer peak locations to sub-pixel precision with a parabolic interpolation.
+
+    Parameters
+    ----------
+    metric: array
+        The 1-d matched-filter metric the peaks were found in.
+    peak_indices: array of ints
+        Integer indices of the local maxima in metric.
+
+    Returns
+    -------
+    array of floats: sub-pixel peak locations
+
+    Notes
+    -----
+    We fall back to the integer index whenever at the edges.
+    """
+    refined = []
+    n = len(metric)
+    for i in peak_indices:
+        # Fit a parabola to up to 3 points on either side, using whatever lands on the array and is finite
+        if i == 0 or i == n - 1:
+            refined.append(i)
+            continue
+        low, high = max(i - 3, 0), min(i + 4, n)
+        x = np.arange(low, high) - i
+        metrics_to_fit = metric[low:high]
+        finite = np.isfinite(metrics_to_fit)
+        if np.sum(finite) < 3:
+            refined.append(i)
+            continue
+        fit_metric = np.polyfit(x[finite], metrics_to_fit[finite], 2)
+        offset = -fit_metric[1] / (2 * fit_metric[0])
+        refined.append(i + offset)
+    return np.array(refined)
+
+
+def estimate_order_centers(data, error, order_height, peak_separation=10, min_signal_to_noise=200.0,
+                           mask=None, min_fraction=0.5):
     """
     Estimate the order centers by finding peaks using a simple cross correlation style sliding window metric
 
@@ -204,17 +244,38 @@ def estimate_order_centers(data, error, order_height, peak_separation=10, min_si
         Minimum distance between real peaks
     min_signal_to_noise: float
         Minimum value of the signal/noise metric to return in the list of peaks
+    mask: array, optional
+        Nonzero (or True) flags bad pixels to exclude from the matched filter. Same shape as data.
+        Masked pixels contribute nothing to the metric, which for a matched filter is equivalent to
+        shrinking the top-hat.
+    min_fraction: float
+        Minimum fraction of the nominal top-hat area that must be unmasked, on-chip pixels for a row to be
+        treated as a valid peak candidate. Because masking shrinks the filter (and therefore its
+        normalization), rows that are mostly off-chip or masked would otherwise produce metric values that
+        are not comparable to fully-sampled rows. Such rows are rejected rather than thresholded.
 
     Returns
     -------
-    array of ints with peaks of the matched filter metric
+    array of floats with the sub-pixel peaks of the matched filter metric
     """
-    matched_filtered = np.zeros(data.shape[0])
-    for i in np.arange(data.shape[0]):
-        # Run a matched filter using a top hat filter
-        filter_model = Legendre([i], domain=(0, data.shape[1] - 1))
+    if mask is None:
+        good_pixels = np.ones(data.shape, dtype=bool)
+    else:
+        good_pixels = mask == 0
+    # Nominal number of pixels in a fully on-chip, fully unmasked top-hat. Rows that fall well short of this
+    # (chip edge, bad column, heavy masking) are not trustworthy detections.
+    full_area = order_height * data.shape[1]
+    min_good_pixels = min_fraction * full_area
 
-        filter_region = order_region(order_height, filter_model, data.shape)
+    # Rejected rows are left at -inf so they neither pass the threshold nor register as local maxima.
+    matched_filtered = np.full(data.shape[0], -np.inf)
+    for i in np.arange(data.shape[0]):
+        # Run a matched filter using a top hat filter, dropping masked pixels from the region
+        filter_center = Legendre([i], domain=(0, data.shape[1] - 1))
+
+        filter_region = np.logical_and(order_region(order_height, filter_center, data.shape), good_pixels)
+        if filter_region.sum() < min_good_pixels:
+            continue
         matched_filtered[i] = tophat_filter_metric(data, error, filter_region)
     peaks = matched_filtered == maximum_filter1d(matched_filtered,
                                                  size=peak_separation,
@@ -222,11 +283,14 @@ def estimate_order_centers(data, error, order_height, peak_separation=10, min_si
                                                  cval=0.0)
     peaks = np.logical_and(peaks, matched_filtered > min_signal_to_noise)
     # Why we have to use flatnonzero here instead of argwhere behaving the way I want is a mystery
-    return np.flatnonzero(peaks)
+    peak_indices = np.flatnonzero(peaks)
+    # Refine the integer peaks to sub-pixel so the trace points are good enough to be the final order curve
+    return refine_metric_peak_center(matched_filtered, peak_indices)
 
 
 def trace_order(data, error, order_height, initial_center, initial_center_x,
-                step_size=11, filter_width=21, search_height=7):
+                step_size=11, filter_width=21, search_height=7, mask=None,
+                x_min=None, x_max=None):
     """
     Trace an order by stepping a window function along from the center of the chip
 
@@ -247,6 +311,13 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
         x-width of the filter to sum to search for peaks in the metric
     search_height: int
         Number of pixels to search above and below the previous best center
+    mask: array, optional
+        Nonzero (or True) flags bad pixels to exclude from the matched filter. Same shape as data.
+        Excluding bad columns and cosmics here keeps them from seeding the trace with a false center.
+    x_min, x_max: float, optional
+        Restrict the trace to columns within [x_min, x_max], the order's valid x range. Outside this range
+        the order falls off the chip or is dominated by the adjacent order, which is where the sequential
+        trace is most likely to wander. The chip-edge margin of filter_width // 2 is always applied too.
 
     Returns
     -------
@@ -254,77 +325,43 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
     """
     centers = []
     xs = []
-    # keep stepping until you get to the edge of the chip
-    for x in range(initial_center_x, data.shape[1] - filter_width // 2,
-                   step_size):
-        if len(centers) == 0:
-            previous_center = initial_center
-        else:
-            previous_center = centers[-1]
-        x_section = slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
-        y_section = slice(previous_center - search_height - order_height // 2,
-                          previous_center + search_height + order_height // 2 + 1,
-                          1)
-        section = y_section, x_section
 
-        cut_center = estimate_order_centers(data[section], error[section],
-                                            order_height)
-        if len(cut_center) == 0:
-            continue
-        else:
-            cut_center = cut_center[0]
-        centers.append(cut_center + previous_center - search_height -
-                       order_height // 2)
-        xs.append(x)
+    if mask is None:
+        mask = np.zeros(data.shape, dtype=bool)
+    if x_min is None:
+        x_min = 0
+    if x_max is None:
+        x_max = data.shape[1]
+    # The matched filter needs filter_width // 2 columns on each side, so stay that far from the chip edge
+    x_min = int(max(x_min, filter_width // 2))
+    x_max = int(min(x_max, data.shape[1] - filter_width // 2))
+    # Start tracing at the center of the order, step right until you get to the end. Then starting from the 
+    # center again, step left until you get to the end.
+    for steps in [(initial_center_x, x_max, step_size), (initial_center_x - step_size, x_min, -step_size)]:
+        previous_center = initial_center
 
-    # Go back to the center and start stepping the opposite direction
-    for x in range(initial_center_x - step_size, filter_width // 2,
-                   -step_size):
-        previous_center = centers[0]
-        y_section = slice(
-            previous_center - search_height - order_height // 2,
-            previous_center + search_height + order_height // 2 + 1, 1)
-        x_section = slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
-        section = y_section, x_section
-        cut_center = estimate_order_centers(data[section], error[section],
-                                            order_height)
-        if len(cut_center) == 0:
-            continue
-        else:
-            cut_center = cut_center[0]
-        centers.insert(0, cut_center + previous_center - search_height - order_height // 2)
-        xs.insert(0, x)
-    return np.array(xs), np.array(centers)
+        for x in range(*steps):
+            previous_center = int(np.round(previous_center))
+            # Clamp y_start so a low center can't make the slice start negative.
+            y_start = max(previous_center - order_height // 2 - search_height, 0)
+            section = (
+                slice(y_start, previous_center + order_height // 2 + 1 + search_height),
+                slice(x - filter_width // 2, x + filter_width // 2 + 1, 1)
+            )
+            center_estimates = estimate_order_centers(data[section], error[section], order_height, mask=mask[section])
+            if len(center_estimates) == 0:
+                continue
+            else:
+                # Pull the center_estimate closest to the previous center to make sure we don't wander
+                center_estimates += y_start
+                this_center = center_estimates[np.argmin(np.abs(center_estimates - previous_center))]
 
+            centers.append(this_center)
+            xs.append(x)
+            previous_center = this_center
 
-def fit_order_curve(data, error, order_height, initial_coeffs, x, domain):
-    """
-    Maximize the matched filter metric to find the best fit order curvature and location
-
-    Parameters
-    ----------
-    data: array to fit order
-    error: array of uncertainties
-        Same shapes as the input data array
-    order_height: int
-        Number of pixels in the top of the hat
-    initial_coeffs: array
-        Initial guesses for the Legendre polynomial coefficients of the center of the order
-    x: tuple of arrays independent coordinates x, y
-        Arrays should be the same shape as the input data
-    domain: length 2 tuple of floats
-        Domain to be used for the polynomial see numpy.polynomial.legendre.Legendre
-
-    Returns
-    -------
-    Polynomial model function of the best fit
-    """
-
-    # For this to work efficiently, you probably need a good initial guess. If we have that, we should define
-    # a window of pixels around the initial guess to do the fit to optimize not fitting a bunch of zeros
-    best_fit_coeffs = optimize_match_filter(initial_coeffs, data, error, smooth_order_weights,
-                                            x, args=(order_height, domain,))
-    return Legendre(best_fit_coeffs, domain=domain)
+    sorted_inds = np.argsort(xs)
+    return np.array(xs)[sorted_inds], np.array(centers)[sorted_inds]
 
 
 def fit_order_tweak(data, error, order_height, coeffs, x, domain):
@@ -422,40 +459,34 @@ class OrderSolver(Stage):
             center_section = slice(None), slice(image.data.shape[1] // 2 - self.CENTER_CUT_WIDTH // 2,
                                                 image.data.shape[1] // 2 + self.CENTER_CUT_WIDTH // 2 + 1, 1)
             order_centers = estimate_order_centers(image.data[center_section], image.uncertainty[center_section],
-                                                   order_height=order_height)
-            order_estimates = []
+                                                   order_height=order_height, mask=image.mask[center_section])
+            order_curves = []
+            order_heights = []
             for i, order_center in enumerate(order_centers):
+                # Get the x domain where the order is defined so we don't hit weird edge effects
+                order_region = get_order_location(image.dateobs, i + 1, image.instrument,
+                                                  self.runtime_context.db_address)
+                # Start the trace at the chip center
                 x, order_locations = trace_order(image.data, image.uncertainty,
                                                  order_height,
                                                  order_center,
-                                                 image.data.shape[1] // 2)
-                order_region = get_order_location(image.dateobs, i + 1, image.instrument,
-                                                  self.runtime_context.db_address)
-                good_region = np.logical_and(x >= order_region[0],
-                                             x <= order_region[1])
+                                                 image.data.shape[1] // 2,
+                                                 mask=image.mask,
+                                                 x_min=order_region[0],
+                                                 x_max=order_region[1])
                 initial_model = Legendre.fit(deg=self.POLYNOMIAL_ORDER,
-                                             x=x[good_region],
-                                             y=order_locations[good_region],
+                                             x=x,
+                                             y=order_locations,
                                              domain=(order_region[0],
                                                      order_region[1]))
-                order_estimates.append((initial_model.coef, order_height, initial_model.domain))
+                order_curves.append(initial_model)
+                order_heights.append(order_height)
         else:
             # Load from previous solve
-            order_estimates = [(coeff, height, domain)
-                               for coeff, height, domain in
-                               zip(image.orders.coeffs, image.orders.order_heights, image.orders.domains)]
-        # Do a fit to get the curvature of the slit
-        order_curves = []
-        for i, (coeff, height, domain) in enumerate(order_estimates):
-            x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-            region = np.logical_and(x2d <= domain[1], x2d >= domain[0])
-            center_model = Legendre(coeff, domain=domain)
-            # Only keep pixels +- half the height above the initial guess
-            region = np.logical_and(region, np.abs(y2d - center_model(x2d)) <= height)
-            order_curve = fit_order_curve(image.data[region], image.uncertainty[region],
-                                          height, coeff, (x2d[region], y2d[region]), domain)
-            order_curves.append(order_curve)
-        order_heights = [height for _ in order_estimates]
+            order_curves = [Legendre(coeff, domain=domain)
+                            for coeff, domain in zip(image.orders.coeffs, image.orders.domains)]
+            order_heights = [height for height in image.orders.order_heights]
+
         image.orders = Orders(order_curves, image.data.shape, order_heights)
         image.add_or_update(ArrayData(image.orders.data, name='ORDERS'))
         coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(coeffs)}

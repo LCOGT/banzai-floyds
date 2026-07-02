@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "banzai-floyds"
-version = "1.0.2"
+version = "1.1.0"
 requires-python = ">=3.11,<4"
 description = "BANZAI Data Reduction for FLOYDS spectra"
 readme = "docs/README.rst"
