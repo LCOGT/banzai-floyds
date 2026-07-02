@@ -218,6 +218,9 @@ def refine_metric_peak_center(metric, peak_indices):
         x = np.arange(low, high) - i
         metrics_to_fit = metric[low:high]
         finite = np.isfinite(metrics_to_fit)
+        if np.sum(finite) < 3:
+            refined.append(i)
+            continue
         fit_metric = np.polyfit(x[finite], metrics_to_fit[finite], 2)
         offset = -fit_metric[1] / (2 * fit_metric[0])
         refined.append(i + offset)
@@ -332,9 +335,8 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
     # The matched filter needs filter_width // 2 columns on each side, so stay that far from the chip edge
     x_min = int(max(x_min, filter_width // 2))
     x_max = int(min(x_max, data.shape[1] - filter_width // 2))
-    # Start at the center where you know the approximate center
-    # keep stepping until you reach the right edge of the trace region
-    # walk right, then left
+    # Start tracing at the center of the order, step right until you get to the end. Then starting from the 
+    # center again, step left until you get to the end.
     for steps in [(initial_center_x, x_max, step_size), (initial_center_x - step_size, x_min, -step_size)]:
         previous_center = initial_center
 
@@ -350,7 +352,9 @@ def trace_order(data, error, order_height, initial_center, initial_center_x,
             if len(center_estimates) == 0:
                 continue
             else:
-                this_center = center_estimates[0] + y_start
+                # Pull the center_estimate closest to the previous center to make sure we don't wander
+                center_estimates += y_start
+                this_center = center_estimates[np.argmin(np.abs(center_estimates - previous_center))]
 
             centers.append(this_center)
             xs.append(x)

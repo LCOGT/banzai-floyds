@@ -4,7 +4,7 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
-- Removed match filter 2d fit step from locating the order positions due to instabilities
+- Removed matched-filter 2D fit step from locating the order positions due to instabilities
 
 1.0.2 (2026-03-30)
 ------------------
