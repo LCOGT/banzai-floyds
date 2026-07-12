@@ -43,7 +43,11 @@ LAST_STAGE = {
 
 CALIBRATION_STACKER_STAGES = {'LAMPFLAT': ['banzai_floyds.fringe.FringeMaker']}
 CALIBRATION_MIN_FRAMES['LAMPFLAT'] = 2  # noqa: F405
-CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = ('banzai_floyds.utils.file_utils.config_to_filename',)  # noqa: F405
+
+CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = (  # noqa: F405
+    'banzai_floyds.utils.file_utils.lampflat_config_to_filename',
+    'banzai_floyds.utils.file_utils.slit_width_to_filename'
+)
 
 EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': ['banzai_floyds.fringe.FringeContinuumFitter'],
                 'STANDARD': None,
@@ -58,8 +62,7 @@ CALIBRATION_IMAGE_TYPES = ['BIAS', 'DARK', 'SKYFLAT', 'BPM', 'LAMPFLAT', 'ARC', 
 
 CALIBRATION_LOOKBACK = {'LAMPFLAT': 2.5}
 
-CALIBRATION_SET_CRITERIA = {'SKYFLAT': ['slit_width'], 'LAMPFLAT': ['slit_width'], 'ARC': ['slit_width'],
-                            'FRINGE': ['slit_width']}
+CALIBRATION_SET_CRITERIA = {'SKYFLAT': ['slit_width'], 'LAMPFLAT': ['slit_width'], 'ARC': ['slit_width']}
 
 OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']
 
