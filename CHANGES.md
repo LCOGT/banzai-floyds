@@ -11,7 +11,6 @@ Versions
   where all files on the same day would have the same name
   irrespective of slit width.
 
-
 1.0.2 (2026-03-30)
 ------------------
 
