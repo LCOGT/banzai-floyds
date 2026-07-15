@@ -4,8 +4,8 @@ from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
-from banzai_floyds.fringe import fit_smooth_fringe_spline
 from banzai_floyds.utils.telluric_utils import estimate_telluric
+from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.utils.flux_utils import airmass_extinction
 
 import numpy as np
@@ -68,6 +68,14 @@ def inject_cosmic_ray_stamps(frame, stamps: list, n_injections: int, rng: np.ran
     return signal / frame.uncertainty > detection_threshold, signal > 0
 
 
+def fit_smooth_fringe_spline(data, data_region):
+    # Deliberately interpolate the input fringe pattern with different machinery (scattered
+    # CloughTocher) than the pipeline's gridded B-spline sampler so the tests cross-check it.
+    x, y = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
+    return CloughTocher2DInterpolator(np.array([x[data_region], y[data_region]]).T,
+                                      data[data_region], fill_value=0.0)
+
+
 def plot_array(data, overlays=None):
     if len(data) == 2:
         plt.plot(data[0], data[1])
@@ -84,7 +92,8 @@ def plot_array(data, overlays=None):
 
 
 def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=False, fringe_offset=0,
-                                include_trace=True, background=0.0, include_super_fringe=False):
+                                fringe_offset_x=0, include_trace=True, background=0.0,
+                                include_super_fringe=False):
     """
     Generate a fake science frame to run tests on.
 
@@ -97,7 +106,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     fringe: bool
         Include fringing?
     fringe_offset: float
-        Offset for the fringe pattern in pixels
+        y offset for the fringe pattern in pixels
+    fringe_offset_x: float
+        x offset for the fringe pattern in pixels
     include_trace: bool
         Include the object trace in the frame?
     background: float
@@ -208,15 +219,33 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                                                sky_spectrum) * illumination
             data[in_order] += input_sky[in_order]
     if fringe:
-        fringe_wave_number = 2.0 * np.pi / 30.0
+        # A 90 Angstrom period is ~25 pixels in x at the red end, matching the real pattern. Keeping
+        # the period realistic matters for the offset fit tests: the +-8 pixel search window is only
+        # safely inside the half period (no aliased peak one period over) if the period is this long
+        fringe_wave_number = 2.0 * np.pi / 90.0
         expanded_orders = orders.new(expanded_order_height)
-        super_fringe_frame = 1.0 + 0.5 * (x2d / np.max(x2d)) * np.sin(fringe_wave_number * wavelengths.data)
+        # Real fringe patterns are not purely a function of wavelength because the CCD thickness
+        # varies across the chip, so modulate the fake pattern's amplitude along the slit.
+        # A pattern that only depends on wavelength is invariant along the tilted iso-wavelength
+        # contours, which makes the (x, y) offsets of the pattern degenerate along that direction.
+        # Note a phase shift along the slit is not enough: that just shears the contours and
+        # leaves the same one-parameter family of equivalent offsets.
+        slit_coordinates = y2d - orders.center(x2d)[0]
+        # The 0.25 amplitude coefficient (peak modulation ~30% at the red end) is also chosen to be
+        # realistic: at this fringe period the wavelet continuum fit leaks a fraction of the fringe
+        # amplitude, so an exaggerated amplitude fails the continuum tests for reasons real data doesn't
+        super_fringe_frame = 1.0 + 0.25 * (x2d / np.max(x2d)) * (1.0 + 0.25 * np.cos(0.25 * slit_coordinates)) \
+            * np.sin(fringe_wave_number * wavelengths.data)
         super_fringe_frame[expanded_orders.data != 1] = 0.0
         super_fringe_spline = fit_smooth_fringe_spline(super_fringe_frame, expanded_orders.data == 1)
         in_red_order = orders.data == 1
         input_fringe_frame = np.ones_like(data)
 
-        input_fringe_frame[in_red_order] = super_fringe_spline(np.array([x2d[in_red_order],
+        # Clip the shifted x coordinates to the order domain so the pattern extends to the order
+        # edges instead of picking up the spline fill value there
+        shifted_x = np.clip(x2d[in_red_order] - fringe_offset_x, np.min(x2d[in_red_order]),
+                            np.max(x2d[in_red_order]))
+        input_fringe_frame[in_red_order] = super_fringe_spline(np.array([shifted_x,
                                                                         y2d[in_red_order] - fringe_offset]).T)
 
         data *= input_fringe_frame
@@ -244,6 +273,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     if fringe:
         frame.fringe_wave_number = fringe_wave_number
         frame.input_fringe_shift = input_fringe_shift
+        frame.input_fringe_shift_x = fringe_offset_x
         frame.input_fringe = input_fringe_frame
     if include_super_fringe and fringe:
         frame.fringe = super_fringe_frame

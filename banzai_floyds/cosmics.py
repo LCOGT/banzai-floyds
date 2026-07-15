@@ -4,7 +4,8 @@ from banzai.stages import Stage
 from banzai.logs import get_logger
 from scipy import ndimage
 
-from banzai_floyds.fringe import fit_smooth_fringe_spline, find_fringe_offset
+from banzai_floyds.fringe import (fringe_interpolation_coefficients, sample_fringe, shifted_fringe_valid,
+                                  fringe_fit_region, find_fringe_offset)
 
 
 logger = get_logger()
@@ -38,17 +39,32 @@ def flag_lampflat_cosmic_rays(image, cutoff: float, sigma_threshold: float = 5.0
         logger.info('No master LAMPFLAT available yet, skipping cosmic ray flagging', image=image)
         return cr_mask
 
-    reference_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > min_shape_value)
-    offset = find_fringe_offset(image, reference_spline, cutoff)
+    fringe_valid = image.fringe > min_shape_value
+    fringe_coefficients = fringe_interpolation_coefficients(image.fringe, fringe_valid)
+    to_fit = fringe_fit_region(image, fringe_valid, cutoff)
+    if not np.any(to_fit):
+        logger.info('No valid pixels overlap the master LAMPFLAT, skipping cosmic ray flagging', image=image)
+        return cr_mask
+    # The matched filter needs data that oscillates about 1. We run before the wavelet continuum fit,
+    # so pin the median of the fit region instead: the lamp continuum varies slowly compared to the
+    # fringe period, and the shift fit only responds to the oscillating part.
+    normalization = np.median(image.data[to_fit])
+    x_offset, y_offset = find_fringe_offset(image.data / normalization, image.uncertainty / normalization,
+                                            to_fit, fringe_coefficients)
 
     x2d, y2d = np.meshgrid(np.arange(image.data.shape[1]), np.arange(image.data.shape[0]))
     bad = np.logical_or.reduce([image.mask > 0, order_edge_guard_band(image.orders, order_edge_buffer),
                                 image.orders.data == 0])
     for order_id in image.orders.order_ids:
         in_order = np.logical_and(image.orders.data == order_id, np.logical_not(bad))
+        order_x, order_y = x2d[in_order], y2d[in_order]
         shifted_shape = np.zeros(image.data.shape)
-        shifted_shape[in_order] = reference_spline(np.array([x2d[in_order], y2d[in_order] - offset]).T)
-        valid = np.logical_and(in_order, shifted_shape > min_shape_value)
+        shifted_shape[order_y, order_x] = sample_fringe(fringe_coefficients, order_x, order_y,
+                                                        x_offset, y_offset)
+        on_master = np.zeros(image.data.shape, dtype=bool)
+        on_master[order_y, order_x] = shifted_fringe_valid(fringe_valid, order_x, order_y,
+                                                           x_offset, y_offset, pad=0)
+        valid = np.logical_and(np.logical_and(in_order, on_master), shifted_shape > min_shape_value)
         if not np.any(valid):
             continue
         # Rescale the shifted stack to flux units because we normally store the stack as relative to the median value

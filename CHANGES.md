@@ -4,6 +4,18 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
+- Widened the fringe shift search window to +-8 pixels in x (matching y); this still stays
+  inside the half fringe period that keeps the matched-filter metric unimodal.
+- Pixels above 2.5 in the continuum-normalized flats are now excluded when stacking fringe
+  frames (and from the master's valid footprint): continuum zero crossings in low-count flats
+  produced wild division artifacts that corrupted some masters.
+- The fringe correction is now applied all the way to the edge of the master's valid footprint
+  instead of stopping an interpolation stencil short of it; the outermost pixels get a slightly
+  attenuated correction rather than none.
+- Frames with a per-pixel fringe S/N below 2 now apply the master fringe unshifted
+  instead of fitting the pattern shift: below that the matched filter is noise
+  dominated and the fitted offsets were unconstrained. The S/N is recorded in the
+  new L1FRNGSN header keyword.
 - Removed matched-filter 2D fit step from locating the order positions due to instabilities
 - Significant updates to the wavelength solution, removing the 2-d match filter approach to
   increase the robustness of the fit.

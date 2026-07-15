@@ -55,7 +55,8 @@ CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = (  # noqa: F405
 
 EXTRA_STAGES = {'SPECTRUM': None,
                 'LAMPFLAT': ['banzai_floyds.cosmics.LampFlatCosmicRayComparer',
-                             'banzai_floyds.fringe.FringeContinuumFitter'],
+                             'banzai_floyds.fringe.FringeContinuumFitter',
+                             'banzai_floyds.fringe.FringeContinuumNormalizer'],
                 'STANDARD': None,
                 # We need to rerun binning here to use the most up to date wavelength solution
                 # (it was previously binned using a guess at the wavelength solution).
