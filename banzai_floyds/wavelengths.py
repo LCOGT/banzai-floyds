@@ -392,8 +392,9 @@ def _trace_centroids(data, uncertainty, mask, x, y, order_y, initial_tilt, recti
     good_pixels = mask == 0
     fit_row = functools.partial(
         _fit_centroid_row, data=data, uncertainty=uncertainty, good_pixels=good_pixels, x=x, y=y,
+        order_y=order_y, initial_tilt=initial_tilt,
         rectification_anchor_position=rectification_anchor_position,
-        rectification_anchor_wavelength=rectification_anchor_wavelength, residuals=residuals, 
+        rectification_anchor_wavelength=rectification_anchor_wavelength, residuals=residuals,
         residual_args=residual_args, parameter_bounds=parameter_bounds, parameter_bounds_args=parameter_bounds_args,
         window_half=window_half, min_snr=min_snr, huber_scale=huber_scale)
     rows = range(edge_trim, data.shape[0] - edge_trim)
@@ -436,7 +437,7 @@ def get_isolated_lines(arc_lines, sigma, dispersion, n_sigma_contaminant):
 
 def fit_unblended_arc_lines(
     data, uncertainty, mask, x, y, initial_tilt, order_y, initial_positions,
-    reference_wavelengths, initial_fwhm=4.0, fitting_window=4.0, min_snr=3.0, huber_scale=4.0,
+    reference_wavelengths, initial_fwhm=4.0, window_halfwidth=4.0, min_snr=3.0, huber_scale=4.0,
     edge_trim=0, center_window=2.0
 ):
     """
@@ -472,7 +473,7 @@ def fit_unblended_arc_lines(
         Catalog wavelength of each feature in initial positions
     initial_fwhm : float
         Initial guess for the line FWHM in pixels.
-    fitting_window : float
+    window_halfwidth : float
         Half-width of the fitting window around each line, in initial-sigma units.
     min_snr : float
         Minimum signal-to-noise ratio of the peak to attempt a fit
@@ -482,7 +483,7 @@ def fit_unblended_arc_lines(
         Number of rows to skip at the top and bottom of the order to avoid slit-edge effects.
     center_window : float
         Half-width (in sigma) that the fitted line center may move from its initial guess. Kept tighter than
-        `fitting_window` so the fit can't wander onto an adjacent line that falls inside the (wider)
+        `window_halfwidth` so the fit can't wander onto an adjacent line that falls inside the (wider)
         data window on wide-slit arcs.
 
     Returns
@@ -496,7 +497,7 @@ def fit_unblended_arc_lines(
     """
 
     sigma_guess = fwhm_to_sigma(initial_fwhm)
-    half_width = fitting_window * sigma_guess
+    half_width = window_halfwidth * sigma_guess
     center_half_width = center_window * sigma_guess
 
     initial_positions = np.asarray(initial_positions, dtype=float)
@@ -619,7 +620,7 @@ def _flux_weighted_centroid(flux, domain_min, peaks, pad):
 
 def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength_solution,
                lsf_params, initial_tilt, flux_1d, detected_peaks=None, matched_wavelengths=None,
-               blend_n_sigma=8.0, fitting_window=4.0, min_snr=3.0, huber_scale=4.0, edge_trim=0):
+               blend_n_sigma=8.0, window_halfwidth=4.0, min_snr=3.0, huber_scale=4.0, edge_trim=0):
     """
     Fit blended arc lines as fixed-LSF, fixed-separation groups to add wavelength-solution constraints.
 
@@ -655,9 +656,9 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
         peaks of its own components rather than re-matching by a wavelength radius.
     blend_n_sigma : float
         Lines whose centers fall within this many LSF sigma of each other are grouped into one blend.
-        Set to roughly twice the `fitting_window` so that any neighbor close enough to overlap (and
+        Set to roughly twice the `window_halfwidth` so that any neighbor close enough to overlap (and
         thus contaminate) a blend's fitting window is fit jointly with it rather than separately.
-    fitting_window : float
+    window_halfwidth : float
         Half-width of the fitting window around each blend, in LSF-sigma units.
     min_snr : float
         Minimum signal-to-noise ratio for a line to attempt a fit.
@@ -673,7 +674,7 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
         'wavelength' is the mean wavelength of the group.
     """
     sigma, h3, h4 = lsf_params['sigma'], lsf_params['h3'], lsf_params['h4']
-    half_width = fitting_window * sigma
+    half_width = window_halfwidth * sigma
 
     # Invert the wavelength solution to map wavelength -> rectified x (and read off the dispersion).
     grid = np.arange(wavelength_solution.domain[0], wavelength_solution.domain[1] + 1, dtype=float)
@@ -1115,7 +1116,7 @@ class CalibrateWavelengths(Stage):
                     image.data[order_region], image.uncertainty[order_region], image.mask[order_region],
                     order_x, order_y_abs, initial_tilt, order_y, peaks[matched_bright_isolated],
                     corresponding_lines[matched_bright_isolated], initial_fwhm=initial_fwhm,
-                    fitting_window=self.FITTING_WINDOW_N_SIGMA, edge_trim=self.EDGE_ROWS_TO_TRIM,
+                    window_halfwidth=self.FITTING_WINDOW_N_SIGMA, edge_trim=self.EDGE_ROWS_TO_TRIM,
                     center_window=self.CENTER_WINDOW_N_SIGMA, huber_scale=self.HUBER_SCALE)
             else:
                 # Nothing clean enough to measure the LSF from; fall back to the database LSF rather
@@ -1129,7 +1130,7 @@ class CalibrateWavelengths(Stage):
                 image.data[order_region], image.uncertainty[order_region], image.mask[order_region],
                 order_x, order_y_abs, order_y, fixed_lsf_lines, initial_solution, lsf_params, initial_tilt,
                 detected_peaks=peaks, matched_wavelengths=corresponding_lines, flux_1d=flux_1d,
-                blend_n_sigma=self.BLEND_N_SIGMA, fitting_window=self.FITTING_WINDOW_N_SIGMA,
+                blend_n_sigma=self.BLEND_N_SIGMA, window_halfwidth=self.FITTING_WINDOW_N_SIGMA,
                 min_snr=self.BLEND_MIN_SNR, edge_trim=self.EDGE_ROWS_TO_TRIM, huber_scale=self.HUBER_SCALE)
 
             line_centroids = Table(line_centroids)
@@ -1180,7 +1181,7 @@ class CalibrateWavelengths(Stage):
 
         centroids, residuals = build_centroid_and_residual_tables(
             vstack(all_line_tilts), image.wavelengths, used_lines, best_fit_lsf,
-            blend_n_sigma=self.BLEND_N_SIGMA, fitting_window=self.FITTING_WINDOW_N_SIGMA)
+            blend_n_sigma=self.BLEND_N_SIGMA, window_halfwidth=self.FITTING_WINDOW_N_SIGMA)
         image.add_or_update(DataTable(centroids, name='CENTROIDS'))
         image.add_or_update(DataTable(residuals, name='RESIDUALS'))
         image.add_or_update(DataTable(vstack(all_line_centroids), name='FEATURES2D'))

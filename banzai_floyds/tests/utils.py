@@ -94,11 +94,16 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     # can shift the fringe pattern up and down
     orders.order_heights = np.ones(2) * (order_height + 5)
     x2d, y2d = np.meshgrid(np.arange(nx), np.arange(ny))
+    # The LSF sigma is in pixels, so convert the line FWHMs from Angstroms with the dispersion at the
+    # center of each order.
+    lsf_params = [{'sigma': fwhm_to_sigma(fwhm / model.deriv()(np.mean(model.domain))), 'h3': 0.0, 'h4': 0.0}
+                  for fwhm, model in zip(line_fwhms_angstroms, [wavelength_model1, wavelength_model2])]
     wavelengths = WavelengthSolution([wavelength_model1, wavelength_model2],
                                      [Legendre([INITIAL_LINE_TILTS[order_id], 0, 0],
                                                domain=orders.domains[order_id - 1])
                                       for order_id in orders.order_ids],
-                                     orders=orders.new(expanded_order_height))
+                                     orders=orders.new(expanded_order_height),
+                                     lsf_params=lsf_params)
     profile_sigma = fwhm_to_sigma(profile_fwhm)
     flux_normalization = 10000.0
 
