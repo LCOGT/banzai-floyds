@@ -8,14 +8,14 @@ from banzai.stages import Stage
 from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai_floyds.matched_filter import matched_filter_metric
 from scipy.signal import find_peaks
-from scipy.optimize import least_squares, minimize
+from scipy.optimize import least_squares, root_scalar
 from banzai_floyds.matched_filter import optimize_match_filter
 from banzai_floyds.frames import FLOYDSCalibrationFrame
 from banzai.data import DataTable
 from banzai_floyds.utils.binning_utils import bin_data
-from banzai_floyds.utils.fitting_utils import _weighted_linear_fit
+from banzai_floyds.utils.fitting_utils import weighted_linear_fit
 from banzai_floyds.utils.order_utils import get_order_2d_region
-from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates, _gauss_hermite_residuals
+from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates, gauss_hermite_residuals
 from banzai_floyds.arc_lines import arc_lines_table
 from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, fwhm_to_sigma, sigma_to_fwhm, parameter_variances
 from banzai_floyds.dbs import get_recent_lsf_params, add_lsf_params
@@ -29,12 +29,7 @@ from banzai_floyds.utils.wavelength_utils import bin_order_to_1d
 logger = get_logger()
 
 
-# Shared pool for the per-row centroid fits in `_trace_centroids`. Each row of a feature is an
-# independent least_squares fit, so we trace up and down the feature in parallel. One pool is reused
-# across every trace (a feature is traced dozens of times per order) to avoid paying thread-startup
-# costs each call. Threads suffice because least_squares spends most of its time in numpy/LAPACK,
-# which releases the GIL; we cap the workers so a frame being reduced under banzai's own
-# multiprocessing pool doesn't oversubscribe the machine.
+# Shared pool for the per-row centroid fits in `_trace_centroids`. 
 _TRACE_POOL = ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 1)))
 
 
@@ -204,7 +199,7 @@ def match_features(flux, flux_error, fwhm, wavelength_solution, min_line_separat
     ----------
     flux: array of 1D raw spectrum extraction
     flux_error: array of uncertainties
-            Same shapes as the input data array
+            Same shapes as the input flux array
     fwhm: average line full-width half maximum in pixels
     wavelength_solution: callable polynomial lambda(x)
     min_line_separation: minimum separation between lines
@@ -253,7 +248,7 @@ def _gauss_hermite_parameter_bounds(column, amplitude, background, sigma_guess, 
     Initial guess and bounds for [center, amplitude, background, sigma, h3, h4]
     when shape is free per fitting window.
 
-    `center_half_width` bounds how far the center may move from the anchor `column`. It is kept
+    `center_half_width` bounds how far the center may move from `column`. It is kept
     tighter than the data window so the fit can't wander onto an adjacent line, which on wide-slit
     arcs (large FWHM) can sit inside the window. See `fit_arc_lines`.
     """
@@ -321,22 +316,23 @@ def _fit_feature_window(x, flux, error, untilted_x, fit_region, residuals, resid
                          bounds=(lower, upper), loss='huber', f_scale=huber_scale)
 
 
-def _fit_centroid_row(row, data, uncertainty, good_pixels, x, y, order_y, initial_tilt, anchor_position,
-                      anchor_wavelength, residuals, residual_args, parameter_bounds, parameter_bounds_args,
-                      window_half, min_snr, huber_scale):
+def _fit_centroid_row(row, data, uncertainty, good_pixels, x, y,
+                      order_y, initial_tilt, rectification_anchor_position,
+                      rectification_anchor_wavelength, residuals, residual_args, parameter_bounds,
+                      parameter_bounds_args, window_half, min_snr, huber_scale):
     """
-    Fit one feature in a single order row, returning ``(centroid, fit)`` -- the centroid dict
-    (None if the fit is unusable) and the `least_squares` result, or None if no fit was attempted.
-    Pulled out of `_trace_centroids` so the rows can be fit independently (and in parallel).
+    Fit one feature in a single order row, returning ``(centroid, fit object)``. Both can be None if the fit failed.
+    If the parameter variances are too numerically small (1e-6) the fit likely failed and we set the centroid to None.
+    This is a helper function to be run by multiple threads.
     """
     # Go from tilted to untilted coordinates (hence the minus sign)
-    untilted_x = tilt_coordinates(-initial_tilt, anchor_position, order_y[row])
+    untilted_x = tilt_coordinates(-initial_tilt, rectification_anchor_position, order_y[row])
     fit_region = np.logical_and(np.abs(x[row] - untilted_x) < window_half, good_pixels[row])
     fit = _fit_feature_window(x[row], data[row], uncertainty[row], untilted_x, fit_region,
                               residuals, residual_args, parameter_bounds, parameter_bounds_args,
                               min_snr, huber_scale)
     if fit is None:
-        return None
+        return None, None
     x_variance = parameter_variances(fit)[0]
     # A bad fit will often have a tiny or nan variance so skip it
     if not np.isfinite(x_variance) or x_variance < 1e-6:
@@ -345,12 +341,12 @@ def _fit_centroid_row(row, data, uncertainty, good_pixels, x, y, order_y, initia
                 'y': np.interp(fit.x[0], x[row], y[row]),
                 'order_y': np.interp(fit.x[0], x[row], order_y[row]),
                 'x_err': np.sqrt(x_variance),
-                'wavelength': anchor_wavelength}
+                'wavelength': rectification_anchor_wavelength}
     return centroid, fit
 
 
-def _trace_centroids(data, uncertainty, mask, x, y, order_y, initial_tilt, anchor_position,
-                     anchor_wavelength, residuals, residual_args, parameter_bounds, parameter_bounds_args,
+def _trace_centroids(data, uncertainty, mask, x, y, order_y, initial_tilt, rectification_anchor_position,
+                     rectification_anchor_wavelength, residuals, residual_args, parameter_bounds, parameter_bounds_args,
                      window_half, min_snr, huber_scale, edge_trim=0):
     """
     Trace each feature up the order, row by row, doing one robust (Huber) fit per feature per row.
@@ -367,9 +363,9 @@ def _trace_centroids(data, uncertainty, mask, x, y, order_y, initial_tilt, ancho
         The x pixel coordinates, absolute y coordinates, and y relative to the order center.
     initial_tilt : float
         Initial line tilt angle in degrees.
-    anchor_position : float
-        X position of the anchor feature at the center of the order.
-    anchor_wavelength : float
+    rectification_anchor_position : float
+        X position of the feature at the center of the order.
+    rectification_anchor_wavelength : float
         Wavelength reported for every centroid of this feature (the catalog wavelength of a single
         line, or the mean wavelength of a blend).
     residuals, residual_args : callable, tuple
@@ -394,20 +390,16 @@ def _trace_centroids(data, uncertainty, mask, x, y, order_y, initial_tilt, ancho
     fits: list of the corresponding `least_squares` results (for reading off the fitted shape).
     """
     good_pixels = mask == 0
-    # Each row is an independent fit, so trace up and down the feature in parallel on the shared pool.
-    # `map` preserves order, so the centroids come back sorted by row as before.
     fit_row = functools.partial(
         _fit_centroid_row, data=data, uncertainty=uncertainty, good_pixels=good_pixels, x=x, y=y,
-        order_y=order_y, initial_tilt=initial_tilt, anchor_position=anchor_position,
-        anchor_wavelength=anchor_wavelength, residuals=residuals, residual_args=residual_args,
-        parameter_bounds=parameter_bounds, parameter_bounds_args=parameter_bounds_args,
+        rectification_anchor_position=rectification_anchor_position,
+        rectification_anchor_wavelength=rectification_anchor_wavelength, residuals=residuals, 
+        residual_args=residual_args, parameter_bounds=parameter_bounds, parameter_bounds_args=parameter_bounds_args,
         window_half=window_half, min_snr=min_snr, huber_scale=huber_scale)
     rows = range(edge_trim, data.shape[0] - edge_trim)
     centroids, fits = [], []
-    for result in _TRACE_POOL.map(fit_row, rows):
-        if result is None:
-            continue
-        centroid, fit = result
+    # Fit the rows in parallel since they are all independent, tracing up and down the order
+    for centroid, fit in _TRACE_POOL.map(fit_row, rows):
         if centroid is None:
             continue
         centroids.append(centroid)
@@ -453,7 +445,7 @@ def fit_unblended_arc_lines(
     Each line is fit row by row with a robust Huber-loss Gauss-Hermite profile with a free shape
     (sigma, h3, h4; see Cappellari, 2017, MNRAS, 466, 798). This is the only place the LSF shape is
     measured, so it must be fed *bright, isolated* lines: bright so the shape is well constrained, and
-    isolated (no catalog neighbour within `BLEND_N_SIGMA` sigma) so no contaminating flux biases the
+    isolated (no catalog neighbor within `BLEND_N_SIGMA` sigma) so no contaminating flux biases the
     centroid or the shape. The shared LSF for the order is the inverse-variance weighted mean of every
     per-window shape. Blends and faint lines are handled separately by `add_blends`, which holds this
     LSF fixed and fits only a centroid.
@@ -489,7 +481,7 @@ def fit_unblended_arc_lines(
     edge_trim : int
         Number of rows to skip at the top and bottom of the order to avoid slit-edge effects.
     center_window : float
-        Half-width (in sigma) that the fitted line center may move from its anchor. Kept tighter than
+        Half-width (in sigma) that the fitted line center may move from its initial guess. Kept tighter than
         `fitting_window` so the fit can't wander onto an adjacent line that falls inside the (wider)
         data window on wide-slit arcs.
 
@@ -517,7 +509,7 @@ def fit_unblended_arc_lines(
     for position, wavelength in zip(initial_positions, reference_wavelengths):
         centroids, fits = _trace_centroids(
             data, uncertainty, mask, x, y, order_y, initial_tilt, position, wavelength,
-            _gauss_hermite_residuals, (), _gauss_hermite_parameter_bounds,
+            gauss_hermite_residuals, (), _gauss_hermite_parameter_bounds,
             (sigma_guess, center_half_width), half_width, min_snr, huber_scale, edge_trim=edge_trim)
         line_centroids += centroids
         shapes += [fit.x[3:6] for fit in fits]
@@ -558,7 +550,7 @@ def fit_feature_tilts(line_centroids, min_rows=3):
         feature = centroids[centroids['wavelength'] == wavelength]
         if len(feature) < min_rows:
             continue
-        a, b, var_a, var_b = _weighted_linear_fit(feature['order_y'], feature['x'], feature['x_err'])
+        a, b, var_a, var_b = weighted_linear_fit(feature['order_y'], feature['x'], feature['x_err'])
         # x = x_tilt - order_y * tan(tilt) so the slope is -tan(tilt); propagate var_b through arctan.
         tilt = np.degrees(np.arctan(-b))
         tilt_err = np.degrees(np.sqrt(var_b) / (1.0 + b ** 2))
@@ -612,7 +604,7 @@ def _flux_weighted_centroid(flux, domain_min, peaks, pad):
     """
     Flux-weighted centroid of the 1-d arc `flux` over the window spanning `peaks` (padded by `pad`).
 
-    `flux` is the binned 1-d arc indexed from x = `domain_min`. Used to seed a blend's shared centre
+    `flux` is the binned 1-d arc indexed from x = `domain_min`. Used to seed a blend's shared center
     when several detected peaks land on it (its components were individually detected): the centroid of
     the actual arc flux across the peaks is a better starting guess than either peak alone.
     """
@@ -626,17 +618,16 @@ def _flux_weighted_centroid(flux, domain_min, peaks, pad):
 
 
 def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength_solution,
-               lsf_params, initial_tilt, detected_peaks=None, matched_wavelengths=None, flux_1d=None,
+               lsf_params, initial_tilt, flux_1d, detected_peaks=None, matched_wavelengths=None,
                blend_n_sigma=8.0, fitting_window=4.0, min_snr=3.0, huber_scale=4.0, edge_trim=0):
     """
     Fit blended arc lines as fixed-LSF, fixed-separation groups to add wavelength-solution constraints.
 
-    Blends are decided on the fly: any catalog lines whose predicted centers fall within
-    `blend_n_sigma` LSF sigma of a neighbour are fit together as one feature with a single shared
+    Any catalog lines whose predicted centers fall within
+    `blend_n_sigma` LSF sigma of a neighbor are fit together as one feature with a single shared
     center, the LSF held fixed (sigma, h3, h4 from the isolated lines), and the component separations
     fixed from the wavelength solution. We report one centroid per group, tagged with the
-    strength-weighted mean (anchor) wavelength of the group -- the wavelength the blend's blended flux
-    actually centroids at.
+    strength-weighted mean wavelength of the group.
 
     Parameters
     ----------
@@ -652,19 +643,19 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
         The fixed line-spread-function shape {'sigma', 'h3', 'h4'}.
     initial_tilt : float
         Initial line tilt angle in degrees.
+    flux_1d : array
+        The binned 1-d arc the peaks were detected in (indexed from the order's domain minimum), used
+        for the flux-weighted centroid when several of a blend's components were detected as peaks.
     detected_peaks : array, optional
         Refined positions (rectified x) of the peaks detected in the 1-d arc. Used to seed each blend's
-        shared centre directly from its components' matched peaks (paired with `matched_wavelengths`).
+        shared center directly from its components' matched peaks (paired with `matched_wavelengths`).
     matched_wavelengths : array, optional
         The catalog wavelength each entry of `detected_peaks` was matched to by `correlate_peaks` (same
         length as `detected_peaks`). Gives the peak->line assignment so a blend can be seeded from the
         peaks of its own components rather than re-matching by a wavelength radius.
-    flux_1d : array, optional
-        The binned 1-d arc the peaks were detected in (indexed from the order's domain minimum), used
-        for the flux-weighted centroid when several of a blend's components were detected as peaks.
     blend_n_sigma : float
         Lines whose centers fall within this many LSF sigma of each other are grouped into one blend.
-        Set to roughly twice the `fitting_window` so that any neighbour close enough to overlap (and
+        Set to roughly twice the `fitting_window` so that any neighbor close enough to overlap (and
         thus contaminate) a blend's fitting window is fit jointly with it rather than separately.
     fitting_window : float
         Half-width of the fitting window around each blend, in LSF-sigma units.
@@ -679,7 +670,7 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
     -------
     line_centroids : list
         One dict per successful (group, row) fit: {'x', 'y', 'order_y', 'x_err', 'wavelength'}, where
-        'wavelength' is the mean (anchor) wavelength of the group.
+        'wavelength' is the mean wavelength of the group.
     """
     sigma, h3, h4 = lsf_params['sigma'], lsf_params['h3'], lsf_params['h4']
     half_width = fitting_window * sigma
@@ -687,15 +678,14 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
     # Invert the wavelength solution to map wavelength -> rectified x (and read off the dispersion).
     grid = np.arange(wavelength_solution.domain[0], wavelength_solution.domain[1] + 1, dtype=float)
     solution_wavelengths = wavelength_solution(grid)
-    sorted_inds = np.argsort(solution_wavelengths)
 
     # Group lines that sit within blend_n_sigma sigma of each other. Convert that sigma threshold to a
     # wavelength gap with the typical dispersion across the order.
     dispersion_estimate = np.median(np.abs(np.diff(solution_wavelengths)))
     group_threshold = blend_n_sigma * sigma * dispersion_estimate
 
-    # Reuse the greedy peak<->line assignment correlate_peaks already made: map each matched catalog
-    # wavelength to its detected-peak position, so a blend is seeded from its own components' peaks.
+    # Using the peaks we already detected, test if the feature is close enough
+    # to the mean wavelength of the blend
     detected_peaks = np.asarray([] if detected_peaks is None else detected_peaks, dtype=float)
     matched_wavelengths = np.asarray([] if matched_wavelengths is None else matched_wavelengths, dtype=float)
     peak_position_of = dict(zip(matched_wavelengths.tolist(), detected_peaks.tolist()))
@@ -705,31 +695,28 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
 
     line_centroids = []
     for component_wavelengths in _group_lines_by_wavelength(blended_lines['wavelength'], group_threshold):
-        # Anchor the blend at its strength-weighted mean wavelength.
         strengths = np.array([strength_of[w] for w in component_wavelengths]) if strength_of else None
-        anchor_wavelength = np.average(component_wavelengths, weights=strengths)
-        if anchor_wavelength < solution_wavelengths.min() or anchor_wavelength > solution_wavelengths.max():
+        mean_wavelength = np.average(component_wavelengths, weights=strengths)
+        if mean_wavelength < solution_wavelengths.min() or mean_wavelength > solution_wavelengths.max():
             continue   # this blend doesn't fall in this order
 
-        # Seed the shared-centre guess from this blend's own components' matched peaks. Several
-        # components detected as separate peaks collapse to their flux-weighted centroid; a single
-        # detected component uses its peak; none falls back to inverting the wavelength solution.
         matched = np.array([peak_position_of[w] for w in component_wavelengths if w in peak_position_of])
+        # One line dominates
         if len(matched) == 1:
-            anchor_position = float(matched[0])
-        elif len(matched) > 1 and flux_1d is not None:
-            anchor_position = _flux_weighted_centroid(flux_1d, int(round(grid[0])), matched, half_width)
+            centroid_guess = float(matched[0])
+        # We partially resolved the blend
         elif len(matched) > 1:
-            anchor_position = float(np.mean(matched))
+            centroid_guess = _flux_weighted_centroid(flux_1d, int(round(grid[0])), matched, half_width)
+        # No lines were matched near this feature, so move on
         else:
-            anchor_position = np.interp(anchor_wavelength, solution_wavelengths[sorted_inds], grid[sorted_inds])
-        dispersion = wavelength_solution.deriv()(anchor_position)
-        offsets = (component_wavelengths - anchor_wavelength) / dispersion
+            continue
+        dispersion = wavelength_solution.deriv()(centroid_guess)
+        offsets = (component_wavelengths - mean_wavelength) / dispersion
         window_half = half_width + np.max(np.abs(offsets))
         n_components = len(offsets)
 
         centroids, _ = _trace_centroids(data, uncertainty, mask, x, y, order_y, initial_tilt,
-                                        anchor_position, anchor_wavelength, _blend_residuals,
+                                        centroid_guess, mean_wavelength, _blend_residuals,
                                         (offsets, sigma, h3, h4), _blend_parameter_bounds,
                                         (half_width, n_components), window_half, min_snr, huber_scale,
                                         edge_trim=edge_trim)
@@ -738,14 +725,14 @@ def add_blends(data, uncertainty, mask, x, y, order_y, blended_lines, wavelength
 
 
 def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lines, lsf_params_per_order,
-                                       blend_n_sigma=8.0, fitting_window=4.0):
+                                       blend_n_sigma=8.0, window_halfwidth=4.0):
     """
     Build the per-component centroid table and the per-feature residual table from the tilt-fit centroids.
 
     Two tables come out:
 
-    * **centroids** -- one row per catalog line. A blend is fit with one shared centre, so each
-      component's centroid is that centre plus its fixed (known) offset; every component therefore gets
+    * **centroids** -- one row per catalog line. A blend is fit with one shared center, so each
+      component's centroid is that center plus its fixed (known) offset; every component therefore gets
       its own row, flagged ``blend=True``, with the fitting-window width in pixels. This duplicates the
       single composite measurement onto the components for line-by-line use.
     * **residuals** -- one row per fitted *feature*. A blend contributes a single row carrying only its
@@ -760,21 +747,19 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
     line_tilts : Table
         Per-feature tilt fits stacked across orders, with columns 'order', 'reference_wavelength',
         'centroid', 'centroid_err', 'tilt', 'tilt_err' (a blend's `reference_wavelength` is the
-        strength-weighted mean of its components, matching `add_blends`).
+        strength-weighted mean of its components).
     wavelength_solution : WavelengthSolution
         The fitted solution; its `wavelength_polynomials[order - 1]` gives wavelength(x) at the order
         center and its derivative the local dispersion.
     used_lines : Table
-        The catalog lines that were fit; must have a 'wavelength' column (and a 'strength' column to
-        weight blends -- without it blends fall back to the unweighted mean).
+        The catalog lines that were fit; must have a 'wavelength' column and a 'strength' column which is used to find
+        the weighted mean wavelength.
     lsf_params_per_order : list of dict
         One {'sigma', 'h3', 'h4'} dict per order (`lsf_params_per_order[i]` is order `i + 1`).
     blend_n_sigma : float
-        Catalog lines within this many LSF sigma of each other form one blend group; must match
-        `add_blends` so the blend groups are split back into components the same way they were fit.
-    fitting_window : float
-        Half-width (in LSF sigma) of the window each line/blend was fit in, used to record the full
-        fitting-window width in pixels (`2 * fitting_window * sigma`) in the centroid table's 'width'.
+        Catalog lines within this many LSF sigma of each other form one blend group
+    window_halfwidth : float
+        Half-width (in LSF sigma) of the window for fitting each line or blend.
 
     Returns
     -------
@@ -800,7 +785,7 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
     for order in np.unique(np.asarray(line_tilts['order'])):
         order_tilts = line_tilts[line_tilts['order'] == order]
         sigma = lsf_params_per_order[order - 1]['sigma']
-        window_width = 2.0 * fitting_window * sigma
+        window_width = 2.0 * window_halfwidth * sigma
         wavelength_polynomial = wavelength_solution.wavelength_polynomials[order - 1]
         # The linear (constant + slope) part of the solution: its first two Legendre coefficients.
         linear = Legendre(wavelength_polynomial.coef[:2], domain=wavelength_polynomial.domain)
@@ -812,8 +797,8 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
         group_threshold = blend_n_sigma * sigma * dispersion_estimate
         for component_wavelengths in _group_lines_by_wavelength(catalog_wavelengths, group_threshold):
             strengths = np.array([strength_of[w] for w in component_wavelengths]) if strength_of else None
-            anchor_wavelength = float(np.average(component_wavelengths, weights=strengths))
-            match = np.isclose(order_tilts['reference_wavelength'], anchor_wavelength)
+            mean_wavelength = float(np.average(component_wavelengths, weights=strengths))
+            match = np.isclose(order_tilts['reference_wavelength'], mean_wavelength)
             if not np.any(match):
                 continue   # this feature was not fit in this order
             tilt_row = order_tilts[np.argmax(match)]
@@ -821,9 +806,13 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
             dispersion = wavelength_polynomial.deriv()(composite_centroid)
             is_blend = len(component_wavelengths) > 1
 
-            # Centroid table: spread the single composite measurement onto each component by its offset.
+            # For plotting purposes, the measured centroid for each
+            # component of the blend, i.e. if two lines are blended
+            # there will be one set of centroids for each line that are
+            # taken from the mean wavelength of the blend and offset
+            # to each component line
             for component_wavelength in component_wavelengths:
-                centroid = composite_centroid + (component_wavelength - anchor_wavelength) / dispersion
+                centroid = composite_centroid + (component_wavelength - mean_wavelength) / dispersion
                 centroid_rows['order'].append(int(order))
                 centroid_rows['reference_wavelength'].append(float(component_wavelength))
                 centroid_rows['blend'].append(is_blend)
@@ -837,13 +826,13 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
             # Residual table: one row per feature, from the composite (strength-weighted) centroid only.
             measured_wavelength = float(wavelength_polynomial(composite_centroid))
             residual_rows['order'].append(int(order))
-            residual_rows['reference_wavelength'].append(anchor_wavelength)
+            residual_rows['reference_wavelength'].append(mean_wavelength)
             residual_rows['blend'].append(is_blend)
             residual_rows['centroid'].append(float(composite_centroid))
             residual_rows['centroid_err'].append(tilt_row['centroid_err'])
             residual_rows['measured_wavelength'].append(measured_wavelength)
-            residual_rows['residual'].append(measured_wavelength - anchor_wavelength)
-            residual_rows['linear_subtracted_residual'].append(anchor_wavelength - float(linear(composite_centroid)))
+            residual_rows['residual'].append(measured_wavelength - mean_wavelength)
+            residual_rows['linear_subtracted_residual'].append(mean_wavelength - float(linear(composite_centroid)))
             residual_rows['tilt'].append(tilt_row['tilt'])
             residual_rows['tilt_err'].append(tilt_row['tilt_err'])
 
@@ -899,8 +888,11 @@ def _invert_wavelength_polynomial(x_of_wavelength, domain, dispersion_guess, deg
     Legendre
         Wavelength as a function of x along the order center.
     """
-    min_wavelength = minimize(lambda w: np.abs(x_of_wavelength(w) - domain[0]), x_of_wavelength.domain[0]).x[0]
-    max_wavelength = minimize(lambda w: np.abs(x_of_wavelength(w) - domain[1]), x_of_wavelength.domain[1]).x[0]
+    dx_dwavelength = x_of_wavelength.deriv()
+    min_wavelength = root_scalar(lambda w: float(x_of_wavelength(w)) - domain[0], fprime=dx_dwavelength,
+                                 x0=x_of_wavelength.domain[0], method='newton').root
+    max_wavelength = root_scalar(lambda w: float(x_of_wavelength(w)) - domain[1], fprime=dx_dwavelength,
+                                 x0=x_of_wavelength.domain[1], method='newton').root
 
     wavelength_grid = np.arange(min_wavelength, max_wavelength + 1, dispersion_guess, dtype=float)
     x_grid = x_of_wavelength(wavelength_grid)
@@ -1019,12 +1011,12 @@ class CalibrateWavelengths(Stage):
     # Number of rows to drop at the top and bottom of each order when tracing line centroids due to edge effects
     EDGE_ROWS_TO_TRIM = 3
 
-    # How far (in sigma) a fitted line center may move from its anchor.
+    # How far (in sigma) a fitted line center may move from its initial guess.
     CENTER_WINDOW_N_SIGMA = 2.0
     # Half-width (in LSF sigma) of the window each line/blend is fit in.
     FITTING_WINDOW_N_SIGMA = 4.0
     # Catalog lines whose centers fall within this many LSF sigma of each other are a blend, and are fit
-    # jointly. This is twice the fitting window: a neighbour closer than that falls inside a blend's
+    # jointly. This is twice the fitting window: a neighbor closer than that falls inside a blend's
     # fitting window and would contaminate it.
     BLEND_N_SIGMA = 2 * FITTING_WINDOW_N_SIGMA
     # Minimum per-row SNR for a blend/faint-line fit, set high so we don't fit noise.
@@ -1102,8 +1094,7 @@ class CalibrateWavelengths(Stage):
             order_y_abs = y2d[order_region].astype(float)
             order_y = order_y_abs - image.orders.center(order_x)[order - 1]
 
-            # Decide blends on the fly: a used line is isolated if it has no catalog neighbour within
-            # BLEND_N_SIGMA sigma.
+            # Get isolated lines in the catalog based on BLEND_N_SIGMA sigma.
             isolated_wavelengths = np.array([line['wavelength'] for line in
                                              get_isolated_lines(used_lines, initial_sigma, dispersion,
                                                                 self.BLEND_N_SIGMA)])
@@ -1146,7 +1137,14 @@ class CalibrateWavelengths(Stage):
             all_line_centroids.append(line_centroids)
 
             # Fit each line's tilt and order-center centroid independently from its row-by-row centroids.
-            line_tilts = fit_feature_tilts(line_centroids)
+            line_tilts = fit_feature_tilts(line_centroids) if len(line_centroids) > 0 else Table()
+            # Reject the frame if we don't detect enough lines
+            min_features = max(self.FIT_ORDERS[order], self.TILT_COEFF_ORDER[image.site]) + 1
+            if len(line_tilts) < max(min_features, self.MATCH_SUCCESS_THRESHOLD):
+                logger.error(f'Only {len(line_tilts)} features fit cleanly in order {order}; '
+                             'too few to constrain the wavelength solution.')
+                image.is_bad = True
+                return image
             line_tilts['order'] = order
             all_line_tilts.append(line_tilts)
 

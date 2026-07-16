@@ -55,8 +55,7 @@ def parameter_variances(fit):
     Parameters
     ----------
     fit : OptimizeResult
-        The result of a `scipy.optimize.least_squares` call. Uses `fit.jac` (the Jacobian at the
-        solution), `fit.fun` (the residuals), and `fit.x` (the best fit parameters).
+        The result of a `scipy.optimize.least_squares` call.
 
     Returns
     -------
@@ -71,7 +70,6 @@ def parameter_variances(fit):
         return np.full(fit.x.shape, np.nan)
 
     return np.clip(np.diag(covariance), 0.0, None)
-
 
 
 def interp_with_errors(x, y, yerr, x_new):
@@ -91,7 +89,7 @@ def interp_with_errors(x, y, yerr, x_new):
     return y_new, yerr_new
 
 
-def _weighted_linear_fit(t, x, x_err):
+def weighted_linear_fit(t, x, x_err):
     """
     Weighted least-squares fit of a straight line x = a + b * t.
 

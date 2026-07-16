@@ -180,7 +180,7 @@ class TestWavelengthSolutionCreation:
                 assert os.path.exists(expected_file)
 
     def test_if_wavelength_rmse_is_small(self):
-        # Regression guard: every order of every arc fit should land within 0.25 A RMSE.
+        # Regression guard: every order of every arc fit should land within 0.25 Angstrom RMSE which was the current best performance.
         test_data = ascii.read(DATA_FILELIST)
         for expected_file in expected_filenames(test_data):
             if 'a91' not in expected_file:

@@ -1,3 +1,5 @@
+import ast
+
 from astropy.io import fits
 from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
@@ -7,18 +9,12 @@ from banzai_floyds.utils.fitting_utils import gauss_hermite, sigma_to_fwhm
 
 
 class WavelengthSolution:
-    def __init__(self, wavelength_polynomials, tilt_polynomials, orders, lsf_params=None):
+    def __init__(self, wavelength_polynomials, tilt_polynomials, orders, lsf_params):
         self._wavelength_polynomials = wavelength_polynomials
         self._tilt_polynomials = tilt_polynomials
         self._orders = orders
-        # One Gauss-Hermite line-spread function {'sigma', 'h3', 'h4'} per order, indexed by
-        # order_id - 1, matching the polynomial lists. The LSF is taken to be constant across an
-        # order. Optional because calibrations written before this was added won't carry it.
-        self._lsf_params = lsf_params
-
-    @property
-    def lsf_params(self):
-        return self._lsf_params
+        # One Gauss-Hermite line-spread function {'sigma', 'h3', 'h4'} per order
+        self.lsf_params = lsf_params
 
     @property
     def wavelength_polynomials(self):
@@ -33,21 +29,21 @@ class WavelengthSolution:
     @property
     def lsf_sigma(self):
         """Gauss-Hermite sigma (pixels) per order, indexed by order_id - 1."""
-        return [params['sigma'] for params in self._lsf_params]
+        return [params['sigma'] for params in self.lsf_params]
 
     @property
     def fwhm(self):
         """Line FWHM (pixels) per order, indexed by order_id - 1."""
-        return [sigma_to_fwhm(params['sigma']) for params in self._lsf_params]
+        return [sigma_to_fwhm(params['sigma']) for params in self.lsf_params]
 
     def line_spread_function(self, order_id, x=None):
         """
-        Sample the (unit-amplitude) Gauss-Hermite LSF for an order. If x is None, sample on a
-        symmetric pixel grid out to 5 sigma.
+        Sample the (unit-amplitude) Gauss-Hermite LSF for an order at pixel positions x (centroid at zero).
+        If x is None, sample on a symmetric pixel grid out to 5 sigma.
 
         Returns (x, value).
         """
-        params = self._lsf_params[order_id - 1]
+        params = self.lsf_params[order_id - 1]
         if x is None:
             half_width = int(5 * params['sigma'])
             x = np.arange(-half_width, half_width + 1)
@@ -71,12 +67,12 @@ class WavelengthSolution:
         header = fits.Header()
         for i, polynomial in enumerate(self._wavelength_polynomials):
             header[f'POLYORD{i + 1}'] = polynomial.degree(), f'Wavelength polynomial order for order {i}'
-            header[f'POLYDOM{i + 1}'] = str(list(polynomial.domain)), f'Wavelength domain for order {i}'
+            header[f'POLYDOM{i + 1}'] = str([float(x) for x in polynomial.domain]), f'Wavelength domain for order {i}'
             for j, coef in enumerate(polynomial.coef):
                 header[f'WCOEF{i + 1}_{j}'] = coef, f'Wavelength polynomial coef {j} for order {i}'
         for i, polynomial in enumerate(self._tilt_polynomials):
             header[f'TILTORD{i + 1}'] = polynomial.degree(), f'Tilt angle polynomial order for order {i}'
-            header[f'TILTDOM{i + 1}'] = str(list(polynomial.domain)), f'Tilt angle domain for order {i}'
+            header[f'TILTDOM{i + 1}'] = str([float(x) for x in polynomial.domain]), f'Tilt angle domain for order {i}'
             for j, coef in enumerate(polynomial.coef):
                 header[f'TCOEF{i + 1}_{j}'] = coef, f'Tilt angle polynomial coef {j} for order {i}'
         header['EXTNAME'] = 'WAVELENGTH'
@@ -85,7 +81,7 @@ class WavelengthSolution:
     def lsf_to_header(self):
         """The Gauss-Hermite LSF parameters (sigma, h3, h4) per order, for the LSF extension header."""
         header = fits.Header()
-        for i, params in enumerate(self._lsf_params):
+        for i, params in enumerate(self.lsf_params):
             header[f'SIGMA_{i + 1}'] = params['sigma'], f'LSF Gauss-Hermite sigma (pix) for order {i + 1}'
             header[f'H3_{i + 1}'] = params['h3'], f'LSF Gauss-Hermite h3 for order {i + 1}'
             header[f'H4_{i + 1}'] = params['h4'], f'LSF Gauss-Hermite h4 for order {i + 1}'
@@ -119,27 +115,23 @@ class WavelengthSolution:
         return wavelength_domains
 
     @classmethod
-    def from_fits(cls, header, orders, lsf_header=None):
+    def from_fits(cls, header, orders, lsf_header):
         """Rebuild the solution from the WAVELENGTH header (polynomials) and the LSF header (shape).
-
-        The LSF parameters live in their own extension now, so `lsf_header` is the LSF extension's
-        header. It is optional: a header without the SIGMA_* keywords (or None) yields a solution with
-        no LSF, for calibrations written before the LSF was stored.
         """
         wavelength_polynomials = []
         tilt_polynomials = []
         lsf_params = []
         for order_id in orders.order_ids:
             wavelength_coeffs = [header[f'WCOEF{order_id}_{j}'] for j in range(header[f'POLYORD{order_id}'] + 1)]
-            wavelength_polynomials.append(Legendre(wavelength_coeffs, domain=eval(header[f'POLYDOM{order_id}'])))
+            wavelength_polynomials.append(Legendre(wavelength_coeffs,
+                                                   domain=ast.literal_eval(header[f'POLYDOM{order_id}'])))
             tilt_coeffs = [header[f'TCOEF{order_id}_{j}'] for j in range(header[f'TILTORD{order_id}'] + 1)]
-            tilt_polynomials.append(Legendre(tilt_coeffs, domain=eval(header[f'TILTDOM{order_id}'])))
-            if lsf_header is not None and f'SIGMA_{order_id}' in lsf_header:
-                lsf_params.append({'sigma': lsf_header[f'SIGMA_{order_id}'],
-                                   'h3': lsf_header[f'H3_{order_id}'],
-                                   'h4': lsf_header[f'H4_{order_id}']})
+            tilt_polynomials.append(Legendre(tilt_coeffs, domain=ast.literal_eval(header[f'TILTDOM{order_id}'])))
+            lsf_params.append({'sigma': lsf_header[f'SIGMA_{order_id}'],
+                               'h3': lsf_header[f'H3_{order_id}'],
+                               'h4': lsf_header[f'H4_{order_id}']})
         return cls(wavelength_polynomials, tilt_polynomials, orders,
-                   lsf_params=lsf_params if lsf_params else None)
+                   lsf_params=lsf_params)
 
     @property
     def orders(self):
@@ -212,7 +204,7 @@ def tilt_coordinates(tilt_angle, x, y):
     return np.array(x) + np.array(y) * np.tan(np.deg2rad(tilt_angle))
 
 
-def _gauss_hermite_residuals(params, x, flux, error):
+def gauss_hermite_residuals(params, x, flux, error):
     """
     Gauss-Hermite line model for a single line with free shape for least squares fitting.
 

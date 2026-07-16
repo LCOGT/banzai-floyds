@@ -56,7 +56,8 @@ def test_bin_edges():
     tilt_model = Legendre([8.0, 0.0], domain=(0, 512))
     wavelength_solution = WavelengthSolution([wavelength_model], [tilt_model],
                                              Orders([Legendre([128, 0.0], domain=(0, 512))],
-                                                    (523, 533), [65.0,]))
+                                                    (523, 533), [65.0,]),
+                                             [{'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}])
     np.testing.assert_allclose(wavelength_solution.bin_edges[0], np.arange(5500 - 255.5, 5500. + 256))
 
 
@@ -70,7 +71,8 @@ def test_combined_bin_edges():
     wavelength_model2 = Legendre([7667, 2655], domain=[0, 2655])
     orders = Orders([Legendre([11,], domain=[0, 2431]), Legendre([51,], domain=[0, 2655])], [101, 2700], [11, 11])
     tilt_models = [Legendre([0.0,], domain=[0, 2431]), Legendre([0.0,], domain=[0, 2655])]
-    wavelength_solution = WavelengthSolution([wavelength_model1, wavelength_model2], tilt_models, orders)
+    lsf_params = [{'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}, {'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}]
+    wavelength_solution = WavelengthSolution([wavelength_model1, wavelength_model2], tilt_models, orders, lsf_params)
     for bin_edges, expected in zip(wavelength_solution.bin_edges, [expected_blue_bins, expected_red_bins]):
         np.testing.assert_allclose(bin_edges, expected)
     np.testing.assert_allclose(wavelength_solution.combined_bin_edges, expected_combined)
@@ -82,7 +84,8 @@ def test_wavelength_solution_to_array():
     nx, ny = 523, 101
     wavelength_solution = WavelengthSolution([wavelength_polynomial], [tilt_polynomial],
                                              Orders([Legendre([50,], domain=(0, 500))],
-                                                    (ny, nx), [51,]))
+                                                    (ny, nx), [51,]),
+                                             [{'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}])
     expected_data = np.zeros((ny, nx))
     expected_data[25:-25, :501] = np.arange(3200.0, 4451, 2.5)
     np.testing.assert_allclose(wavelength_solution.data, expected_data)
@@ -107,17 +110,6 @@ def test_lsf_round_trips_through_header():
         order_lsf = lsf_table[lsf_table['order'] == order_id]
         expected = gauss_hermite(order_lsf['x'], 0.0, params['sigma'], 1.0, params['h3'], params['h4'])
         np.testing.assert_allclose(order_lsf['lsf'], expected)
-
-
-def test_lsf_absent_for_legacy_headers():
-    # Calibrations written before the LSF was stored on the solution have no SIGMA_* keywords.
-    orders = Orders([Legendre([11,], domain=[0, 2431]), Legendre([51,], domain=[0, 2655])], [101, 2700], [11, 11])
-    wavelength_models = [Legendre([4796.5, 1215.5], domain=[0, 2431]), Legendre([7667, 2655], domain=[0, 2655])]
-    tilt_models = [Legendre([0.0,], domain=[0, 2431]), Legendre([0.0,], domain=[0, 2655])]
-    solution = WavelengthSolution(wavelength_models, tilt_models, orders)
-
-    reconstructed = WavelengthSolution.from_fits(solution.to_header(), orders)
-    assert reconstructed.lsf_params is None
 
 
 def test_linear_wavelength_solution():
@@ -400,8 +392,8 @@ def test_fit_arc_lines_recovers_shape_and_centroids():
     amplitudes = np.array([900.0, 1200.0, 700.0])
     data, uncertainty, mask, x2d, y2d, order_y, tan_tilt = make_tilted_arc_order(positions, amplitudes, lsf, tilt,
                                                                                  seed=1)
-    lsf_params, centroids = fit_unblended_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
-                                          initial_fwhm=sigma_to_fwhm(lsf['sigma']))
+    lsf_params, centroids = fit_unblended_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions,
+                                                    wavelengths, initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The shared LSF shape is recovered
     np.testing.assert_allclose(lsf_params['sigma'], lsf['sigma'], atol=0.15)
     np.testing.assert_allclose(lsf_params['h3'], lsf['h3'], atol=0.03)
@@ -426,7 +418,7 @@ def test_fit_arc_lines_is_robust_to_a_cosmic_ray():
     cosmic_column = int(round(positions[0] - order_y[cosmic_row, 0] * tan_tilt)) + 1
     data[cosmic_row, cosmic_column] += 8000.0
     _, centroids = fit_unblended_arc_lines(data, uncertainty, mask, x2d, y2d, tilt, order_y, positions, wavelengths,
-                                 initial_fwhm=sigma_to_fwhm(lsf['sigma']))
+                                           initial_fwhm=sigma_to_fwhm(lsf['sigma']))
     # The Huber loss should keep every centroid (including the cosmic row) on the line
     residuals = [abs(c['x'] - (positions[0] - c['order_y'] * tan_tilt)) for c in centroids]
     assert np.max(residuals) < 0.5
@@ -459,14 +451,14 @@ def test_add_blends_fits_a_doublet():
     blended_lines = Table({'wavelength': component_wavelengths, 'strength': component_strengths})
 
     centroids = add_blends(data, uncertainty, mask, x2d.astype(float), y2d.astype(float), order_y, blended_lines,
-                           wavelength_solution, lsf, tilt)
+                           wavelength_solution, lsf, tilt, data[ny // 2],
+                           detected_peaks=component_positions, matched_wavelengths=component_wavelengths)
     assert len(centroids) > 0
-    # Every blend centroid is tagged with the strength-weighted mean wavelength of the blend (where the
-    # blended flux centroids) and the fitted centre traces that anchor's position.
-    anchor_wavelength = np.average(component_wavelengths, weights=component_strengths)
-    np.testing.assert_allclose([c['wavelength'] for c in centroids], anchor_wavelength)
-    anchor_position = (anchor_wavelength - lam0) / dispersion
-    residuals = [abs(c['x'] - (anchor_position - c['order_y'] * tan_tilt)) for c in centroids]
+    # Every blend centroid is tagged with the strength-weighted mean wavelength of the blend
+    mean_wavelength = np.average(component_wavelengths, weights=component_strengths)
+    np.testing.assert_allclose([c['wavelength'] for c in centroids], mean_wavelength)
+    rectified_position = (mean_wavelength - lam0) / dispersion
+    residuals = [abs(c['x'] - (rectified_position - c['order_y'] * tan_tilt)) for c in centroids]
     assert np.max(residuals) < 0.25
 
 
