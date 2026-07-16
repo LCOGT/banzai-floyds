@@ -152,3 +152,12 @@ def populate_order_heights_locations():
                         help='Database address: Should be in SQLAlchemy form')
     args = parser.parse_args()
     banzai_floyds.dbs.populate_order_heights_locations(args.db_address)
+
+
+def populate_lsf_params():
+    parser = argparse.ArgumentParser("Seed the LSF table with the hand-measured shapes shipped in the repo.")
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    args = parser.parse_args()
+    banzai_floyds.dbs.populate_lsf_params(args.db_address)

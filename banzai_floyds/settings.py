@@ -37,7 +37,7 @@ LAST_STAGE = {
     'SPECTRUM': None,
     'STANDARD': None,
     'LAMPFLAT': 'banzai_floyds.fringe.FringeLoader',
-    'ARC': 'banzai_floyds.orders.OrderTweaker',
+    'ARC': 'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }
 
