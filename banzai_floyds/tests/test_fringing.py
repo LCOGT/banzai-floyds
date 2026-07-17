@@ -54,7 +54,8 @@ def test_create_super_fringe():
     input_context = context.Context({
         'CALIBRATION_MIN_FRAMES': {'LAMPFLAT': 2},
         'TELESCOPE_FILENAME_FUNCTION': 'banzai.utils.file_utils.telescope_to_filename',
-        'CALIBRATION_FILENAME_FUNCTIONS': {'LAMPFLAT': ()},
+        'CALIBRATION_FILENAME_FUNCTIONS': {'LAMPFLAT': ('banzai_floyds.utils.file_utils.lampflat_config_to_filename',
+                                                        'banzai_floyds.utils.file_utils.slit_width_to_filename')},
         'CALIBRATION_SET_CRITERIA': {'LAMPFLAT': []},
         'CALIBRATION_FRAME_CLASS': 'banzai_floyds.frames.FLOYDSCalibrationFrame',
         'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']},
@@ -63,6 +64,9 @@ def test_create_super_fringe():
     })
     stage = FringeMaker(input_context)
     frame = stage.do_stage(frames)
+
+    # Added a quick test to make sure the slit width correctly makes it into the filename.
+    assert '2.0as' in frame.filename
     # Assert that the super fringe matches the input
     # Trim off the edges of the order due to edge effects
     trimmed_order = frames[0].orders.new(frames[0].orders.order_heights - 20)
