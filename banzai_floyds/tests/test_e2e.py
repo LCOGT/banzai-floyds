@@ -93,7 +93,6 @@ def expected_filenames(file_table, one_d=False):
 
 
 # Note this is complicated by the fact that things are running as celery tasks.
-@pytest.mark.e2e
 @pytest.fixture(scope='module')
 @mock.patch('banzai.dbs.requests.get', return_value=FakeResponse(CONFIGDB_FILENAME))
 def init(mock_configdb):
