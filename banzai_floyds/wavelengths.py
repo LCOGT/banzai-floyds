@@ -997,8 +997,7 @@ def store_lsf(image, lsf_params, runtime_context):
 class CalibrateWavelengths(Stage):
     LINES = arc_lines_table()
     INITIAL_DISPERSIONS = {1: 3.485, 2: 1.723}
-    # Tilts in degrees measured counterclockwise (right-handed coordinates)
-    INITIAL_LINE_TILTS = {1: 8., 2: 8.}
+
     TILT_COEFF_ORDER = {'coj': 2, 'ogg': 0}
     OFFSET_RANGES = {1: np.arange(7000.0, 7900.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
     # These thresholds were set using the data processed by the characterization tests.
@@ -1059,7 +1058,7 @@ class CalibrateWavelengths(Stage):
                 return image
             initial_sigma = initial_lsf['sigma']
             initial_fwhm = sigma_to_fwhm(initial_sigma)
-            initial_tilt = self.INITIAL_LINE_TILTS[order]
+            initial_tilt = self.runtime_context.WAVELENGTH_TILT_GUESS
             dispersion = self.INITIAL_DISPERSIONS[order]
 
             # Collapse the order to a 1-d arc using the guess of the line tilt
