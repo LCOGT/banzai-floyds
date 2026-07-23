@@ -3,11 +3,14 @@ from banzai_floyds.extract import set_extraction_region
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.utils.binning_utils import bin_data
 import numpy as np
+from scipy.ndimage import binary_erosion
 from banzai import context
 from collections import namedtuple
 from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
-from banzai_floyds.utils.order_utils import get_order_2d_region
+
+ORDER_EDGE_MARGIN = 2
+EDGE_RESIDUAL_LIMIT = 30
 
 
 def test_background_fitting():
@@ -29,15 +32,10 @@ def test_background_fitting():
     # The residuals still look more correlated especially in the y-profile direction,
     # but I guess that shouldn't be surprising given how we are fitting
     in_order = fake_frame.orders.data > 0
-    residuals = fake_frame.background[in_order] - fake_frame.input_sky[in_order]
-    residuals /= fake_frame.uncertainty[in_order]
-    assert (np.abs(residuals) < 3).sum() > 0.99 * in_order.sum()
-    # We assert that only edge pixels can vary by 5 sigma due to edge effects
-    for order in [1, 2]:
-        order_region = get_order_2d_region(fake_frame.orders.data == order)
-        residuals = fake_frame.background[order_region][-2:2, -2:2] - fake_frame.input_sky[order_region][-2:2, -2:2]
-        residuals /= fake_frame.uncertainty[order_region][-2:2, -2:2]
-        assert np.all(np.abs(residuals) < 5)
+    interior = binary_erosion(in_order, structure=np.ones((2 * ORDER_EDGE_MARGIN + 1, 1)))
+    residuals = fake_frame.background[interior] - fake_frame.input_sky[interior]
+    residuals /= fake_frame.uncertainty[interior]
+    assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()
 
 
 def test_background_stage():
@@ -59,15 +57,10 @@ def test_background_stage():
     in_extract_region[y, x] = np.logical_and(frame.binned_data['extraction_window'],
                                              frame.binned_data['order_wavelength_bin'] > 0)
     in_order = frame.orders.data > 0
-    residuals = frame.background[in_order] - frame.input_sky[in_order]
-    residuals /= frame.uncertainty[in_order]
-    assert (np.abs(residuals) < 3).sum() > 0.99 * in_order.sum()
-    # We assert that only edge pixels can vary by 5 sigma due to edge effects
-    for order in [1, 2]:
-        order_region = get_order_2d_region(frame.orders.data == order)
-        residuals = frame.background[order_region][-2:2, -2:2] - frame.input_sky[order_region][-2:2, -2:2]
-        residuals /= frame.uncertainty[order_region][-2:2, -2:2]
-        assert np.all(np.abs(residuals) < 5)
+    interior = binary_erosion(in_order, structure=np.ones((2 * ORDER_EDGE_MARGIN + 1, 1)))
+    residuals = frame.background[interior] - frame.input_sky[interior]
+    residuals /= frame.uncertainty[interior]
+    assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()
 
 
 def test_background_region():

@@ -10,6 +10,8 @@ Versions
 - Fix a filenaming bug for the stacked fringe frames
   where all files on the same day would have the same name
   irrespective of slit width.
+- Migrate to use astroscrappy for cosmic ray detection as Cosmic-CoNN was not
+  trained on spectroscopic data.
 
 1.0.2 (2026-03-30)
 ------------------

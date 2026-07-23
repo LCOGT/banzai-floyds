@@ -9,14 +9,15 @@ ORDERED_STAGES = [
     'banzai.trim.Trimmer',
     'banzai.gain.GainNormalizer',
     'banzai.uncertainty.PoissonInitializer',
-    'banzai.cosmic.CosmicRayDetector',
+    'banzai.bpm.SaturatedPixelFlagger',
     'banzai_floyds.orders.OrderLoader',
     # Note that we currently don't apply the order tweak, only calculate it and save it in the header
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
+    'banzai_floyds.binning.Binner',
+    'banzai_floyds.cosmics.CosmicRayDetector',
     'banzai_floyds.fringe.FringeLoader',
     'banzai_floyds.fringe.FringeCorrector',
-    'banzai_floyds.binning.Binner',
     'banzai_floyds.profile.ProfileFitter',
     'banzai_floyds.background.BackgroundFitter',
     'banzai_floyds.extract.Extractor',
@@ -37,7 +38,7 @@ LAST_STAGE = {
     'SPECTRUM': None,
     'STANDARD': None,
     'LAMPFLAT': 'banzai_floyds.fringe.FringeLoader',
-    'ARC': 'banzai_floyds.wavelengths.WavelengthSolutionLoader',
+    'ARC': 'banzai_floyds.cosmics.CosmicRayDetector',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }
 
@@ -51,7 +52,9 @@ CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = (  # noqa: F405
 
 EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': ['banzai_floyds.fringe.FringeContinuumFitter'],
                 'STANDARD': None,
-                'ARC': ['banzai_floyds.wavelengths.CalibrateWavelengths'],
+                # We need to rerun binning here to use the most up to date wavelength solution
+                # (it was previously binned using a guess at the wavelength solution).
+                'ARC': ['banzai_floyds.wavelengths.CalibrateWavelengths', 'banzai_floyds.binning.Binner'],
                 'SKYFLAT': ['banzai_floyds.orders.OrderSolver']}
 
 FRAME_FACTORY = 'banzai_floyds.frames.FLOYDSFrameFactory'
@@ -70,3 +73,6 @@ LOSSLESS_EXTENSIONS = ['WAVELENGTH']
 
 # We just need to be redward of the dichroic cutoff which is ~4500 Angstroms
 FRINGE_CUTOFF_WAVELENGTH = 5200.0
+
+# Tilts in degrees measured counterclockwise (right-handed coordinates)
+WAVELENGTH_TILT_GUESS = 8.0

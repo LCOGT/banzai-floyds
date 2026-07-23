@@ -35,9 +35,9 @@ ARCHIVE_FRAMES_URL = 'https://archive-api.lco.global/frames/'
 RAW_DIR = 'test_data/raw'
 GRID_OUTPUT_PDF = 'astroscrappy_parameter_study.pdf'
 GRID_OUTPUT_CSV = 'astroscrappy_parameter_study.csv'
-INJECTION_OUTPUT_PDF = 'cosmic_ray_injection_study.pdf'
-FSMODE_GRID_OUTPUT_PDF = 'cosmic_ray_injection_grid.pdf'
-FSMODE_GRID_OUTPUT_CSV = 'cosmic_ray_injection_grid.csv'
+MISSED_CR_OUTPUT_PDF = 'missed_cr_diagnostics.pdf'
+FSMODE_GRID_OUTPUT_PDF = 'fsmode_grid.pdf'
+FSMODE_GRID_OUTPUT_CSV = 'fsmode_grid.csv'
 
 # Back-to-back exposure pairs of the same target used to build the truth masks
 CR_FRAME_PAIRS = [
@@ -422,7 +422,7 @@ def missed_cr_diagnostics(args: argparse.Namespace) -> None:
               f"false_discovery_rate={counts['fp'] / n_detected if n_detected else np.nan:.3f}  "
               f"false_positive_rate={counts['fp'] / counts['n_clean']:.3e}")
 
-    with PdfPages(INJECTION_OUTPUT_PDF) as pdf:
+    with PdfPages(MISSED_CR_OUTPUT_PDF) as pdf:
         truth_halo = binary_dilation(truth, iterations=1)
         true_positive = np.logical_and(detected, truth)
         false_positive = np.logical_and(detected, np.logical_not(truth_halo))
@@ -445,7 +445,7 @@ def missed_cr_diagnostics(args: argparse.Namespace) -> None:
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
-    print(f'Wrote {INJECTION_OUTPUT_PDF}')
+    print(f'Wrote {MISSED_CR_OUTPUT_PDF}')
 
 
 def run_fsmode_grid(stamps: list, seeds: list, n_injections: int, on_trace_fraction: float) -> list:
