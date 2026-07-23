@@ -113,6 +113,39 @@ wheels = [
 ]
 
 [[package]]
+name = "astroscrappy"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "astropy" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4e/79/47728f40cdb7b75238a673db83825fedb4cd7db7f44106110c25df6e5420/astroscrappy-1.3.0.tar.gz", hash = "sha256:b868079d3e9a2a83f02e2a22a4074fdf2bf115ce3d3038575e6170235c3bf2ca", size = 562575, upload-time = "2025-10-31T15:24:12.725Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/cd/651bec2622e35565ccbd9e165841021975da3f92197881ae28ad00da2b30/astroscrappy-1.3.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:d422597c4f43d49d43a9caeef662c62fba4f0a26027a977edbdd5f280839be08", size = 773470, upload-time = "2025-10-31T15:23:41.588Z" },
+    { url = "https://files.pythonhosted.org/packages/22/04/b4d3e66a6205e9929c86eca3c4f643f1976783a36c54ecb287c5dc97c2e6/astroscrappy-1.3.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:43f8a482b6ab9cd6e9caec8e5fb560f77df636f9969b2b1fb4f7632cebbf9ecf", size = 761842, upload-time = "2025-10-31T15:23:42.761Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/d1/4fc0c711bb832ee3460ab2f33ee9f0e6c3791919f2a9bf6883e1c55afa59/astroscrappy-1.3.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:34c14d200e9b376526381c96970544b3c01ac1c5a920e9519af9f67f5fdae8b2", size = 1936042, upload-time = "2025-10-31T15:23:43.951Z" },
+    { url = "https://files.pythonhosted.org/packages/15/50/eab8f8b89d2d862f58984c9f461dd6133089b244b8b8d493ad303b3ce663/astroscrappy-1.3.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:42060e0110b41a870a35b5f3dae1f51bd8fa41d8c34eff0f35d3d1f85cdfbc3c", size = 1984870, upload-time = "2025-10-31T15:23:45.421Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/a3/7a90f4550c7b2edcb69d94c9c2c1194130ce14453752a654d290bc8793c2/astroscrappy-1.3.0-cp311-cp311-win_amd64.whl", hash = "sha256:365470482740d45ab569b5dc1bd85813c6a6cd9bd902b7c205e36caa3a4f4ba9", size = 743808, upload-time = "2025-10-31T15:23:47.354Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/6e/f0c8d221f6ae300061ed06d66407a0430eb9c903c555c424ae801465620c/astroscrappy-1.3.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:4108b6b6c5c68842f3958e26af1e79d674c731a0775568799b3de1c877697dc5", size = 769577, upload-time = "2025-10-31T15:23:49.017Z" },
+    { url = "https://files.pythonhosted.org/packages/67/44/44133ab3f0aa6bfaef36266a8e6ad8be254038ccdfecdc2aa4ee3ad5c54d/astroscrappy-1.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:a17a2634b2c912612caf588d3e24ea2a64d0d67cf0d121cf6f2d2bb8c3635d90", size = 760437, upload-time = "2025-10-31T15:23:50.437Z" },
+    { url = "https://files.pythonhosted.org/packages/27/e2/7a3e17e7a183021dc0e435dc416cb4fecac1187144ee81dced59171be3f4/astroscrappy-1.3.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:af21f6310fa85d89e0d45222f0e5e0a246c0b9a10cd8489fe9ae3e1edc1619a7", size = 2004840, upload-time = "2025-10-31T15:23:51.868Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/6f/d5fadb46454813e8246876fe0fa8ce2f623c106b3ba5588fe4a547d66970/astroscrappy-1.3.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:56e201bea182e44e50f4bf2447ca5617b7931f74f34919aed8b2035eb6a7ea17", size = 2049710, upload-time = "2025-10-31T15:23:53.086Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/c8/8ced1984abeff00e74619799fafd34ed07c6024ac5620ba625f6c241c102/astroscrappy-1.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:227f4055a502fef8d45d47a170dfe806c8789de4a00791b8caa6d8034920a7fc", size = 740599, upload-time = "2025-10-31T15:23:54.924Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/df/3ac1164c29068689ed3994f2eecd2025a4bac63746ff42e54172bc08df8e/astroscrappy-1.3.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:bf65994fc8279d8316a2abff323b91f071e49192cb31a6a3550654450fd09881", size = 767999, upload-time = "2025-10-31T15:23:56.377Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/48/fad1f86c82653ce3e9aae2b056b87f29404d465c9190d87b5768070b5de5/astroscrappy-1.3.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:3e2490eead204d084b32851a3701fffe79aa52ab3204345b04c2bb1c8e3bd29b", size = 759086, upload-time = "2025-10-31T15:23:57.758Z" },
+    { url = "https://files.pythonhosted.org/packages/48/23/203f9741bdf69271b59811d000a34549b20390e88426a1784ca15607a561/astroscrappy-1.3.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2065f67a011b55056c62470a09e44e7a65dde7b55534dee5a624f40c5a3b97de", size = 1933918, upload-time = "2025-10-31T15:23:59.025Z" },
+    { url = "https://files.pythonhosted.org/packages/86/20/6a7d058b33b97ec0d9e217446a6ff4703f9386dab14be648a64f341deb41/astroscrappy-1.3.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:323923bf272c14e39bdb630e22e4ccf7da59379aecbd481225d2c205c35a2efb", size = 1980609, upload-time = "2025-10-31T15:24:00.423Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/47/4144a88f16f6339bd016d49e9f21667cabf81fe99270303714cb020474c7/astroscrappy-1.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:3414c020500195e4e59b4d8be21b7e12603651930b3d3867590e346b8484b18e", size = 740294, upload-time = "2025-10-31T15:24:01.771Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/97/2505737d5e70fc8bde449f037dce737abb90e6a2ef41860760451cdaf600/astroscrappy-1.3.0-cp314-cp314-macosx_10_13_x86_64.whl", hash = "sha256:748e8153c818882cbb62e939443d872490f1bd4755a05b46437705f0759f8ebe", size = 767382, upload-time = "2025-10-31T15:24:03.242Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/c3/24ceba6570067f606af97cc82fd51b0ac0990a94087e591b4d90908b35f8/astroscrappy-1.3.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:0735afe41af340efb389cee6ae87fad15ecd56509e43581f6c2d65160872c12f", size = 759549, upload-time = "2025-10-31T15:24:05.018Z" },
+    { url = "https://files.pythonhosted.org/packages/29/37/19b70c6e64c1ffc4984f460da240f0836170cf715affa325944af501ce99/astroscrappy-1.3.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:488cf3590403448a0f0b05c7c03c14343a0ecf0a74c76ee3a7254d3aa0048208", size = 1928964, upload-time = "2025-10-31T15:24:07.995Z" },
+    { url = "https://files.pythonhosted.org/packages/42/d4/0f6ce8f24114f33461155e920a682261ea34761b9d748c791eac498f4365/astroscrappy-1.3.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b512f6696509cd39939cfc40117f4fc3ce62492a3ca4ce6ee7bd080d02de4818", size = 1967319, upload-time = "2025-10-31T15:24:09.471Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/4b/7d87ebbcc72f36cfa3307b464f9e62062ac8e390ddf1919648fb1b45e61f/astroscrappy-1.3.0-cp314-cp314-win_amd64.whl", hash = "sha256:eb016eb3934fc391f0eb17dc78d267562a0b0e9845a48888b41f3ced05d80b05", size = 742603, upload-time = "2025-10-31T15:24:11.116Z" },
+]
+
+[[package]]
 name = "asttokens"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -155,6 +188,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "astropy" },
+    { name = "astroscrappy" },
     { name = "ipython" },
     { name = "lco-banzai" },
     { name = "matplotlib" },
@@ -184,6 +218,7 @@ test = [
 requires-dist = [
     { name = "alembic" },
     { name = "astropy", specifier = ">=6.0" },
+    { name = "astroscrappy" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "ipython" },
