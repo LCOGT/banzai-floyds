@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
 from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
-from banzai_floyds.orders import Orders
+from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
-from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
+from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.fringe import fit_smooth_fringe_spline
 from banzai_floyds.utils.telluric_utils import estimate_telluric
 from banzai_floyds.utils.flux_utils import airmass_extinction
@@ -23,6 +23,49 @@ import os
 
 
 SKYLINE_LIST = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data/skylines.dat'))
+COSMIC_RAY_STAMPS_PATH = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data/cosmic_ray_stamps.json')
+
+
+def load_cosmic_ray_stamps() -> list:
+    """Load real cosmic-ray morphology stamps harvested from FLOYDS frames.
+
+    Returns
+    -------
+    list of dict, each with 'flux' (float array, excess counts to add) and 'flagged'
+    (boolean array, same shape, the pixels that were originally flagged as a cosmic ray).
+    """
+    with open(COSMIC_RAY_STAMPS_PATH) as stamps_file:
+        stamps_json = json.load(stamps_file)
+    return [{'flux': np.array(stamp['flux'], dtype=np.float32),
+            'flagged': np.array(stamp['flagged'], dtype=bool)} for stamp in stamps_json]
+
+
+def inject_cosmic_ray_stamps(frame, stamps: list, n_injections: int, rng: np.random.Generator,
+                             read_noise: float, detection_threshold: float = 5.0) -> tuple:
+    """Inject real cosmic-ray morphology stamps at random locations, in place.
+
+    Returns
+    -------
+    detectable: boolean array, same shape as frame.data
+        True at injected pixels whose cosmic-ray flux exceeds `detection_threshold` sigma in this
+        frame. Score completeness against this.
+    injected: boolean array, same shape
+        True wherever any cosmic-ray flux was added, including the faint halo pixels below the
+        threshold. Score false discovery against the complement of this, so that detecting a halo
+        pixel is not counted as a false positive.
+    """
+    ny, nx = frame.data.shape
+    signal = np.zeros((ny, nx))
+
+    for _ in range(n_injections):
+        stamp = stamps[rng.integers(len(stamps))]
+        h, w = stamp['flux'].shape
+        y0, x0 = rng.integers(0, ny - h), rng.integers(0, nx - w)
+        y1, x1 = y0 + h, x0 + w
+        frame.data[y0:y1, x0:x1] += stamp['flux']
+        signal[y0:y1, x0:x1] += stamp['flux']
+    frame.uncertainty[:] = np.sqrt(read_noise ** 2 + np.clip(frame.data, 0.0, None))
+    return signal / frame.uncertainty > detection_threshold, signal > 0
 
 
 def plot_array(data, overlays=None):
@@ -74,6 +117,13 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     profile_fwhm = 10.0
     order_height = 93
     read_noise = 6.5
+    # Real order edges roll off smoothly over a few pixels (see the vignetting profile in a
+    # real lamp flat) rather than cutting off instantly, so paint flux through the same
+    # logistic-edged top-hat banzai_floyds.orders.smooth_order_weights uses for order tweaking
+    # (matching its default sharpness), out to a few pixels beyond the nominal order height
+    # where the taper has already decayed to negligible amplitude.
+    EDGE_SHARPNESS = 2.0
+    EDGE_PAD = 6
     line_fwhms_angstroms = [15.6, 8.6]
     input_fringe_shift = fringe_offset
 
@@ -118,13 +168,16 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     # normalize out the polynomial so it is close to 1
     continuum_polynomial /= np.mean(
         continuum_polynomial(np.arange(3000.0, 12000.1, 0.1)))
+    order_models = [order1, order2]
     for i in range(2):
         slit_coordinates = y2d - orders.center(x2d)[i]
-        in_order = orders.data == i + 1
+        in_order = order_region(orders.order_heights[i] + 2 * EDGE_PAD, order_models[i], (ny, nx))
+        weight = smooth_order_weights(order_models[i].coef, (x2d, y2d), orders.order_heights[i],
+                                      order_models[i].domain, k=EDGE_SHARPNESS)
         trace_center = profile_centers[i](wavelengths.data)
         if include_trace:
             if flat_spectrum:
-                data[in_order] += flux_normalization * gauss(
+                data[in_order] += weight[in_order] * flux_normalization * gauss(
                     slit_coordinates[in_order], trace_center[in_order],
                     profile_sigma)
             else:
@@ -137,9 +190,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                     # add some random emission lines
                     input_spectrum += strength * gauss(wavelengths.data[in_order],
                                                        input_line, fwhm_to_sigma(fhwm)) * profile
-                data[in_order] += input_spectrum
+                data[in_order] += weight[in_order] * input_spectrum
 
-        data[in_order] += background
+        data[in_order] += weight[in_order] * background
 
         if include_sky:
             sky_wavelengths = np.arange(2500.0, 12000.0, 0.1)
@@ -150,9 +203,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                 sky_spectrum += line['line_strength'] * line_spread * sky_normalization
             # Make a slow illumination gradient to make sure things work even if the sky is not flat
             illumination = 100 * gauss(slit_coordinates[in_order], 0.0, 48)
-            input_sky[in_order] = np.interp(wavelengths.data[in_order],
-                                            sky_wavelengths,
-                                            sky_spectrum) * illumination
+            input_sky[in_order] = weight[in_order] * np.interp(wavelengths.data[in_order],
+                                                               sky_wavelengths,
+                                                               sky_spectrum) * illumination
             data[in_order] += input_sky[in_order]
     if fringe:
         fringe_wave_number = 2.0 * np.pi / 30.0
@@ -176,7 +229,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                                          'DATE-OBS': '2023-01-01 12:41:56.11',
                                                          'HEIGHT': 0,
                                                          'AIRMASS': 1.0,
-                                                         'APERWID': 2.0}),
+                                                         'APERWID': 2.0,
+                                                         'RDNOISE': read_noise,
+                                                         'SATURATE': 1e6}),
                                             uncertainty=errors)],
                                    'foo.fits')
     frame.input_profile_centers = profile_centers

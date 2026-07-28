@@ -10,6 +10,14 @@ Versions
 - Fix a filenaming bug for the stacked fringe frames
   where all files on the same day would have the same name
   irrespective of slit width.
+- Migrate to use astroscrappy for cosmic ray detection as Cosmic-CoNN was not
+  trained on spectroscopic data. We now only run astroscrappy on
+  science frames, not arcs or flats. We do comparison to a stacked flat
+  to do a basic rejection on flats.
+- The background fit is now resistant to cosmic rays, using a Huber M-estimator followed by a hard
+  clip against the scaled median absolute deviation, so it can be used in cosmic ray detection.
+  We no longer fit a background to wavelength bins whose background region does not straddle the
+  trace, notably at the edge of the order where the tilted lines cause the too many pixels with x > xmax.
 
 1.0.2 (2026-03-30)
 ------------------

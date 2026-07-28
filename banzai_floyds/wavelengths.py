@@ -863,7 +863,7 @@ def fit_tilt_polynomial(centroids, tilts, tilt_errors, domain, degree):
         Tilt (degrees) as a function of x along the order.
     """
     return Legendre.fit(np.asarray(centroids, dtype=float), np.asarray(tilts, dtype=float),
-                        degree, domain=domain, w=1.0 / np.asarray(tilt_errors, dtype=float) ** 2)
+                        degree, domain=domain, w=1.0 / np.asarray(tilt_errors, dtype=float))
 
 
 def _invert_wavelength_polynomial(x_of_wavelength, domain, dispersion_guess, degree):
@@ -941,7 +941,7 @@ def fit_wavelength_solution(centroids, wavelengths, centroid_errors, domain, dis
     """
     centroids = np.asarray(centroids, dtype=float)
     wavelengths = np.asarray(wavelengths, dtype=float)
-    weights = 1.0 / np.asarray(centroid_errors, dtype=float) ** 2
+    weights = 1.0 / np.asarray(centroid_errors, dtype=float)
 
     wavelength_domain = (np.min(wavelengths), np.max(wavelengths))
     x_of_wavelength = Legendre.fit(wavelengths, centroids, degree, domain=wavelength_domain, w=weights)
@@ -997,8 +997,7 @@ def store_lsf(image, lsf_params, runtime_context):
 class CalibrateWavelengths(Stage):
     LINES = arc_lines_table()
     INITIAL_DISPERSIONS = {1: 3.485, 2: 1.723}
-    # Tilts in degrees measured counterclockwise (right-handed coordinates)
-    INITIAL_LINE_TILTS = {1: 8., 2: 8.}
+
     TILT_COEFF_ORDER = {'coj': 2, 'ogg': 0}
     OFFSET_RANGES = {1: np.arange(7000.0, 7900.0, 0.5), 2: np.arange(4300, 5200, 0.5)}
     # These thresholds were set using the data processed by the characterization tests.
@@ -1059,7 +1058,7 @@ class CalibrateWavelengths(Stage):
                 return image
             initial_sigma = initial_lsf['sigma']
             initial_fwhm = sigma_to_fwhm(initial_sigma)
-            initial_tilt = self.INITIAL_LINE_TILTS[order]
+            initial_tilt = self.runtime_context.WAVELENGTH_TILT_GUESS
             dispersion = self.INITIAL_DISPERSIONS[order]
 
             # Collapse the order to a 1-d arc using the guess of the line tilt

@@ -16,6 +16,7 @@ from astropy.io import fits
 from banzai_floyds.utils.wavelength_utils import tilt_coordinates, WavelengthSolution
 from banzai_floyds.utils.fitting_utils import gauss, fwhm_to_sigma, sigma_to_fwhm
 from banzai_floyds.dbs import create_db, add_lsf_params
+from banzai_floyds import settings
 from types import SimpleNamespace
 import tempfile
 
@@ -232,7 +233,7 @@ def generate_fake_arc_frame():
     wavelength_model1 = Legendre((7425, 2950.5, 20., -5., 1.), domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     line_fwhms = [OGG_LINE_FWHMS[i] for i in range(1, 3)]
-    line_tilts = [CalibrateWavelengths.INITIAL_LINE_TILTS[i] for i in range(1, 3)]
+    line_tilts = [settings.WAVELENGTH_TILT_GUESS for i in range(1, 3)]
     dispersions = [CalibrateWavelengths.INITIAL_DISPERSIONS[i] for i in range(1, 3)]
     flux_scale = 80000.0
     read_noise = 7.0
@@ -293,7 +294,8 @@ def seed_lsf_database():
 
 def test_full_wavelength_solution():
     np.random.seed(234132)
-    input_context = context.Context({'db_address': seed_lsf_database()})
+    input_context = context.Context({'db_address': seed_lsf_database(),
+                                     'WAVELENGTH_TILT_GUESS': settings.WAVELENGTH_TILT_GUESS})
     frame, input_wavelengths = generate_fake_arc_frame()
     stage = CalibrateWavelengths(input_context)
     frame = stage.do_stage(frame)

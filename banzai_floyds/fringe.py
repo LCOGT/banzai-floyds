@@ -233,7 +233,7 @@ class FringeMaker(CalibrationMaker):
             reference_fringe = images[0].fringe
         else:
             reference_fringe = np.zeros_like(images[0].data)
-            in_order = images[0].orders.data == 1
+            in_order = images[0].orders.data > 0
             reference_fringe[in_order] = images[0].data[in_order]
         # Only fit where the fringe data is > 0.1. Anything smaller than this and we get really, bad residuals
         # Don't try to fit anything that is just filled with a value of 1
@@ -254,7 +254,7 @@ class FringeMaker(CalibrationMaker):
             # Interpolate onto a normal pixel grid using the order offset
             # We want a S/N of greater than 10 in the data
             high_sn = image.data / image.uncertainty > 10.0
-            data_to_fit = np.logical_and(image.orders.data == 1, high_sn)
+            data_to_fit = np.logical_and(image.orders.data > 0, high_sn)
             # Anything with exactly = 1 is just filled data
             data_to_fit = np.logical_and(data_to_fit, image.data != 1.0)
             data_to_fit = np.logical_and(data_to_fit, image.mask == 0)
@@ -262,7 +262,7 @@ class FringeMaker(CalibrationMaker):
 
             # Note we fit the offset from the reference to the image so we need the
             # opposite sign when shifting the image to a common grid
-            shifted_order = image.orders.shifted(-fringe_offset).data == 1
+            shifted_order = image.orders.shifted(-fringe_offset).data > 0
             offset_coordinates = [x[shifted_order], y[shifted_order] + fringe_offset]
             this_fringe = fringe_spline(np.array(offset_coordinates).T)
             this_fringe /= np.median(this_fringe[this_fringe > 0])

@@ -73,6 +73,10 @@ def test_create_super_fringe():
     in_order = trimmed_order.data == 1
     np.testing.assert_allclose(frame.data[in_order], frames[0].input_fringe[in_order], rtol=0.02, atol=0.02)
 
+    in_order_two = trimmed_order.data == 2
+    assert np.all(frame.data[in_order_two] > 0)
+    np.testing.assert_allclose(frame.data[in_order_two], 1.0, rtol=0.05, atol=0.05)
+
 
 def test_correct_fringe():
     np.random.seed(981435)
