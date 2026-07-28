@@ -66,9 +66,9 @@ class CosmicRayDetector(Stage):
     trained on spectroscopic data.
 
     These parameters were chosen by simulating cosmic rays and testing their recovery. The morphology of the cosmic
-    rays were sampled by comparing images taken consecutively and looking for signicant positive outliers between the
-    the images _outside_ the orders. We then only report the cosmic ray recovery rates for inside the orders.
-    Scored that way, the following produced the highest completion while maintaining an acceptable false positive rate.
+    rays was sampled by comparing images taken consecutively and looking for significant positive outliers between
+    the images _outside_ the orders. We then report the cosmic-ray recovery rates only for pixels inside the orders.
+    Scored that way, the following produced the best completeness while maintaining an acceptable false-positive rate:
     sigclip=5, sigfrac=0.03, objlim=5, recovers 85% of cosmic-ray pixels with a 10% false-discovery rate.
     Missed pixels are overwhelmingly the faint wings/halos of extended cosmic-ray tracks (per-pixel
     SNR below ~5), not whole missed events.

@@ -83,11 +83,13 @@ def download_frame(basename: str, raw_dir: str = RAW_DIR) -> str:
     headers = {}
     if 'ARCHIVE_AUTH_TOKEN' in os.environ:
         headers['Authorization'] = f"Token {os.environ['ARCHIVE_AUTH_TOKEN']}"
-    response = requests.get(ARCHIVE_FRAMES_URL, params={'basename_exact': basename}, headers=headers).json()
-    if not response['results']:
+    response = requests.get(ARCHIVE_FRAMES_URL, params={'basename_exact': basename}, headers=headers)
+    response.raise_for_status()
+    response = response.json()
+    if not response.get('results'):
         raise ValueError(f'{basename} not found in the archive')
     print(f'Downloading {basename}')
-    frame_response = requests.get(response['results'][0]['url'], stream=True)
+    frame_response = requests.get(response['results'][0]['url'], headers=headers)
     frame_response.raise_for_status()
     with open(path, 'wb') as f:
         for chunk in frame_response.iter_content(chunk_size=1 << 20):

@@ -13,7 +13,6 @@ from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
 
 ORDER_EDGE_MARGIN = 2
-EDGE_RESIDUAL_LIMIT = 30
 
 
 def test_robust_legendre_fit_rejects_an_outlier():

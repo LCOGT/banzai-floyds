@@ -218,7 +218,7 @@ test = [
 requires-dist = [
     { name = "alembic" },
     { name = "astropy", specifier = ">=6.0" },
-    { name = "astroscrappy" },
+    { name = "astroscrappy", specifier = ">=1.1.0" },
     { name = "coverage", marker = "extra == 'test'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "ipython" },
