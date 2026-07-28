@@ -15,10 +15,13 @@ ORDERED_STAGES = [
     'banzai_floyds.orders.OrderTweaker',
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'banzai_floyds.binning.Binner',
-    'banzai_floyds.cosmics.CosmicRayDetector',
     'banzai_floyds.fringe.FringeLoader',
     'banzai_floyds.fringe.FringeCorrector',
     'banzai_floyds.profile.ProfileFitter',
+    'banzai_floyds.background.BackgroundFitter',
+    # background goes into the cosmic ray rejection
+    'banzai_floyds.cosmics.CosmicRayDetector',
+    # This works now as an iterative background fitter with cosmic ray rejection.
     'banzai_floyds.background.BackgroundFitter',
     'banzai_floyds.extract.Extractor',
     'banzai_floyds.trim.Trimmer',
@@ -38,7 +41,7 @@ LAST_STAGE = {
     'SPECTRUM': None,
     'STANDARD': None,
     'LAMPFLAT': 'banzai_floyds.fringe.FringeLoader',
-    'ARC': 'banzai_floyds.cosmics.CosmicRayDetector',
+    'ARC': 'banzai_floyds.binning.Binner',
     'SKYFLAT': 'banzai.uncertainty.PoissonInitializer'
 }
 
@@ -50,7 +53,9 @@ CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = (  # noqa: F405
     'banzai_floyds.utils.file_utils.slit_width_to_filename'
 )
 
-EXTRA_STAGES = {'SPECTRUM': None, 'LAMPFLAT': ['banzai_floyds.fringe.FringeContinuumFitter'],
+EXTRA_STAGES = {'SPECTRUM': None,
+                'LAMPFLAT': ['banzai_floyds.cosmics.LampFlatCosmicRayComparer',
+                             'banzai_floyds.fringe.FringeContinuumFitter'],
                 'STANDARD': None,
                 # We need to rerun binning here to use the most up to date wavelength solution
                 # (it was previously binned using a guess at the wavelength solution).

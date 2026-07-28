@@ -88,11 +88,11 @@ def fit_profile(data, domains, order_heights, center_polynomial_order=7, width_p
         if len(trace_points) > center_polynomial_order:
             center_polynomial = Legendre.fit(trace_points['wavelength'][this_order],
                                              trace_points['center'][this_order],
-                                             w=trace_points['center_error'][this_order] ** -2,
+                                             w=trace_points['center_error'][this_order] ** -1,
                                              deg=center_polynomial_order, domain=domain)
             sigma_polynomial = Legendre.fit(trace_points['wavelength'][this_order],
                                             trace_points['sigma'][this_order],
-                                            w=trace_points['sigma_error'][this_order] ** -2,
+                                            w=trace_points['sigma_error'][this_order] ** -1,
                                             deg=width_poly_order, domain=domain)
         else:
             center_polynomial = Legendre([0.0], domain=domain)

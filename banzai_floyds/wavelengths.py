@@ -863,7 +863,7 @@ def fit_tilt_polynomial(centroids, tilts, tilt_errors, domain, degree):
         Tilt (degrees) as a function of x along the order.
     """
     return Legendre.fit(np.asarray(centroids, dtype=float), np.asarray(tilts, dtype=float),
-                        degree, domain=domain, w=1.0 / np.asarray(tilt_errors, dtype=float) ** 2)
+                        degree, domain=domain, w=1.0 / np.asarray(tilt_errors, dtype=float))
 
 
 def _invert_wavelength_polynomial(x_of_wavelength, domain, dispersion_guess, degree):
@@ -941,7 +941,7 @@ def fit_wavelength_solution(centroids, wavelengths, centroid_errors, domain, dis
     """
     centroids = np.asarray(centroids, dtype=float)
     wavelengths = np.asarray(wavelengths, dtype=float)
-    weights = 1.0 / np.asarray(centroid_errors, dtype=float) ** 2
+    weights = 1.0 / np.asarray(centroid_errors, dtype=float)
 
     wavelength_domain = (np.min(wavelengths), np.max(wavelengths))
     x_of_wavelength = Legendre.fit(wavelengths, centroids, degree, domain=wavelength_domain, w=weights)

@@ -3,7 +3,7 @@ from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
-from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordinates
+from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.fringe import fit_smooth_fringe_spline
 from banzai_floyds.utils.telluric_utils import estimate_telluric
 from banzai_floyds.utils.flux_utils import airmass_extinction
@@ -38,6 +38,34 @@ def load_cosmic_ray_stamps() -> list:
         stamps_json = json.load(stamps_file)
     return [{'flux': np.array(stamp['flux'], dtype=np.float32),
             'flagged': np.array(stamp['flagged'], dtype=bool)} for stamp in stamps_json]
+
+
+def inject_cosmic_ray_stamps(frame, stamps: list, n_injections: int, rng: np.random.Generator,
+                             read_noise: float, detection_threshold: float = 5.0) -> tuple:
+    """Inject real cosmic-ray morphology stamps at random locations, in place.
+
+    Returns
+    -------
+    detectable: boolean array, same shape as frame.data
+        True at injected pixels whose cosmic-ray flux exceeds `detection_threshold` sigma in this
+        frame. Score completeness against this.
+    injected: boolean array, same shape
+        True wherever any cosmic-ray flux was added, including the faint halo pixels below the
+        threshold. Score false discovery against the complement of this, so that detecting a halo
+        pixel is not counted as a false positive.
+    """
+    ny, nx = frame.data.shape
+    signal = np.zeros((ny, nx))
+
+    for _ in range(n_injections):
+        stamp = stamps[rng.integers(len(stamps))]
+        h, w = stamp['flux'].shape
+        y0, x0 = rng.integers(0, ny - h), rng.integers(0, nx - w)
+        y1, x1 = y0 + h, x0 + w
+        frame.data[y0:y1, x0:x1] += stamp['flux']
+        signal[y0:y1, x0:x1] += stamp['flux']
+    frame.uncertainty[:] = np.sqrt(read_noise ** 2 + np.clip(frame.data, 0.0, None))
+    return signal / frame.uncertainty > detection_threshold, signal > 0
 
 
 def plot_array(data, overlays=None):
