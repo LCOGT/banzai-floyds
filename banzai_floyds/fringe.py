@@ -6,9 +6,11 @@ from banzai.utils.file_utils import make_calibration_filename_function
 from banzai.utils.stats import robust_standard_deviation
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from datetime import datetime
-from scipy.interpolate import CloughTocher2DInterpolator
-from scipy.ndimage import map_coordinates, spline_filter, binary_erosion
+from scipy.ndimage import map_coordinates, spline_filter, binary_erosion, distance_transform_edt
+from scipy.ndimage import binary_fill_holes
 from scipy.ndimage import median as labeled_median
+from scipy.sparse import csr_matrix
+from scipy.sparse.linalg import spsolve
 from scipy.signal import savgol_filter
 from banzai_floyds.matched_filter import optimize_match_filter, matched_filter_metric
 from banzai.logs import get_logger
@@ -34,8 +36,99 @@ MAX_FRINGE_OFFSET_Y = 8
 # extra pixel away from any invalid data on top of the stencil reach.
 FRINGE_EDGE_PAD = 3
 
+# How far from real data we are willing to interpolate the pattern across a masked region. Cosmic rays
+# and bad columns are a few pixels across, and the erosion by FRINGE_EDGE_PAD when stacking widens each
+# of them to at most ~7, so 8 covers the holes we actually see while stopping well short of the fringe
+# period (~25 pixels in x): the harmonic fill below chords across the pattern's curvature, so filling
+# holes an appreciable fraction of a period wide would start to flatten real fringes.
+INPAINT_MAX_DISTANCE = 8
 
-def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> np.ndarray:
+
+def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = None,
+                   max_distance: float = INPAINT_MAX_DISTANCE, fill_value: float = 1.0) -> tuple:
+    """
+    Fill masked pixels of a fringe pattern with a smooth interpolation of the surrounding pattern.
+
+    Cosmic rays and bad pixels are masked in the lamp flats, and anything masked in every flat (bad
+    columns, hot pixels) leaves a hole in the stacked master. Filling a hole with a constant leaves a
+    step at its edge, which costs us twice in the corrected science frame: the pixels inside the hole
+    keep their full fringe amplitude, and the cubic sampling stencil drags the constant into the few
+    pixels around it, so a mask a couple of pixels wide grows into a visible ring of under-corrected
+    pixels.
+
+    Instead we solve Laplace's equation inside the holes with the surrounding pattern as the Dirichlet
+    boundary condition,
+
+        ∇²f = 0,  f = data on the hole boundary,
+
+    discretized as the usual 5-point stencil, 4 f_i - Σ_neighbors f = 0, and solved directly (harmonic
+    inpainting; see the relaxation chapter of Numerical Recipes). The fill joins the data continuously
+    at the hole edge and the maximum principle keeps it free of interior extrema, so it neither steps
+    nor invents fringes. Pixels off the edge of the detector simply drop out of the stencil, which is
+    the natural (Neumann) boundary there.
+
+    Parameters
+    ----------
+    data: 2d array of fringe data, either the normalized pattern or raw counts
+    valid: 2d bool array marking pixels with real pattern data
+    region: optional 2d bool array limiting where we are willing to fill. The stacked master is
+        thresholded downstream to decide which pixels are correctable, so filling it outside the
+        orders would fabricate a usable pattern where there is none.
+    max_distance: float, only fill pixels this close to valid data, in pixels
+    fill_value: float, value given to pixels we do not fill. The default of 1 suits a normalized
+        pattern; pass something on the scale of the data (e.g. its median) when inpainting counts.
+
+    Returns
+    -------
+    filled: 2d array with the holes filled. Pixels we do not fill are set to fill_value, which keeps
+        the spline prefilter from ringing and is the Dirichlet value on the rim of a hole too wide
+        to fill.
+    to_fill: 2d bool array marking the pixels we interpolated, so callers that hand the pattern on to
+        a threshold rather than to the spline can tell a filled pixel from one we left alone
+    """
+    filled = np.where(valid, data, fill_value)
+    distance = distance_transform_edt(np.logical_not(valid))
+    to_fill = np.logical_and(np.logical_not(valid), distance <= max_distance)
+    if region is not None:
+        to_fill = np.logical_and(to_fill, region)
+    if not np.any(to_fill):
+        return filled, to_fill
+
+    # Number the unknowns so we can assemble the Laplacian over just the pixels we are filling
+    unknown_index = np.full(data.shape, -1, dtype=int)
+    n_unknown = int(np.count_nonzero(to_fill))
+    unknown_index[to_fill] = np.arange(n_unknown)
+
+    y, x = np.nonzero(to_fill)
+    center = unknown_index[y, x]
+    diagonal = np.zeros(n_unknown)
+    boundary = np.zeros(n_unknown)
+    rows, columns, values = [], [], []
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        neighbor_y, neighbor_x = y + dy, x + dx
+        on_detector = np.logical_and(np.logical_and(neighbor_y >= 0, neighbor_y < data.shape[0]),
+                                     np.logical_and(neighbor_x >= 0, neighbor_x < data.shape[1]))
+        diagonal += on_detector
+        neighbor_y, neighbor_x = neighbor_y[on_detector], neighbor_x[on_detector]
+        neighbor = unknown_index[neighbor_y, neighbor_x]
+        # Neighbors we are also solving for couple into the matrix; the rest are the boundary condition
+        is_unknown = neighbor >= 0
+        rows.append(center[on_detector][is_unknown])
+        columns.append(neighbor[is_unknown])
+        values.append(-np.ones(int(np.count_nonzero(is_unknown))))
+        np.add.at(boundary, center[on_detector][np.logical_not(is_unknown)],
+                  filled[neighbor_y[np.logical_not(is_unknown)], neighbor_x[np.logical_not(is_unknown)]])
+    rows.append(center)
+    columns.append(center)
+    values.append(diagonal)
+
+    laplacian = csr_matrix((np.concatenate(values), (np.concatenate(rows), np.concatenate(columns))),
+                           shape=(n_unknown, n_unknown))
+    filled[to_fill] = spsolve(laplacian, boundary)
+    return filled, to_fill
+
+
+def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> tuple:
     """
     Precompute cubic B-spline coefficients of a fringe pattern for fast shifted sampling.
 
@@ -51,12 +144,21 @@ def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> np
 
     Returns
     -------
-    2d array of spline coefficients to pass to sample_fringe
+    coefficients: 2d array of spline coefficients to pass to sample_fringe
+    samplable: 2d bool array of pixels whose pattern value is either real data or an interpolation of
+        it. Hand this to shifted_fringe_valid and fringe_fit_region in place of `valid`: a hole we
+        filled is no longer something the sampling stencil has to be kept away from.
     """
-    # Fill invalid pixels with 1 (no fringe modulation) so the global prefilter has no wild values
-    # to ring against. Samples must still stay FRINGE_EDGE_PAD away from invalid pixels.
-    filled = np.where(valid, data, 1.0)
-    return spline_filter(filled, order=3)
+    # Interpolate the pattern across masked pixels rather than stepping to the fill value at them,
+    # so the stencil and the prefilter have nothing sharp to ring against near a cosmic ray or a bad
+    # column. Pixels too far from real data to interpolate are still filled with 1.
+    filled, interpolated = inpaint_fringe(data, valid)
+    # A hole enclosed by real data was interpolated from all sides, so the pattern there is as good as
+    # the data around it. A gap that opens onto the outside of the footprint was extrapolated from one
+    # side only, and beyond max_distance the fill is just 1, so we still keep the stencil off those.
+    enclosed = np.logical_and(binary_fill_holes(valid), np.logical_not(valid))
+    samplable = np.logical_or(valid, np.logical_and(interpolated, enclosed))
+    return spline_filter(filled, order=3), samplable
 
 
 def sample_fringe(coefficients: np.ndarray, x: np.ndarray, y: np.ndarray,
@@ -216,12 +318,18 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     red_order2d = get_order_2d_region(image.orders.data == 1)
     y_min = int(np.ceil(np.max(y2d[red_order2d][0])))
     y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
+    # The slit grid differs from the detector grid only by the order center shear in y, and x is
+    # untouched, so every output point is a fractional shift along a detector column. Cubic B-splines
+    # on the detector grid do that directly, with the masked pixels inpainted first so the prefilter
+    # has nothing sharp to ring against. The harmonic fill also continues the pattern a few pixels
+    # past the edge of the order, which is where the stencil reaches when we sample the edge rows.
     to_interpolate = np.logical_and(red_order, image.mask == 0)
-    interpolator = CloughTocher2DInterpolator((x2d[to_interpolate].ravel(), y2d[to_interpolate].ravel()),
-                                              image.data[to_interpolate].ravel(), fill_value=1.0)
+    filled, _ = inpaint_fringe(image.data, to_interpolate, fill_value=np.median(image.data[to_interpolate]))
+    coefficients = spline_filter(filled, order=3)
     fringe_x2d, fringe_y2d = np.meshgrid(x_range, np.arange(y_min, y_max + 1))
 
-    fringe_data = interpolator(fringe_x2d.ravel(), fringe_y2d.ravel()).reshape(fringe_x2d.shape)
+    fringe_rows = fringe_y2d + image.orders.center(fringe_x2d)[0]
+    fringe_data = map_coordinates(coefficients, [fringe_rows, fringe_x2d], order=3, prefilter=False)
     # Pad the data to get to 2^N size in both dimensions for the wavelet transform
     pad_height = (2 ** level - fringe_data.shape[0] % (2 ** level)) % (2 ** level)
 
@@ -257,15 +365,24 @@ def fit_fringe_continuum(image, cutoff: float, wavelet: str = 'sym8', level: int
     """
     fringe_data, fringe_x2d, fringe_y2d = prepare_fringe_data(image, cutoff, level)
     continuum_model = make_fringe_continuum_model(fringe_data, wavelet, level)
-    fringe_interpolator = CloughTocher2DInterpolator((fringe_x2d.ravel(), fringe_y2d.ravel()),
-                                                     continuum_model.ravel(), fill_value=1)
+    # Coming back to the detector grid is the same shear in reverse, so it is again a per column
+    # spline interpolation. The model is a full rectangle with no holes, so it needs no inpainting.
+    continuum_coefficients = spline_filter(continuum_model, order=3)
     continuum_data = image.data.copy()
     x2d, y2d = np.meshgrid(np.arange(image.shape[1], dtype=float), np.arange(image.shape[0], dtype=float))
     y2d -= image.orders.center(x2d)[0]
     to_interpolate = np.logical_and(cutoff <= image.wavelengths.data, image.orders.data == 1)
     to_interpolate = np.logical_and(to_interpolate, y2d <= np.max(fringe_y2d))
     to_interpolate = np.logical_and(to_interpolate, y2d >= np.min(fringe_y2d))
-    continuum_data[to_interpolate] = fringe_interpolator(x2d[to_interpolate], y2d[to_interpolate])
+    # The wavelength cutoff is tilted relative to the columns, so a few pixels past the cutoff can
+    # fall off the blue end of the fit grid. Leaving them as a copy of the data makes the ratio one
+    # there, rather than dividing by whatever an extrapolation returns
+    to_interpolate = np.logical_and(to_interpolate, x2d <= np.max(fringe_x2d))
+    to_interpolate = np.logical_and(to_interpolate, x2d >= np.min(fringe_x2d))
+    rows = y2d[to_interpolate] - np.min(fringe_y2d)
+    columns = x2d[to_interpolate] - np.min(fringe_x2d)
+    continuum_data[to_interpolate] = map_coordinates(continuum_coefficients, [rows, columns],
+                                                     order=3, prefilter=False)
     return continuum_data
 
 
@@ -408,7 +525,8 @@ class FringeMaker(CalibrationMaker):
         # the continuum fit of low-count flats blow up the normalized data), not real fringing
         reference_valid = np.logical_and(reference_fringe > 0.1, reference_fringe < 2.5)
         reference_valid = np.logical_and(reference_valid, images[0].mask == 0)
-        reference_coefficients = fringe_interpolation_coefficients(reference_fringe, reference_valid)
+        reference_coefficients, reference_samplable = fringe_interpolation_coefficients(reference_fringe,
+                                                                                        reference_valid)
         super_fringe = np.zeros_like(images[0].data)
         super_fringe_weights = np.zeros_like(images[0].data)
         fringe_offsets = []
@@ -425,7 +543,7 @@ class FringeMaker(CalibrationMaker):
             normalized = image.data / image_norm
             # Find the position of the fringe pattern in this frame relative to the reference.
             # This shift is in absolute x, y pixels. Not relative to either order center
-            to_fit = fringe_fit_region(image, reference_valid, cutoff)
+            to_fit = fringe_fit_region(image, reference_samplable, cutoff)
             x_offset, y_offset = find_fringe_offset(normalized, image.uncertainty / image_norm, to_fit,
                                                     reference_coefficients)
             # Resample onto the reference pixel grid: reference(x, y) = image(x + dx, y + dy),
@@ -436,11 +554,15 @@ class FringeMaker(CalibrationMaker):
             # instead of letting them ring through the interpolation
             image_valid = np.logical_and(image_valid,
                                          np.logical_and(normalized > 0.1, normalized < 2.5))
-            image_coefficients = fringe_interpolation_coefficients(normalized, image_valid)
-            # We want a S/N of greater than 10 in the data to include it in the stack
-            image_valid = np.logical_and(image_valid, image.data / image.uncertainty > 10.0)
+            image_coefficients, image_samplable = fringe_interpolation_coefficients(normalized, image_valid)
             this_fringe = sample_fringe(image_coefficients, reference_x, reference_y, -x_offset, -y_offset)
-            this_valid = shifted_fringe_valid(image_valid, reference_x, reference_y, -x_offset, -y_offset)
+            this_valid = shifted_fringe_valid(image_samplable, reference_x, reference_y, -x_offset, -y_offset)
+            # We want a S/N of greater than 10 in the data to include it in the stack. That is a
+            # statement about the pixel we are sampling and not about its sampling stencil, so apply it
+            # pointwise instead of letting every noisy pixel erode a FRINGE_EDGE_PAD halo out of the stack
+            high_sn = image.data / image.uncertainty > 10.0
+            this_valid = np.logical_and(this_valid, shifted_fringe_valid(high_sn, reference_x, reference_y,
+                                                                         -x_offset, -y_offset, pad=0))
             if not np.any(this_valid):
                 logger.warning('No valid pixels overlap the reference grid. Not including frame in the '
                                'super fringe', image=image)
@@ -451,7 +573,18 @@ class FringeMaker(CalibrationMaker):
             fringe_offsets.append({'image': image.filename, 'offset_x': x_offset, 'offset_y': y_offset,
                                    'altitude': image.altitude})
         # write out the calibration frame
-        super_fringe[super_fringe_weights > 0] /= super_fringe_weights[super_fringe_weights > 0]
+        covered = super_fringe_weights > 0
+        super_fringe[covered] /= super_fringe_weights[covered]
+        # Anything masked in every flat (bad columns, hot pixels) is still a hole here. Downstream we
+        # only correct pixels where the master is > 0.1, so a hole would leave the science frame
+        # fringed exactly where the flats were worst. Interpolate the pattern across them, but only
+        # inside the orders: off the orders there is no pattern to extend and the same threshold would
+        # turn a fabricated value into a correctable pixel.
+        super_fringe, interpolated = inpaint_fringe(super_fringe, covered, region=reference_order)
+        # Everything we neither stacked nor interpolated has to go back to 0 so the threshold
+        # downstream rejects it: inpaint_fringe leaves those at 1, which would read as a flat,
+        # perfectly correctable pattern
+        super_fringe[np.logical_not(np.logical_or(covered, interpolated))] = 0.0
         make_calibration_name = make_calibration_filename_function(self.calibration_type,
                                                                    self.runtime_context)
         master_calibration_filename = make_calibration_name(
@@ -593,7 +726,7 @@ class FringeCorrector(Stage):
         # Only use the fringe pattern where it is > 0.1 so we don't amplify
         # artifacts due to the edge of the slit
         fringe_valid = image.fringe > 0.1
-        fringe_coefficients = fringe_interpolation_coefficients(image.fringe, fringe_valid)
+        fringe_coefficients, fringe_samplable = fringe_interpolation_coefficients(image.fringe, fringe_valid)
         logger.info('Fitting fringe offset', image=image)
         # The matched filter needs data that oscillates about 1. Lamp flats that have been through
         # FringeContinuumFitter carry their wavelet continuum in the CONTINUUM extension; science
@@ -603,17 +736,17 @@ class FringeCorrector(Stage):
             continuum = image['CONTINUUM'].data
         else:
             continuum = fit_science_fringe_continuum(image, cutoff)
-        fringe_snr = fringe_signal_to_noise(image, continuum, fringe_valid, cutoff)
+        fringe_snr = fringe_signal_to_noise(image, continuum, fringe_samplable, cutoff)
         if fringe_snr < self.MIN_FRINGE_SNR:
             logger.warning(f'Per-pixel fringe S/N of {fringe_snr:.1f} is too low to constrain the '
                            'pattern shift. Applying the master fringe unshifted.', image=image)
             x_offset, y_offset = 0.0, 0.0
         elif is_lampflat:
             x_offset, y_offset = fit_fringe_shift(image, continuum, fringe_coefficients,
-                                                  fringe_valid, cutoff)
+                                                  fringe_samplable, cutoff)
         else:
             x_offset, y_offset = fit_fringe_shift(image, continuum, fringe_coefficients,
-                                                  fringe_valid, cutoff)
+                                                  fringe_samplable, cutoff)
             # The sky median in that first continuum was fit on fringed data, so it absorbed the
             # slit-common part of the pattern and the fit above only saw the leftover half or so
             # of the fringe amplitude. Defringe a copy of the frame with the first-pass shift,
@@ -621,15 +754,15 @@ class FringeCorrector(Stage):
             # now carries the full pattern. One round trip is enough: the first-pass shift is
             # already good to a fraction of a pixel because the trace dominates the matched
             # filter, so the second continuum sees essentially defringed data.
-            first_pass = evaluate_fringe_correction(image, fringe_coefficients, fringe_valid,
+            first_pass = evaluate_fringe_correction(image, fringe_coefficients, fringe_samplable,
                                                     x_offset, y_offset, cutoff)
             defringed = image.data.copy()
             defringed[first_pass > 0.1] /= first_pass[first_pass > 0.1]
             continuum = fit_science_fringe_continuum(image, cutoff, data=defringed)
             x_offset, y_offset = fit_fringe_shift(image, continuum, fringe_coefficients,
-                                                  fringe_valid, cutoff)
+                                                  fringe_samplable, cutoff)
         logger.info('Correcting for fringing', image=image)
-        fringe_correction = evaluate_fringe_correction(image, fringe_coefficients, fringe_valid,
+        fringe_correction = evaluate_fringe_correction(image, fringe_coefficients, fringe_samplable,
                                                        x_offset, y_offset, cutoff)
         to_correct = fringe_correction > 0.1
         image.data[to_correct] /= fringe_correction[to_correct]

@@ -1,6 +1,7 @@
 import numpy as np
 from banzai_floyds.fringe import FringeMaker, FringeCorrector
 from banzai_floyds.fringe import fringe_interpolation_coefficients, fringe_fit_region, find_fringe_offset
+from banzai_floyds.fringe import inpaint_fringe
 from banzai_floyds.fringe import prepare_fringe_data, make_fringe_continuum_model
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai import context
@@ -19,8 +20,8 @@ def test_find_fringe_offset_flats():
     frame.uncertainty[:, :] = 0.01
     # Fit the offsets against the super fringe pattern
     fringe_valid = frame.fringe > 0.1
-    coefficients = fringe_interpolation_coefficients(frame.fringe, fringe_valid)
-    to_fit = fringe_fit_region(frame, fringe_valid, 4700.0)
+    coefficients, samplable = fringe_interpolation_coefficients(frame.fringe, fringe_valid)
+    to_fit = fringe_fit_region(frame, samplable, 4700.0)
     best_fit_offsets = find_fringe_offset(frame.data, frame.uncertainty, to_fit, coefficients)
     # assert that the offsets are correct
     np.testing.assert_allclose(best_fit_offsets,
@@ -46,10 +47,143 @@ def test_find_fringe_offset_eroded_master():
     eroded_fringe[slit_coordinates > 40.0] = 0.0
     eroded_fringe[:, 800:816] = 0.0
     fringe_valid = eroded_fringe > 0.1
-    coefficients = fringe_interpolation_coefficients(eroded_fringe, fringe_valid)
-    to_fit = fringe_fit_region(frame, fringe_valid, 4700.0)
+    coefficients, samplable = fringe_interpolation_coefficients(eroded_fringe, fringe_valid)
+    to_fit = fringe_fit_region(frame, samplable, 4700.0)
     best_fit_offsets = find_fringe_offset(frame.data, frame.uncertainty, to_fit, coefficients)
     np.testing.assert_allclose(best_fit_offsets, (2.0, 3.0), atol=0.2)
+
+
+def test_inpaint_fringe():
+    # A fringe-like pattern: a ~25 pixel period in x like the real pattern at the red end of the
+    # order, modulated slowly along the slit
+    ny, nx = 120, 400
+    y2d, x2d = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
+    pattern = 1.0 + 0.25 * (1.0 + 0.2 * np.cos(0.05 * y2d)) * np.sin(2.0 * np.pi * x2d / 25.0)
+
+    valid = np.ones(pattern.shape, dtype=bool)
+    # A bad column, as wide as the stacking erosion leaves it
+    valid[:, 200:207] = False
+    # A compact cosmic ray
+    valid[40:45, 100:105] = False
+    # A gap too wide to interpolate across honestly
+    valid[:, 300:340] = False
+    filled, interpolated = inpaint_fringe(pattern, valid)
+
+    cosmic_ray = np.zeros(pattern.shape, dtype=bool)
+    cosmic_ray[40:45, 100:105] = True
+    assert np.all(interpolated[cosmic_ray])
+    # A cosmic ray is small compared to the fringe period, so the pattern is nearly linear across it
+    np.testing.assert_allclose(filled[cosmic_ray], pattern[cosmic_ray], atol=0.03)
+
+    bad_column = np.zeros(pattern.shape, dtype=bool)
+    bad_column[:, 200:207] = True
+    assert np.all(interpolated[bad_column])
+    # A gap a quarter of a period wide gets chorded across so we only recover the pattern to about
+    # 40% of its amplitude, still several times better than stepping to the fill value
+    np.testing.assert_allclose(filled[bad_column], pattern[bad_column], atol=0.11)
+    assert np.abs(filled[bad_column] - pattern[bad_column]).max() < \
+        0.5 * np.abs(1.0 - pattern[bad_column]).max()
+
+    # The middle of the wide gap has nothing to interpolate from, so it stays at 1 and is reported as
+    # untouched rather than filled with a fabricated pattern
+    assert not np.any(interpolated[:, 315:325])
+    np.testing.assert_allclose(filled[:, 315:325], 1.0)
+
+    # The fill joins the data continuously: no step at the hole edge beyond the pattern's own slope
+    assert np.abs(np.diff(filled[60, 195:212])).max() < \
+        1.5 * np.abs(np.diff(pattern[60, 195:212])).max()
+
+
+def test_masked_pixels_do_not_erode_the_usable_region():
+    # A hole we interpolated is not something the sampling stencil has to be kept away from, so a
+    # cosmic ray should cost us the masked pixels themselves rather than a halo around each one. In
+    # the offset fit region that halo is the size of the whole search window, so avoiding the masks
+    # instead of interpolating them threw away a wildly disproportionate amount of the frame.
+    np.random.seed(55123)
+    frame = generate_fake_science_frame(flat_spectrum=False, include_sky=False, fringe=True,
+                                        fringe_offset=0, background=6000.0, include_trace=False,
+                                        include_super_fringe=True)
+    _, clean_samplable = fringe_interpolation_coefficients(frame.fringe, frame.fringe > 0.1)
+    clean_region = fringe_fit_region(frame, clean_samplable, 4700.0).sum()
+
+    rng = np.random.default_rng(4321)
+    for _ in range(300):
+        y0, x0 = rng.integers(0, frame.data.shape[0] - 3), rng.integers(0, frame.data.shape[1] - 3)
+        frame.mask[y0:y0 + 2, x0:x0 + 2] |= 8
+    masked_valid = np.logical_and(frame.fringe > 0.1, frame.mask == 0)
+    _, masked_samplable = fringe_interpolation_coefficients(frame.fringe, masked_valid)
+
+    # Interpolating the holes keeps essentially the whole fit region: the only pixels we lose are the
+    # masked ones themselves, which fringe_fit_region already cuts pointwise
+    assert fringe_fit_region(frame, masked_samplable, 4700.0).sum() > 0.99 * clean_region
+    # Keeping the stencil off them instead costs more than ten percent of the fit region for a mask
+    # covering well under one percent of the frame
+    assert fringe_fit_region(frame, masked_valid, 4700.0).sum() < 0.9 * clean_region
+
+
+def test_super_fringe_interpolates_pixels_masked_in_every_flat():
+    np.random.seed(76231)
+    # A bad column is masked in every flat, so nothing in the stack covers it. Left as a hole, the
+    # master falls below the threshold the corrector uses and the science frame comes out still
+    # fringed in a stripe, so check that the master is filled and that the correction stays clean.
+    bad_columns = [900, 901]
+    frames = []
+    for fringe_offset in [0.0, 2.5, -3.0, 4.0]:
+        frame = generate_fake_science_frame(flat_spectrum=False, include_sky=False, fringe=True,
+                                            fringe_offset=fringe_offset, background=6000.0,
+                                            include_trace=False)
+        frame.mask[:, bad_columns] |= 1
+        frames.append(frame)
+    input_context = context.Context({
+        'CALIBRATION_MIN_FRAMES': {'LAMPFLAT': 2},
+        'TELESCOPE_FILENAME_FUNCTION': 'banzai.utils.file_utils.telescope_to_filename',
+        'CALIBRATION_FILENAME_FUNCTIONS': {'LAMPFLAT': ('banzai_floyds.utils.file_utils.lampflat_config_to_filename',
+                                                        'banzai_floyds.utils.file_utils.slit_width_to_filename')},
+        'CALIBRATION_SET_CRITERIA': {'LAMPFLAT': []},
+        'CALIBRATION_FRAME_CLASS': 'banzai_floyds.frames.FLOYDSCalibrationFrame',
+        'MASTER_CALIBRATION_EXTENSION_ORDER': {'LAMPFLAT': ['SPECTRUM', 'FRINGE']},
+        'CALIBRATE_PROPOSAL_ID': 'calibrate',
+        'FRINGE_CUTOFF_WAVELENGTH': 4700.0
+    })
+    master = FringeMaker(input_context).do_stage(frames)
+
+    trimmed_order = frames[0].orders.new(frames[0].orders.order_heights - 20)
+    in_order = trimmed_order.data == 1
+    x2d, _ = np.meshgrid(np.arange(master.data.shape[1]), np.arange(master.data.shape[0]))
+    at_columns = np.logical_and(in_order, np.isin(x2d, bad_columns))
+    # The master has a real pattern at the bad columns rather than a hole below the 0.1 threshold
+    assert np.all(master.data[at_columns] > 0.1)
+    # and the interpolated pattern is no further from the truth there than the stacking noise
+    # everywhere else, so the fill is not the limiting error in the master
+    away_from_columns = np.logical_and(in_order, np.abs(x2d - np.mean(bad_columns)) > 20)
+    interpolation_error = np.abs(master.data[at_columns] - frames[0].input_fringe[at_columns])
+    stacking_error = np.abs(master.data[away_from_columns] - frames[0].input_fringe[away_from_columns])
+    assert interpolation_error.max() < stacking_error.max()
+
+    # Correcting a science frame with this master should leave no stripe at the bad columns
+    np.random.seed(981435)
+    science_frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True, fringe=True,
+                                                fringe_offset=3.5, fringe_offset_x=1.5,
+                                                include_super_fringe=True)
+    original_data = science_frame.data.copy()
+    science_frame.fringe = master.data
+    output_frame = FringeCorrector(context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0})).do_stage(science_frame)
+
+    x2d, _ = np.meshgrid(np.arange(science_frame.data.shape[1]), np.arange(science_frame.data.shape[0]))
+    # Stay well inside the order so the edge rows, which are uncorrectable for unrelated reasons,
+    # do not contaminate the comparison
+    trimmed_science = science_frame.orders.new(science_frame.orders.order_heights - 30)
+    fringe_region = np.logical_and(trimmed_science.data == 1, science_frame.wavelengths.data >= 6000.0)
+    fringe_region = np.logical_and(fringe_region, np.logical_and(x2d > 15, x2d < 1685))
+    # Every pixel at the bad columns gets corrected, rather than being skipped and left fringed
+    assert not np.any(np.logical_and(np.logical_and(fringe_region, np.isin(x2d, bad_columns)),
+                                     output_frame['FRINGE'].data <= 0.1))
+    expected = original_data / science_frame.input_fringe
+    residual = np.abs(output_frame.data - expected) / np.abs(expected)
+    near_columns = np.logical_and(fringe_region, np.abs(x2d - np.mean(bad_columns)) <= 4)
+    far_from_columns = np.logical_and(fringe_region, np.abs(x2d - np.mean(bad_columns)) > 20)
+    # Without the interpolation the residual at the columns runs ~25x the rest of the frame
+    assert np.median(residual[near_columns]) < 10.0 * np.median(residual[far_from_columns])
 
 
 def test_create_super_fringe():

@@ -4,6 +4,18 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
+- Masked pixels in the lamp flats (cosmic rays, bad columns) no longer leave artifacts in the
+  corrected frames. We now interpolate the fringe pattern across them by solving Laplace's
+  equation in the hole with the surrounding pattern as the boundary condition, both when
+  sampling a pattern and when filling pixels that were masked in every flat and so left a hole
+  in the stacked master. Previously those pixels were filled with a constant, which left the
+  science frame fully fringed inside the hole and under-corrected in a ring around it.
+- Masked pixels no longer erode the region we stack and fit the fringe offset over. A hole that is
+  enclosed by real data is interpolated, so the sampling stencil no longer has to be kept clear of
+  it; only gaps that open onto the outside of the footprint still are. The S/N cut on the stack is
+  now applied pixel by pixel rather than through the same erosion. Together these recover nearly all
+  of the area masked pixels used to cost: a mask covering under 1% of a flat was shrinking the offset
+  fit region by ~16%, and now costs only the masked pixels themselves.
 - Widened the fringe shift search window to +-8 pixels in x (matching y); this still stays
   inside the half fringe period that keeps the matched-filter metric unimodal.
 - Pixels above 2.5 in the continuum-normalized flats are now excluded when stacking fringe

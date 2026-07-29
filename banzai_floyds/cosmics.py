@@ -40,8 +40,8 @@ def flag_lampflat_cosmic_rays(image, cutoff: float, sigma_threshold: float = 5.0
         return cr_mask
 
     fringe_valid = image.fringe > min_shape_value
-    fringe_coefficients = fringe_interpolation_coefficients(image.fringe, fringe_valid)
-    to_fit = fringe_fit_region(image, fringe_valid, cutoff)
+    fringe_coefficients, fringe_samplable = fringe_interpolation_coefficients(image.fringe, fringe_valid)
+    to_fit = fringe_fit_region(image, fringe_samplable, cutoff)
     if not np.any(to_fit):
         logger.info('No valid pixels overlap the master LAMPFLAT, skipping cosmic ray flagging', image=image)
         return cr_mask
@@ -62,7 +62,7 @@ def flag_lampflat_cosmic_rays(image, cutoff: float, sigma_threshold: float = 5.0
         shifted_shape[order_y, order_x] = sample_fringe(fringe_coefficients, order_x, order_y,
                                                         x_offset, y_offset)
         on_master = np.zeros(image.data.shape, dtype=bool)
-        on_master[order_y, order_x] = shifted_fringe_valid(fringe_valid, order_x, order_y,
+        on_master[order_y, order_x] = shifted_fringe_valid(fringe_samplable, order_x, order_y,
                                                            x_offset, y_offset, pad=0)
         valid = np.logical_and(np.logical_and(in_order, on_master), shifted_shape > min_shape_value)
         if not np.any(valid):
