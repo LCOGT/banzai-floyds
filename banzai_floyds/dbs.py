@@ -365,6 +365,45 @@ def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selecti
     return calibration_image
 
 
+def get_unstacked_same_block_cals(image, calibration_type: str, selection_criteria: list, db_address: str) -> list:
+    """Find the individual, unstacked calibrations taken in the same observing block as a frame.
+    This includes is_master=False frames, as opposed to other banzai calibration queries.
+
+
+    image: FLOYDSObservationFrame
+        The observation frame to find calibrations for
+    calibration_type: str
+        The obstype of calibration frame to search for
+    selection_criteria: list
+        The list of attributes to match against the calibration frames
+    db_address: str
+        The address of the database to use (SQLAlchemy format)
+
+    Returns
+    -------
+    list of FLOYDSCalibrationImage records ordered by dateobs, empty if the image has no block id
+    """
+    if image.blockid is None:
+        return []
+    calibration_criteria = FLOYDSCalibrationImage.type == calibration_type.upper()
+    calibration_criteria &= FLOYDSCalibrationImage.instrument_id == image.instrument.id
+    calibration_criteria &= FLOYDSCalibrationImage.is_master.is_(False)
+    calibration_criteria &= FLOYDSCalibrationImage.is_bad.is_(False)
+    calibration_criteria &= FLOYDSCalibrationImage.blockid == image.blockid
+
+    for criterion in selection_criteria:
+        # We have to cast to strings according to the sqlalchemy docs for version 1.3:
+        # https://docs.sqlalchemy.org/en/latest/core/type_basics.html?highlight=json#sqlalchemy.types.JSON
+        calibration_criteria &= FLOYDSCalibrationImage.attributes[criterion].as_string() ==\
+                                str(getattr(image, criterion))
+
+    with get_session(db_address=db_address) as db_session:
+        image_filter = db_session.query(FLOYDSCalibrationImage).filter(calibration_criteria)
+        # We choose the first flat in the block as convention to images[0]
+        # if we happen to need to stack multiple flats from the same block
+        return image_filter.order_by(FLOYDSCalibrationImage.dateobs).all()
+
+
 def save_calibration_info(calibration_image: FLOYDSCalibrationImage, db_address):
     record_attributes = vars(calibration_image)
     # There is not a clean way to back a dict object from a calibration image object without this instance state

@@ -4,8 +4,9 @@ from banzai.stages import Stage
 from banzai.logs import get_logger
 from scipy import ndimage
 
-from banzai_floyds.fringe import (fringe_interpolation_coefficients, sample_fringe, shifted_fringe_valid,
+from banzai_floyds.fringe import (fringe_interpolation_coefficients, sample_fringe,
                                   fringe_fit_region, find_fringe_offset)
+from banzai_floyds.frames import MIN_FRINGE_VALUE
 
 
 logger = get_logger()
@@ -30,7 +31,7 @@ def update_binned_mask(image, cr_mask: np.ndarray, bit: int = 8) -> None:
 
 
 def flag_lampflat_cosmic_rays(image, cutoff: float, sigma_threshold: float = 5.0,
-                              min_shape_value: float = 0.1, order_edge_buffer: int = 2) -> np.ndarray:
+                              min_shape_value: float = MIN_FRINGE_VALUE, order_edge_buffer: int = 2) -> np.ndarray:
     """Flag cosmic rays in a LAMPFLAT comparing to the shifted stacked master.
 
     """
@@ -59,11 +60,10 @@ def flag_lampflat_cosmic_rays(image, cutoff: float, sigma_threshold: float = 5.0
         in_order = np.logical_and(image.orders.data == order_id, np.logical_not(bad))
         order_x, order_y = x2d[in_order], y2d[in_order]
         shifted_shape = np.zeros(image.data.shape)
-        shifted_shape[order_y, order_x] = sample_fringe(fringe_coefficients, order_x, order_y,
-                                                        x_offset, y_offset)
         on_master = np.zeros(image.data.shape, dtype=bool)
-        on_master[order_y, order_x] = shifted_fringe_valid(fringe_samplable, order_x, order_y,
-                                                           x_offset, y_offset, pad=0)
+        shifted_shape[order_y, order_x], on_master[order_y, order_x] = sample_fringe(
+            fringe_coefficients, order_x, order_y, x_offset, y_offset, valid=fringe_samplable
+        )
         valid = np.logical_and(np.logical_and(in_order, on_master), shifted_shape > min_shape_value)
         if not np.any(valid):
             continue
@@ -128,7 +128,7 @@ class LampFlatCosmicRayComparer(Stage):
     in the flats (fringes) are sharp like sky lines, so astroscrappy doesn't work well.
     """
     SIGMA_THRESHOLD = 5.0
-    MIN_SHAPE_VALUE = 0.1
+    MIN_SHAPE_VALUE = MIN_FRINGE_VALUE
     ORDER_EDGE_BUFFER = 2
 
     def do_stage(self, image):

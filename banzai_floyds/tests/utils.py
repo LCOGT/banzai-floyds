@@ -12,6 +12,8 @@ import numpy as np
 from astropy.io import fits
 from banzai.data import CCDData
 from numpy.polynomial.legendre import Legendre
+from scipy.ndimage import map_coordinates
+from functools import lru_cache
 from astropy.io import ascii
 import importlib.resources
 from types import SimpleNamespace
@@ -24,6 +26,9 @@ import os
 
 SKYLINE_LIST = ascii.read(os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data/skylines.dat'))
 COSMIC_RAY_STAMPS_PATH = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data/cosmic_ray_stamps.json')
+FRINGE_PATTERN_PATH = os.path.join(importlib.resources.files('banzai_floyds.tests'), 'data/fringe_pattern.json')
+# How far past the ends of the stored fringe pattern the fringes take to die away, in Angstroms
+FRINGE_TAPER_LENGTH = 100.0
 
 
 def load_cosmic_ray_stamps() -> list:
@@ -66,6 +71,47 @@ def inject_cosmic_ray_stamps(frame, stamps: list, n_injections: int, rng: np.ran
         signal[y0:y1, x0:x1] += stamp['flux']
     frame.uncertainty[:] = np.sqrt(read_noise ** 2 + np.clip(frame.data, 0.0, None))
     return signal / frame.uncertainty > detection_threshold, signal > 0
+
+
+@lru_cache(maxsize=1)
+def load_fringe_pattern(path: str = FRINGE_PATTERN_PATH) -> dict:
+    """Load the real fringe pattern harvested from a master fringe frame."""
+    with open(path) as pattern_file:
+        stored = json.load(pattern_file)
+    return {key: np.asarray(value, dtype=float) if isinstance(value, list) else value
+            for key, value in stored.items()}
+
+
+def fringe_pattern(wavelength: np.ndarray, slit_position: np.ndarray, pattern: dict = None,
+                   taper: float = FRINGE_TAPER_LENGTH) -> np.ndarray:
+    """
+    Evaluate a real FLOYDS fringe pattern at a set of wavelengths and slit positions.
+    This model was extracted from characterization_testing/harvest_fringe_pattern.py.
+
+    Parameters
+    ----------
+    wavelength: array of wavelengths in Angstroms
+    slit_position: array of positions along the slit relative to the order center, in pixels
+    pattern: optional dict of the stored grid, defaulting to the harvested one
+    taper: length in Angstroms over which the fringes die away past the ends of the stored pattern
+
+    Returns
+    -------
+    array of the fringe modulation, oscillating about 1, the same shape as the inputs
+    """
+    if pattern is None:
+        pattern = load_fringe_pattern()
+    grid_wavelengths, slit_positions = pattern['wavelengths'], pattern['slit_positions']
+    wavelength_step = grid_wavelengths[1] - grid_wavelengths[0]
+    slit_step = slit_positions[1] - slit_positions[0]
+    in_grid = np.clip(wavelength, grid_wavelengths[0], grid_wavelengths[-1])
+    # Clip the indices as well as the coordinates: map_coordinates fills anything that lands outside
+    # the grid with zero, which would read as a pattern that nulls out rather than one we ran out of
+    columns = np.clip((in_grid - grid_wavelengths[0]) / wavelength_step, 0.0, len(grid_wavelengths) - 1.0)
+    rows = np.clip((slit_position - slit_positions[0]) / slit_step, 0.0, len(slit_positions) - 1.0)
+    modulation = map_coordinates(pattern['coefficients'], [rows, columns], order=3, prefilter=False) - 1.0
+    modulation *= 0.5 * (1.0 + np.cos(np.pi * np.clip(np.abs(wavelength - in_grid) / taper, 0.0, 1.0)))
+    return 1.0 + modulation
 
 
 def fit_smooth_fringe_spline(data, data_region):
@@ -219,23 +265,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                                                sky_spectrum) * illumination
             data[in_order] += input_sky[in_order]
     if fringe:
-        # A 90 Angstrom period is ~25 pixels in x at the red end, matching the real pattern. Keeping
-        # the period realistic matters for the offset fit tests: the +-8 pixel search window is only
-        # safely inside the half period (no aliased peak one period over) if the period is this long
-        fringe_wave_number = 2.0 * np.pi / 90.0
         expanded_orders = orders.new(expanded_order_height)
-        # Real fringe patterns are not purely a function of wavelength because the CCD thickness
-        # varies across the chip, so modulate the fake pattern's amplitude along the slit.
-        # A pattern that only depends on wavelength is invariant along the tilted iso-wavelength
-        # contours, which makes the (x, y) offsets of the pattern degenerate along that direction.
-        # Note a phase shift along the slit is not enough: that just shears the contours and
-        # leaves the same one-parameter family of equivalent offsets.
         slit_coordinates = y2d - orders.center(x2d)[0]
-        # The 0.25 amplitude coefficient (peak modulation ~30% at the red end) is also chosen to be
-        # realistic: at this fringe period the wavelet continuum fit leaks a fraction of the fringe
-        # amplitude, so an exaggerated amplitude fails the continuum tests for reasons real data doesn't
-        super_fringe_frame = 1.0 + 0.25 * (x2d / np.max(x2d)) * (1.0 + 0.25 * np.cos(0.25 * slit_coordinates)) \
-            * np.sin(fringe_wave_number * wavelengths.data)
+        super_fringe_frame = fringe_pattern(wavelengths.data, slit_coordinates)
         super_fringe_frame[expanded_orders.data != 1] = 0.0
         super_fringe_spline = fit_smooth_fringe_spline(super_fringe_frame, expanded_orders.data == 1)
         in_red_order = orders.data == 1
@@ -271,7 +303,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     if include_sky:
         frame.input_sky = input_sky
     if fringe:
-        frame.fringe_wave_number = fringe_wave_number
         frame.input_fringe_shift = input_fringe_shift
         frame.input_fringe_shift_x = fringe_offset_x
         frame.input_fringe = input_fringe_frame

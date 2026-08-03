@@ -10,6 +10,23 @@ from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to
 from astropy.table import Table
 from banzai_floyds import dbs
 
+# Set the bounds for what we conside a valid fringe
+MIN_FRINGE_VALUE = 0.1
+MAX_FRINGE_VALUE = 2.5
+
+# Mask bits on the master fringe frame.
+FRINGE_INTERPOLATED = 16
+FRINGE_NO_PATTERN = 32
+
+
+class NoUsableFringePattern(Exception):
+    """Raised when a fringe pattern has no pixels we could correct a frame with."""
+
+
+def valid_fringe_pixels(fringe: np.ndarray) -> np.ndarray:
+    """Pixels of a fringe pattern that carry real fringing rather than slit edges or division artifacts."""
+    return np.logical_and(fringe > MIN_FRINGE_VALUE, fringe < MAX_FRINGE_VALUE)
+
 
 class FLOYDSObservationFrame(LCOObservationFrame):
     def __init__(self, hdu_list: list, file_path: str, frame_id: int = None, hdu_order: list = None):
@@ -20,7 +37,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self._binned_data = None
         self._extracted = None
         self._spectrum = None
-        self.fringe = None
+        self._fringe = None
         self._sensitivity = None
         self._telluric = None
         self.background_windows = None
@@ -218,6 +235,31 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     def sensitivity(self, value):
         self._sensitivity = value
         self.add_or_update(DataTable(value, name='SENSITIVITY', meta=fits.Header({})))
+
+    @property
+    def fringe(self):
+        return self._fringe
+
+    @fringe.setter
+    def fringe(self, value):
+        """
+        Store a fringe pattern, zeroing the pixels that should not be corrected with.
+
+        Everything downstream reads a zero in the pattern as "no fringing here". A pattern with nothing left to correct with is an error rather than a pattern
+        that silently corrects nothing.
+        """
+        if value is None:
+            self._fringe = None
+            return
+        fringe = np.where(valid_fringe_pixels(value), value, 0.0)
+        if not np.any(fringe):
+            raise NoUsableFringePattern(f'No pixels of the fringe pattern are between {MIN_FRINGE_VALUE} '
+                                        f'and {MAX_FRINGE_VALUE}')
+        self._fringe = fringe
+        if 'FRINGE' in self:
+            self['FRINGE'].data[:, :] = fringe
+        else:
+            self.add_or_update(ArrayData(fringe.astype(np.float32), name='FRINGE', meta=fits.Header({})))
 
     @property
     def wavelengths(self):

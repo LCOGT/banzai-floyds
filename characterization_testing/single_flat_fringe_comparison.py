@@ -3,8 +3,8 @@
 Every science frame in the characterization set has a lamp flat taken in the same observing
 block (checked via BLKUID), which shares the science frame's flexure state. This runs each
 science frame through the fringe corrector twice: once as the pipeline does (arm "stacked",
-super fringe master from the calibration db) and once with the master replaced by the
-continuum-normalized same-block flat, i.e. the processed w91's SCI data (arm "single").
+super fringe master from the calibration db) and once with the master replaced by the same-block
+flat's own pattern, i.e. the processed w91's FRINGE extension (arm "single").
 
 The trade-off being measured: the single flat wins on alignment (it was taken at the same
 flexure state, so no shift fit is needed and there is no footprint erosion or constituent
@@ -70,23 +70,18 @@ def build_flat_map() -> dict:
 
 def single_flat_apply(self, image, master_calibration_image):
     """Stand-in for FringeLoader.apply_master_calibration that ignores the stacked master and
-    loads the continuum-normalized same-block flat as the fringe pattern instead."""
+    loads the same-block flat's own fringe pattern instead."""
     flat_path = _flat_for_block.get(block_id(image.meta))
     if flat_path is None:
         raise ValueError(f'no same-block lamp flat for BLKUID {block_id(image.meta)}')
     hdus = fits.open(flat_path)
-    pattern = np.zeros(hdus['SCI'].data.shape)
-    in_order = hdus['ORDERS'].data == 1
-    pattern[in_order] = hdus['SCI'].data[in_order]
-    # The same validity bounds FringeMaker uses when stacking: below 0.1 we are off the edge of
-    # the slit, above 2.5 we are on a continuum-division artifact rather than real fringing
-    bad = np.logical_or(pattern < 0.1, pattern > 2.5)
-    bad = np.logical_or(bad, hdus['BPM'].data != 0)
-    pattern[bad] = 0.0
+    # Setting the fringe pattern cuts it down to the pixels that are worth correcting with
+    image.fringe = hdus['FRINGE'].data
     # The flat's per-pixel noise divides straight into the science frame; record it so the
-    # comparison can tell a noise-floor loss from an alignment loss
-    _state['flat_noise'] = float(np.median(hdus['ERR'].data[pattern > 0]))
-    image.fringe = pattern
+    # comparison can tell a noise-floor loss from an alignment loss. The flat's data is the
+    # continuum its pattern was divided by, so the fractional noise is ERR / SCI
+    has_pattern = image.fringe > 0
+    _state['flat_noise'] = float(np.median(hdus['ERR'].data[has_pattern] / hdus['SCI'].data[has_pattern]))
     image.meta['L1IDFRNG'] = (os.path.basename(flat_path), 'ID of Fringe frame')
     return image
 

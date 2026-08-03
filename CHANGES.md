@@ -16,6 +16,11 @@ Versions
   now applied pixel by pixel rather than through the same erosion. Together these recover nearly all
   of the area masked pixels used to cost: a mask covering under 1% of a flat was shrinking the offset
   fit region by ~16%, and now costs only the masked pixels themselves.
+- Processed lamp flats now carry their own fringe pattern in a FRINGE extension, the way a stacked
+  master does, so a single flat from a science frame's own block can calibrate it directly. Their
+  SCI extension holds the fitted lamp continuum (SCI x FRINGE returns the flat) and the CONTINUUM
+  extension is gone. FringeContinuumFitter and FringeContinuumNormalizer are replaced by the single
+  FringeExtractor stage.
 - Widened the fringe shift search window to +-8 pixels in x (matching y); this still stays
   inside the half fringe period that keeps the matched-filter metric unimodal.
 - Pixels above 2.5 in the continuum-normalized flats are now excluded when stacking fringe

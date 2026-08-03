@@ -23,6 +23,7 @@ dependencies = [
     "torch",
     "ipython",
     "pywavelets",
+    "scikit-image",
     "alembic"
 ]
 

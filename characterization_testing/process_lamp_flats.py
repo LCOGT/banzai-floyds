@@ -1,13 +1,6 @@
 """Download and reduce the raw FLOYDS lamp flats (w00) over the same date ranges as the
 wavelength-residuals runs, then stack them into fringe master calibrations.
 
-This mirrors make_residuals_pdf.py (and reuses its query params, download, and worker-pool
-machinery) but pulls lamp flats instead of arcs so we can characterize the fringe correction
-on the same epochs we used to validate the wavelength solutions. Individual w00 frames run
-through the pipeline (order location, wavelengths, fringe continuum fit) to produce w91s;
-the stacking step then builds the super-fringe frames per instrument/slit via FringeMaker,
-exactly as FringeFrameMaker.ipynb does.
-
 Run from the characterization_testing directory, after the WavelengthCalibration.ipynb setup
 cells have created test_data/test.db (and ideally after make_residuals_pdf.py, so the arcs are
 in the calibration database for the wavelength warm starts):
@@ -26,8 +19,7 @@ os.environ.setdefault('DB_ADDRESS', 'sqlite:///test_data/test.db')
 
 import requests
 
-# Reuse the archive query windows and the download/worker machinery from the arc runs so the
-# two datasets stay in lockstep.
+# Reuse the archive query windows and the download/worker machinery from the arc runs
 from make_residuals_pdf import (QUERY_PARAMS_SETS, ARCHIVE_FRAMES_URL, RAW_DIR,
                                 download_frame, process_frames)
 
