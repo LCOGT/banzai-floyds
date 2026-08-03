@@ -16,7 +16,7 @@ Each page of the PDF shows one frame:
   * the signal-to-noise per wavelength bin.
 
 Run from the characterization_testing directory after the WavelengthCalibration.ipynb setup
-cells have created test_data/test.db (and ideally after make_residuals_pdf.py and
+cells have created test_data/test.db (and ideally after process_arcs.py and
 process_lamp_flats.py so the arcs and fringe masters are in the calibration database):
 
     python extraction_results.py                  # download the e00s + extract + build PDF
@@ -39,8 +39,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 # Reuse the archive query windows, download machinery, and context setup so the science
 # frames stay in lockstep with the arc and lamp-flat runs.
-from make_residuals_pdf import QUERY_PARAMS_SETS, RAW_DIR, download_frame
-from process_lamp_flats import get_frames, make_context
+from process_arcs import RAW_DIR, download_frames
+from process_lamp_flats import make_context
 
 OUTPUT_PDF = 'extraction_results.pdf'
 ORDER_NAMES = {1: 'red', 2: 'blue'}
@@ -170,11 +170,7 @@ if __name__ == '__main__':
         if 'ARCHIVE_AUTH_TOKEN' not in os.environ:
             print('ARCHIVE_AUTH_TOKEN is not set; skipping the archive download', file=sys.stderr)
         else:
-            for params in QUERY_PARAMS_SETS:
-                new_frames = get_frames(params, suffix='e00')
-                print(f'Found {len(new_frames)} e00 frames in the archive for {params}')
-                for frame in new_frames:
-                    download_frame(frame)
+            download_frames('e00')
 
     paths = sorted(glob(args.glob), key=os.path.basename)
     if not paths:

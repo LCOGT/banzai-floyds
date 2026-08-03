@@ -41,7 +41,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from astropy.io import fits
 
 import fringe_correction_results as fcr
-from make_residuals_pdf import RAW_DIR
+from process_arcs import RAW_DIR
 
 OUTPUT_CSV = 'single_flat_comparison.csv'
 OUTPUT_PDF = 'single_flat_comparison.pdf'

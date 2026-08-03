@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 # Reuse the raw-data location and context machinery which are hopefully already on disk
-from make_residuals_pdf import RAW_DIR
+from process_arcs import RAW_DIR
 from process_lamp_flats import make_context
 from banzai_floyds.fringe import make_fringe_continuum_model
 from banzai.utils import import_utils

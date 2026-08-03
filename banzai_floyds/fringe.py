@@ -8,7 +8,7 @@ from banzai.utils.file_utils import make_calibration_filename_function
 from banzai.utils.stats import absolute_deviation, robust_standard_deviation
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.frames import MIN_FRINGE_VALUE, FRINGE_INTERPOLATED, FRINGE_NO_PATTERN
-from banzai_floyds.frames import NoUsableFringePattern
+from banzai_floyds.frames import NoUsableFringePattern, valid_fringe_pixels
 from datetime import datetime
 from scipy.ndimage import map_coordinates, spline_filter, binary_erosion, distance_transform_edt
 from scipy.ndimage import binary_fill_holes
@@ -29,16 +29,20 @@ from banzai.data import DataTable
 logger = get_logger()
 
 # The fringe pattern moves by at most a few pixels between frames due to flexure so we only search
-# a small window of offsets. Note the fringe period is ~25 pixels in x at the red end of the order,
-# so the 8 pixel search radius in x stays inside the half period that keeps the fit metric unimodal.
+# a small window of offsets. Note the fringe period in x is shortest at the blue end of the fringing
+# region, ~25 pixels, so the 8 pixel search radius in x stays inside the half period that keeps the
+# fit metric unimodal.
 MAX_FRINGE_OFFSET_X = 8
 MAX_FRINGE_OFFSET_Y = 8
+
+# The brute force offset search steps by this many pixels before refining onto the unit pixel grid.
+FRINGE_OFFSET_GRID_STEP = 2
 
 # We use a cubic spline to interpolate, so to not be underconstrained, we stay at least 3 pixels
 # away from the edge.
 FRINGE_EDGE_PAD = 3
 
-# Maximimum size to fill holes in the fringe pattern. This is small enough to not alias the fringe
+# Maximum size to fill holes in the fringe pattern. This is small enough to not alias the fringe
 # pattern which has a period of ~25 pixels.
 INPAINT_MAX_DISTANCE = 8
 
@@ -119,7 +123,7 @@ def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> tu
 
 
 def sample_fringe(coefficients: np.ndarray, x: np.ndarray, y: np.ndarray, x_offset: float,
-                  y_offset: float, valid: np.ndarray = None) -> np.ndarray:
+                  y_offset: float, valid: np.ndarray = None) -> np.ndarray | tuple:
     """
     Sample a fringe pattern displaced by (x_offset, y_offset): pattern(x - x_offset, y - y_offset)
     and make a boolean array of where the interpolation is valid.
@@ -178,10 +182,18 @@ def fringe_fit_region(image, reference_valid: np.ndarray, cutoff: float,
     return to_fit
 
 
+def best_grid_offset(x_offsets: np.ndarray, y_offsets: np.ndarray, metric) -> tuple:
+    """The (x, y) offset on a grid of candidates that maximizes the matched filter metric."""
+    metrics = np.array([[metric(x_offset, y_offset) for x_offset in x_offsets]
+                        for y_offset in y_offsets])
+    best_y_index, best_x_index = np.unravel_index(np.argmax(metrics), metrics.shape)
+    return x_offsets[best_x_index], y_offsets[best_y_index]
+
+
 def find_fringe_offset(data: np.ndarray, uncertainty: np.ndarray, to_fit: np.ndarray,
                        reference_coefficients: np.ndarray,
                        x_max_offset: int = MAX_FRINGE_OFFSET_X,
-                       y_max_offset: int = MAX_FRINGE_OFFSET_Y) -> tuple:
+                       y_max_offset: int = MAX_FRINGE_OFFSET_Y, image=None) -> tuple:
     """
     Fit the (x, y) shift of the fringe pattern in an image relative to a reference pattern.
 
@@ -195,6 +207,7 @@ def find_fringe_offset(data: np.ndarray, uncertainty: np.ndarray, to_fit: np.nda
     to_fit: 2d bool array of pixels to fit, from fringe_fit_region
     reference_coefficients: 2d array from fringe_interpolation_coefficients of the reference pattern
     x_max_offset, y_max_offset: int half-widths of the offset search window in pixels
+    image: optional FLOYDSObservationFrame the data came from, only used to tag log messages
 
     Returns
     -------
@@ -206,18 +219,26 @@ def find_fringe_offset(data: np.ndarray, uncertainty: np.ndarray, to_fit: np.nda
     normalized_data = data[to_fit] - 1.0
     errors = uncertainty[to_fit]
 
-    x_offsets = np.arange(-x_max_offset, x_max_offset + 1)
-    y_offsets = np.arange(-y_max_offset, y_max_offset + 1)
-    # Do a brute force grid search first to get a good starting guess
-    metrics = np.array([[matched_filter_metric([x_offset, y_offset], normalized_data, errors,
-                                               fringe_weights, (x, y), reference_coefficients)
-                         for x_offset in x_offsets] for y_offset in y_offsets])
-    best_y_index, best_x_index = np.unravel_index(np.argmax(metrics), metrics.shape)
-    if best_x_index in (0, len(x_offsets) - 1) or best_y_index in (0, len(y_offsets) - 1):
+    def metric(x_offset, y_offset):
+        return matched_filter_metric([x_offset, y_offset], normalized_data, errors,
+                                     fringe_weights, (x, y), reference_coefficients)
+
+    # Do a brute force grid search first to get a good starting guess, coarsely and then on the unit
+    # pixel grid around the coarse peak
+    coarse_x, coarse_y = best_grid_offset(
+        np.arange(-x_max_offset, x_max_offset + 1, FRINGE_OFFSET_GRID_STEP),
+        np.arange(-y_max_offset, y_max_offset + 1, FRINGE_OFFSET_GRID_STEP), metric
+    )
+    best_x, best_y = best_grid_offset(
+        np.arange(max(coarse_x - FRINGE_OFFSET_GRID_STEP + 1, -x_max_offset),
+                  min(coarse_x + FRINGE_OFFSET_GRID_STEP, x_max_offset + 1)),
+        np.arange(max(coarse_y - FRINGE_OFFSET_GRID_STEP + 1, -y_max_offset),
+                  min(coarse_y + FRINGE_OFFSET_GRID_STEP, y_max_offset + 1)), metric
+    )
+    if abs(best_x) == x_max_offset or abs(best_y) == y_max_offset:
         logger.warning('Fringe offset grid search peaked at the edge of the search window. '
-                       'The fitted offset is probably not reliable.')
-    best_fit = optimize_match_filter([x_offsets[best_x_index], y_offsets[best_y_index]],
-                                     normalized_data, errors, fringe_weights, (x, y),
+                       'The fitted offset is probably not reliable.', image=image)
+    best_fit = optimize_match_filter([best_x, best_y], normalized_data, errors, fringe_weights, (x, y),
                                      args=(reference_coefficients,),
                                      bounds=[(-x_max_offset, x_max_offset), (-y_max_offset, y_max_offset)])
     return best_fit[0], best_fit[1]
@@ -256,7 +277,8 @@ def make_fringe_continuum_model(data, wavelet='sym8', level=5):
 
 
 def prepare_fringe_data(image, blue_cutoff, level=5):
-    """Prepare the fringe data by padding it to be 2^level in both dimensions and resampling it to be on a regular grid."""
+    """Prepare the fringe data by padding it to be 2^level in both dimensions and resampling it
+    to be on a regular grid."""
     # Resample the fringe data using the min of the top row and max of the bottom row
     # to define the grid so that the interpolation is well defined
     x2d, y2d = np.meshgrid(np.arange(image.shape[1], dtype=float), np.arange(image.shape[0], dtype=float))
@@ -458,7 +480,7 @@ def stack_fringe_patterns(images, cutoff: float) -> tuple:
 
         to_fit = np.logical_and(fringe_fit_region(image, reference_samplable, cutoff), has_data)
         x_offset, y_offset = find_fringe_offset(image.fringe, pattern_uncertainty, to_fit,
-                                                reference_coefficients)
+                                                reference_coefficients, image=image)
 
         image_coefficients, image_samplable = fringe_interpolation_coefficients(
             image.fringe, image.fringe > MIN_FRINGE_VALUE)
@@ -470,6 +492,10 @@ def stack_fringe_patterns(images, cutoff: float) -> tuple:
         stackable = np.logical_and(binary_erosion(image_samplable, structure=structure), high_sn)
         this_fringe, this_valid = sample_fringe(image_coefficients, reference_x, reference_y,
                                                 -x_offset, -y_offset, valid=stackable)
+        if not np.any(this_valid):
+            logger.warning('No pixels of this frame land on the reference pattern. '
+                           'Not including it in the super fringe', image=image)
+            continue
 
         this_fringe /= np.median(this_fringe[this_valid])
         super_fringe[reference_y[this_valid], reference_x[this_valid]] += this_fringe[this_valid]
@@ -535,7 +561,7 @@ class FringeMaker(CalibrationMaker):
 def fit_fringe_shift(image, source_flux: np.ndarray, fringe_coefficients: np.ndarray,
                      fringe_valid: np.ndarray, cutoff: float) -> tuple:
     """
-    Fit the (x, y) shift of the stacked fringe pattern in a frame, given a sky + source model model.
+    Fit the (x, y) shift of the stacked fringe pattern in a frame, given a sky + source model.
     The source could be astrophysical or a lamp.
 
     Parameters
@@ -570,7 +596,8 @@ def fit_fringe_shift(image, source_flux: np.ndarray, fringe_coefficients: np.nda
         normalized_data[in_row] /= np.median(normalized_data[in_row])
     # Now we can run the simple fringe matched filter to find the shift now that we have removed the object
     # and sky flux.
-    return find_fringe_offset(normalized_data, normalized_uncertainty, to_fit, fringe_coefficients)
+    return find_fringe_offset(normalized_data, normalized_uncertainty, to_fit, fringe_coefficients,
+                              image=image)
 
 
 def shift_fringe_pattern(image, fringe_coefficients: np.ndarray, fringe_valid: np.ndarray,
@@ -588,14 +615,16 @@ def shift_fringe_pattern(image, fringe_coefficients: np.ndarray, fringe_valid: n
     region_x, region_y = x2d[in_fringe_region], y2d[in_fringe_region]
     correction, correction_valid = sample_fringe(fringe_coefficients, region_x, region_y,
                                                  x_offset, y_offset, valid=fringe_valid)
-    correction_valid = np.logical_and(correction_valid, correction > MIN_FRINGE_VALUE)
+    # Cut the correction to the same range the frame's fringe setter keeps so that the pattern we
+    # divide by and the pattern we store on the frame agree pixel for pixel
+    correction_valid = np.logical_and(correction_valid, valid_fringe_pixels(correction))
     fringe_correction = np.zeros_like(image.data)
     fringe_correction[region_y[correction_valid], region_x[correction_valid]] = correction[correction_valid]
     return fringe_correction
 
 
 def extract_fringe_pattern(image, continuum: np.ndarray, fringe_correction: np.ndarray,
-                           cutoff: float) -> tuple:
+                           cutoff: float) -> np.ndarray:
     """
     Take in fringe corrected data, the smooth flux (sky + trace = continuum) model, and the fringe
     correction to estimate the fringe pattern in the science frame.
@@ -651,43 +680,47 @@ class FringeCorrector(Stage):
         deviation = absolute_deviation(fringe_amplitude)
         # Flag bad pixels
         good = deviation < 5.0 * robust_standard_deviation(fringe_amplitude, abs_deviation=deviation)
-        # We can pass None here because data array is unused in the normalization unless norm_data is true
-        fringe_snr = matched_filter_normalization(None, fringe_noise[good],
-                                                  fringe_amplitude[good]) / np.sqrt(good.sum())
+        if np.any(good):
+            # We can pass None here because data array is unused in the normalization unless norm_data is true
+            fringe_snr = matched_filter_normalization(None, fringe_noise[good],
+                                                      fringe_amplitude[good]) / np.sqrt(good.sum())
+        else:
+            # Nothing left to measure the pattern with, so take the unshifted branch below rather
+            # than dividing by zero and comparing a nan to the threshold
+            fringe_snr = 0.0
         if fringe_snr < self.MIN_FRINGE_SNR:
             logger.warning(f'Per-pixel fringe S/N of {fringe_snr:.1f} is too low to constrain the '
                            'pattern shift. Applying the master fringe unshifted.', image=image)
-            # Measure the continuum to use for the residuals below
             x_offset, y_offset = 0.0, 0.0
         else:
-            x_offset, y_offset = fit_fringe_shift(image, source_flux, fringe_coefficients,
-                                                  fringe_samplable, cutoff)
             # Do an iterative fit on the fringe shift
             # First pass: subtract the sky and then fits the shift
-            first_pass = shift_fringe_pattern(image, fringe_coefficients, fringe_samplable,
-                                              x_offset, y_offset, cutoff)
-            defringed = image.data.copy()
-            first_pass_valid = first_pass > MIN_FRINGE_VALUE
-            defringed[first_pass_valid] /= first_pass[first_pass_valid]
-            source_flux = fit_science_source_flux(image, cutoff, data=defringed)
+            x_offset, y_offset = fit_fringe_shift(image, source_flux, fringe_coefficients,
+                                                  fringe_samplable, cutoff)
+        # Refit the source model on the frame with the current pattern divided out so that it is not
+        # partly following the fringes. This is the model we measure the pattern against below, so we
+        # do it whether or not we are fitting the shift.
+        first_pass = shift_fringe_pattern(image, fringe_coefficients, fringe_samplable,
+                                          x_offset, y_offset, cutoff)
+        defringed = image.data.copy()
+        first_pass_valid = first_pass > MIN_FRINGE_VALUE
+        defringed[first_pass_valid] /= first_pass[first_pass_valid]
+        source_flux = fit_science_source_flux(image, cutoff, data=defringed)
+        if fringe_snr >= self.MIN_FRINGE_SNR:
             # Then use the defringed data as the model for the sky in the second pass to fit the final shift
             x_offset, y_offset = fit_fringe_shift(image, source_flux, fringe_coefficients,
                                                   fringe_samplable, cutoff)
-        # Store the shifted fringe correction so that it can be used later for diagnositics or for users
-        # to undo the fringe correction if they want
         fringe_correction = shift_fringe_pattern(image, fringe_coefficients, fringe_samplable,
                                                  x_offset, y_offset, cutoff)
         to_correct = fringe_correction > MIN_FRINGE_VALUE
         image.data[to_correct] /= fringe_correction[to_correct]
         image.uncertainty[to_correct] /= fringe_correction[to_correct]
         image.meta['L1FRNGSN'] = (fringe_snr, 'Per-pixel S/N of the fringe pattern')
+        image.meta['L1FRNGOX'] = (x_offset, 'Fringe pattern x offset (pixels)')
+        image.meta['L1FRNGOY'] = (y_offset, 'Fringe pattern y offset (pixels)')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
 
-        fringe_data = fringe_correction.astype(np.float32)
-        header = fits.Header()
-        header['L1FRNGOX'] = x_offset, 'Fringe pattern x offset (pixels)'
-        header['L1FRNGOY'] = y_offset, 'Fringe pattern y offset (pixels)'
-        image.add_or_update(ArrayData(fringe_data, name='FRINGE', meta=fits.Header()))
+        image.fringe = fringe_correction
 
         # Save the data / continuum which is the fringe on the science frame used to fit the shift
         pattern = extract_fringe_pattern(image, source_flux, fringe_correction, cutoff)
@@ -725,8 +758,8 @@ class FringeLoader(FLOYDSCalibrationUser):
                 try:
                     image.fringe = self.load_fringe_from_same_block(image, flats)
                 except NoUsableFringePattern:
-                    logger.warning('No flats from this block pass qc. Falling back to the stacked frame',
-                                   image=image)
+                    logger.warning('The flats from this block have no usable fringe pattern. '
+                                   'Falling back to the stacked frame', image=image)
                 else:
                     image.meta['L1IDFRNG'] = (flats[0].filename, 'ID of Fringe frame')
 

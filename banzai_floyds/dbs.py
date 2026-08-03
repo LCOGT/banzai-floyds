@@ -369,7 +369,8 @@ def get_unstacked_same_block_cals(image, calibration_type: str, selection_criter
     """Find the individual, unstacked calibrations taken in the same observing block as a frame.
     This includes is_master=False frames, as opposed to other banzai calibration queries.
 
-
+    Parameters
+    ----------
     image: FLOYDSObservationFrame
         The observation frame to find calibrations for
     calibration_type: str
@@ -399,8 +400,8 @@ def get_unstacked_same_block_cals(image, calibration_type: str, selection_criter
 
     with get_session(db_address=db_address) as db_session:
         image_filter = db_session.query(FLOYDSCalibrationImage).filter(calibration_criteria)
-        # We choose the first flat in the block as convention to images[0]
-        # if we happen to need to stack multiple flats from the same block
+        # Order by time so that if we stack multiple flats from the same block, the earliest one is
+        # images[0], which is the alignment reference by convention
         return image_filter.order_by(FLOYDSCalibrationImage.dateobs).all()
 
 

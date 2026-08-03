@@ -340,6 +340,14 @@ def test_correct_fringe():
     np.testing.assert_allclose(original_data[corrected] / frame.input_fringe[corrected],
                                output_frame.data[corrected], rtol=0.03)
 
+    # The fitted shift goes out in the header so it can be checked against the flexure model later
+    np.testing.assert_allclose(output_frame.meta['L1FRNGOX'], frame.input_fringe_shift_x, atol=0.2)
+    np.testing.assert_allclose(output_frame.meta['L1FRNGOY'], frame.input_fringe_shift, atol=0.2)
+    # The frame's pattern is the shifted one we divided out, not the master we were handed, and it is
+    # the same array the FRINGE extension holds
+    np.testing.assert_allclose(output_frame.fringe, output_frame['FRINGE'].data, rtol=1e-6)
+    np.testing.assert_allclose(output_frame.fringe[corrected], frame.input_fringe[corrected], atol=0.03)
+
 
 def test_fringe_correction_is_invertible_from_the_2d_output():
     np.random.seed(981435)
@@ -362,7 +370,7 @@ def test_fringe_correction_is_invertible_from_the_2d_output():
     assert 'FRINGE' in [hdu.name for hdu in hdu_list]
 
     # The extension holds the pattern on this frame's pixel grid, so multiplying by it where it was
-    # applied puts the frame back the way it came in. 
+    # applied puts the frame back the way it came in.
     fringe = hdu_list['FRINGE'].data
     corrected = fringe > 0.1
     assert np.all(np.abs(fringe[np.logical_not(corrected)]) < 0.01)
@@ -667,6 +675,14 @@ def test_correct_fringe_low_snr():
     assert np.logical_and(fringe_region, applied).sum() > 0.9 * fringe_region.sum()
     unshifted = np.logical_and(applied, master > MIN_FRINGE_VALUE)
     np.testing.assert_allclose(output_frame['FRINGE'].data[unshifted], master[unshifted], rtol=1e-4)
+    # and the recorded offsets have to say so rather than being left over from a fit we did not run
+    assert output_frame.meta['L1FRNGOX'] == 0.0
+    assert output_frame.meta['L1FRNGOY'] == 0.0
+    # The measured pattern is still fit against a defringed continuum in this branch, so it should
+    # scatter less than the pattern that was actually in the frame
+    measured = output_frame['FRINGE_MEASURED'].data
+    usable = np.logical_and(np.logical_and(fringe_region, applied), measured > MIN_FRINGE_VALUE)
+    assert np.std(measured[usable] / output_frame['FRINGE'].data[usable]) < np.std(measured[usable])
 
 
 def test_pad_fringe_data():

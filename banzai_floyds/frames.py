@@ -10,7 +10,7 @@ from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to
 from astropy.table import Table
 from banzai_floyds import dbs
 
-# Set the bounds for what we conside a valid fringe
+# Set the bounds for what we consider a valid fringe
 MIN_FRINGE_VALUE = 0.1
 MAX_FRINGE_VALUE = 2.5
 
@@ -245,8 +245,9 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         """
         Store a fringe pattern, zeroing the pixels that should not be corrected with.
 
-        Everything downstream reads a zero in the pattern as "no fringing here". A pattern with nothing left to correct with is an error rather than a pattern
-        that silently corrects nothing.
+        Everything downstream reads a zero in the pattern as "no fringing here". A pattern with
+        nothing left to correct with is an error rather than a pattern that silently corrects
+        nothing.
         """
         if value is None:
             self._fringe = None
