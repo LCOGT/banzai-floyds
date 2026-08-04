@@ -193,6 +193,7 @@ dependencies = [
     { name = "lco-banzai" },
     { name = "matplotlib" },
     { name = "pywavelets" },
+    { name = "scikit-image" },
     { name = "torch", version = "2.13.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.13.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
@@ -230,6 +231,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=4.0" },
     { name = "pytest-astropy", marker = "extra == 'test'" },
     { name = "pywavelets" },
+    { name = "scikit-image" },
     { name = "sphinx-astropy", marker = "extra == 'docs'" },
     { name = "sphinx-pyproject", marker = "extra == 'docs'" },
     { name = "torch", marker = "sys_platform != 'darwin'", index = "https://download.pytorch.org/whl/cpu" },
