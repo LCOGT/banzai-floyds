@@ -1,8 +1,10 @@
-To start running the large scale testing, run 
+# Reprocessing the characterization dataset
+
+To start running the large scale testing, run
 WavelengthCalibration.ipynb notebook, the FringeFrameMaker.ipynb
 notebook and then the following
 
-```
+```bash
 python process_arcs.py --workers 8      
 python process_lamp_flats.py --workers 8 --science
 python fringe_correction_results.py --workers 8
