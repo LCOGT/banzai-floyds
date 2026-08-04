@@ -54,7 +54,8 @@ CALIBRATION_FILENAME_FUNCTIONS['LAMPFLAT'] = (  # noqa: F405
 )
 
 EXTRA_STAGES = {'SPECTRUM': None,
-                'LAMPFLAT': ['banzai_floyds.cosmics.LampFlatCosmicRayComparer',
+                'LAMPFLAT': ['banzai_floyds.qc.SaturatedOrdersTest',
+                             'banzai_floyds.cosmics.LampFlatCosmicRayDetector',
                              'banzai_floyds.fringe.FringeExtractor'],
                 'STANDARD': None,
                 # We need to rerun binning here to use the most up to date wavelength solution
@@ -76,8 +77,7 @@ OBSTYPES_TO_DELAY = ['STANDARD', 'SPECTRUM']
 
 LOSSLESS_EXTENSIONS = ['WAVELENGTH']
 
-# We just need to be redward of the dichroic cutoff which is ~4500 Angstroms
-FRINGE_CUTOFF_WAVELENGTH = 5200.0
+FRINGE_CUTOFF_WAVELENGTH = 6200.0
 
 # Tilts in degrees measured counterclockwise (right-handed coordinates)
 WAVELENGTH_TILT_GUESS = 8.0

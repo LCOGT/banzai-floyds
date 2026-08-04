@@ -154,6 +154,17 @@ def populate_order_heights_locations():
     banzai_floyds.dbs.populate_order_heights_locations(args.db_address)
 
 
+def bound_skyflats_to_windows():
+    parser = argparse.ArgumentParser("Stamp the order solution validity windows from skyflats.dat onto "
+                                     "their calibration records.")
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    args = parser.parse_args()
+    bounded = banzai_floyds.dbs.bound_skyflats_to_windows(args.db_address)
+    logger.info(f'Bounded {bounded} order solution validity windows')
+
+
 def populate_lsf_params():
     parser = argparse.ArgumentParser("Seed the LSF table with the hand-measured shapes shipped in the repo.")
     parser.add_argument('--db-address', dest='db_address',

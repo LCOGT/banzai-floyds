@@ -1,16 +1,8 @@
 """Compare defringing science frames with the same-block single lamp flat vs the stacked super fringe.
 
 Every science frame in the characterization set has a lamp flat taken in the same observing
-block (checked via BLKUID), which shares the science frame's flexure state. This runs each
-science frame through the fringe corrector twice: once as the pipeline does (arm "stacked",
-super fringe master from the calibration db) and once with the master replaced by the same-block
-flat's own pattern, i.e. the processed w91's FRINGE extension (arm "single").
+block (checked via BLKUID).
 
-The trade-off being measured: the single flat wins on alignment (it was taken at the same
-flexure state, so no shift fit is needed and there is no footprint erosion or constituent
-misalignment from stacking), while the stack wins on photon noise (the master's noise divides
-into the science frame; stacking N flats beats one down by ~sqrt(N)). The fitted offsets in
-the single-flat arm double as a sanity check - they should come out near zero.
 
 Run from the characterization_testing directory after the masters have been (re)built so the
 stacked arm reflects the current stacking code:
@@ -96,6 +88,8 @@ def run_one(task: tuple) -> tuple:
     path, arm = task
     from banzai_floyds.fringe import FringeLoader
     _state['flat_noise'] = None
+    original_same_block = FringeLoader.open_same_block_flats
+    FringeLoader.open_same_block_flats = lambda self, image: []
     if arm == 'single':
         original = FringeLoader.apply_master_calibration
         FringeLoader.apply_master_calibration = single_flat_apply
@@ -103,8 +97,12 @@ def run_one(task: tuple) -> tuple:
             path, record, error = fcr.correct_frame(path)
         finally:
             FringeLoader.apply_master_calibration = original
+            FringeLoader.open_same_block_flats = original_same_block
     else:
-        path, record, error = fcr.correct_frame(path)
+        try:
+            path, record, error = fcr.correct_frame(path)
+        finally:
+            FringeLoader.open_same_block_flats = original_same_block
     row = {'filename': os.path.basename(path), 'arm': arm, 'error': error or ''}
     payload = None
     if record is not None:
@@ -264,9 +262,6 @@ def make_summary_pdf(rows: list, output_pdf: str = OUTPUT_PDF):
         pdf.savefig(fig)
         plt.close(fig)
 
-        # The quadrature sum of the science and flat noise is the expected RMS floor of the
-        # single-flat arm; if its residuals sit on that floor, the correction is noise limited
-        # and only a deeper stack (not better alignment) can improve it
         fig, ax = plt.subplots(figsize=(11, 8.5))
         expected_floor = np.sqrt(noise ** 2 + flat_noise ** 2)
         ax.scatter(expected_floor, single_after, s=12, alpha=0.7, label='same-block flat')
@@ -306,11 +301,13 @@ if __name__ == '__main__':
 
     flat_map = build_flat_map()
     print(f'{len(paths)} science frames, {len(flat_map)} blocks with a processed w91 flat')
-    missing = [path for path in paths
-               if block_id(fits.getheader(path, 1)) not in flat_map]
+    # Drop the frame if there is no flat with the same block id (e.g. if the flat was saturated)
+    missing = [path for path in paths if block_id(fits.getheader(path, 1)) not in flat_map]
     if missing:
-        print(f'{len(missing)} frames have no same-block flat and will fail the single arm',
-              file=sys.stderr)
+        print(f'Skipping {len(missing)} frames whose block has no processed flat:', file=sys.stderr)
+        for path in missing:
+            print(f'  {os.path.basename(path)}', file=sys.stderr)
+        paths = [path for path in paths if path not in set(missing)]
 
     tasks = [(path, arm) for path in paths for arm in ('stacked', 'single')]
     rows = []

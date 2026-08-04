@@ -10,6 +10,10 @@ Versions
   SCI extension holds the fitted lamp continuum (SCI x FRINGE returns the flat) and the CONTINUUM
   extension is gone. FringeContinuumFitter is replaced by the FringeExtractor stage.
 - Widened the fringe shift search window to +-8 pixels in x (matching y).
+- The wavelet continuum fit now pads the x edges with an odd reflection before the stationary
+  wavelet transform. The transform is periodic, so without padding the two x edges wrapped into
+  each other and the continuum hooked toward the opposite edge's value, leaving a down-up-drop
+  artifact in the fringe pattern over the last ~15 columns of the red order.
 - Removed matched-filter 2D fit step from locating the order positions due to instabilities
 - Significant updates to the wavelength solution, removing the 2-d match filter approach to
   increase the robustness of the fit.
@@ -18,8 +22,23 @@ Versions
   irrespective of slit width.
 - Migrate to use astroscrappy for cosmic ray detection as Cosmic-CoNN was not
   trained on spectroscopic data. We now only run astroscrappy on
-  science frames, not arcs or flats. We do comparison to a stacked flat
-  to do a basic rejection on flats.
+  science frames, not arcs or flats.
+- Lamp flat cosmic rays are now found with astroscrappy at sigclip=8 (LampFlatCosmicRayDetector),
+  instead of by comparing to the shifted stacked master. A master only predicts an individual
+  flat's pattern to ~8%, against ~0.5% photon noise, so the comparison was flagging 40-60% of the
+  red order and punching the holes back out of every extracted pattern. The fringes only look like
+  cosmic-ray morphology at the science frames' sigclip of 5; by 8 they stop triggering it, so flats
+  do not need a different algorithm after all, just a higher threshold. This needs no master, so it
+  also works on the first flat of a new instrument.
+- Reject lamp flats with more than 1% of the pixels in their orders saturated (SaturatedOrdersTest).
+  banzai's SaturationTest measures the whole detector, which a FLOYDS frame can pass with its entire
+  red order saturated.
+- The stacked fringe pattern now reaches the edges of the order. The spline coefficients carry a
+  smooth extension past the boundary of each pattern, so sampling next to the boundary no longer
+  pulls in the fill value and the stack no longer has to erode a 3 pixel border off every flat.
+- Moved FRINGE_CUTOFF_WAVELENGTH from 5200 to 6200 Angstroms. The pattern is flat to the noise
+  floor blueward of there, and the dead pixels were diluting the per-pixel fringe S/N that decides
+  whether we fit the pattern shift at all.
 - The background fit is now resistant to cosmic rays, using a Huber M-estimator followed by a hard
   clip against the scaled median absolute deviation, so it can be used in cosmic ray detection.
   We no longer fit a background to wavelength bins whose background region does not straddle the

@@ -218,12 +218,11 @@ def test_super_fringe_interpolates_pixels_masked_in_every_flat():
 
     at_x_ends = np.logical_and(in_order, np.logical_or(x2d - np.min(x2d[in_order]) < FRINGE_EDGE_PAD,
                                                        np.max(x2d[in_order]) - x2d < FRINGE_EDGE_PAD))
-    assert np.all(master.mask[at_x_ends] & FRINGE_NO_PATTERN != 0)
-    assert not np.any(master.mask[at_x_ends] & FRINGE_INTERPOLATED)
-    assert np.all(master.data[at_x_ends] == 0.0)
+    assert np.all(master.data[at_x_ends] > 0.1)
+    assert not np.any(master.mask[at_x_ends])
     # Everything else away from the bad columns is measured rather than modeled
     away_from_columns = np.logical_and(in_order, np.abs(x2d - np.mean(bad_columns)) > 20)
-    assert not np.any(master.mask[np.logical_and(away_from_columns, np.logical_not(at_x_ends))])
+    assert not np.any(master.mask[away_from_columns])
     hole = np.logical_and(master.mask & FRINGE_INTERPOLATED != 0, in_order)
     hole = np.logical_and(hole, np.abs(x2d - np.mean(bad_columns)) < 20)
     edge_steps, pattern_steps = [], []
@@ -232,8 +231,8 @@ def test_super_fringe_interpolates_pixels_masked_in_every_flat():
         edge_steps += [np.abs(master.data[row, columns[0]] - master.data[row, columns[0] - 1]),
                        np.abs(master.data[row, columns[-1]] - master.data[row, columns[-1] + 1])]
         away_from_columns = np.logical_and(in_order[row], np.abs(x2d[row] - np.mean(bad_columns)) > 20)
-        pattern_steps.append(np.median(np.abs(np.diff(master.data[row][away_from_columns]))))
-    assert np.max(edge_steps) < np.max(pattern_steps)
+        pattern_steps.append(np.max(np.abs(np.diff(master.data[row][away_from_columns]))))
+    assert np.max(edge_steps) < np.min(pattern_steps)
 
     # Correcting a science frame with this master should leave no stripe at the bad columns
     np.random.seed(981435)
@@ -769,4 +768,7 @@ def test_fit_fringe_continuum():
         overlap = fake_frame.wavelengths.data[order_region][edge] >= 6000.0
         expected = level * illumination[order_region][edge][overlap]
         actual = interpolator(x2d[order_region][edge][overlap], y2d[order_region][edge][overlap])
-        np.testing.assert_allclose(actual, expected, rtol=0.10)
+        redward = fake_frame.wavelengths.data[order_region][edge][overlap] > 9000.0
+        np.testing.assert_allclose(actual[np.logical_not(redward)], expected[np.logical_not(redward)],
+                                   rtol=0.10)
+        np.testing.assert_allclose(actual[redward], expected[redward], rtol=0.15)

@@ -184,6 +184,11 @@ if __name__ == '__main__':
         paths = download_frames('a00', args.raw_dir)
 
     process_frames(paths, args.workers)
+    # The order solutions carry the same windows, and until they are stamped on the date filter in
+    # get_cal_record is a no-op, so a frame can be reduced against an order trace from before the
+    # spectrograph last moved.
+    from banzai_floyds.dbs import bound_skyflats_to_windows
+    print(f'Bounded {bound_skyflats_to_windows(os.environ["DB_ADDRESS"])} order solution windows')
     # Tie each arc's validity window to its skyflat (order solution) epoch so an arc from before the
     # orders moved is never picked as the initial solution for a later arc.
     bound_arcs_to_skyflat_windows()

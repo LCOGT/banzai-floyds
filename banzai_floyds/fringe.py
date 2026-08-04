@@ -102,7 +102,8 @@ def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = Non
     return inpaint_biharmonic(filled, to_fill), to_fill
 
 
-def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> tuple:
+def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray,
+                                      edge_pad: int = FRINGE_EDGE_PAD) -> tuple:
     """
     Precompute cubic B-spline coefficients of a fringe pattern for fast shifted sampling.
 
@@ -110,6 +111,7 @@ def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> tu
     ----------
     data: 2d array of the fringe pattern, normalized so the pattern oscillates about 1
     valid: 2d bool array marking pixels with real pattern data
+    edge_pad: int, width in pixels of the smooth extension we add outside the pattern
 
     Returns
     -------
@@ -119,6 +121,10 @@ def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray) -> tu
     fringe, was_interpolated = inpaint_fringe(data, valid)
     enclosed = np.logical_and(binary_fill_holes(valid), np.logical_not(valid))
     samplable = np.logical_or(valid, np.logical_and(was_interpolated, enclosed))
+    # The cubic spline stencil reaches edge_pad pixels, so at the boundary of the pattern it pulls
+    # in the flat fill value and biases the outermost rows of the slit. Extending the pattern
+    # smoothly past its boundary keeps those rows samplable instead of having to erode them away.
+    fringe, _ = inpaint_fringe(fringe, samplable, max_distance=edge_pad, extrapolate=True)
     return spline_filter(fringe, order=3), samplable
 
 
@@ -244,7 +250,15 @@ def find_fringe_offset(data: np.ndarray, uncertainty: np.ndarray, to_fit: np.nda
     return best_fit[0], best_fit[1]
 
 
-def make_fringe_continuum_model(data, wavelet='sym8', level=5):
+def make_fringe_continuum_model(data, wavelet='sym8', level=5, edge_pad: int = None):
+    # The stationary wavelet transform is periodic, so the two x edges wrap into each other.
+    # Without padding, the continuum near the red edge of the order rings toward the blue-edge
+    # value (and vice versa), leaving a hook artifact in data / continuum. Pad x with an odd
+    # reflection about the edge value.
+    if edge_pad is None:
+        edge_pad = 2 ** (level + 1)
+    h, w = data.shape
+    data = np.pad(data, ((0, 0), (edge_pad, edge_pad)), mode='reflect', reflect_type='odd')
     # Fit wavelets to the data and get the lowest order coefficients.
     coeffs = pywt.swt2(data, wavelet=(wavelet, wavelet), level=level)
 
@@ -272,8 +286,7 @@ def make_fringe_continuum_model(data, wavelet='sym8', level=5):
         filtered_coeffs.append((cA, (np.zeros_like(cH), np.zeros_like(cV), np.zeros_like(cD))))
     continuum_model = pywt.iswt2(filtered_coeffs, wavelet=(wavelet, wavelet))
 
-    h, w = data.shape
-    return continuum_model[:h, :w]
+    return continuum_model[:h, edge_pad:edge_pad + w]
 
 
 def prepare_fringe_data(image, blue_cutoff, level=5):
@@ -293,6 +306,10 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     pad_length = (2 ** level - int(np.max(x2d[red_order]) + 1 - x_cutoff) % (2 ** level)) % (2 ** level)
     x_range = np.arange(x_cutoff - pad_length, np.max(x2d[red_order]) + 1)
     red_order2d = get_order_2d_region(image.orders.data == 1)
+    # Take the full height of the order rather than the rows that are inside it at every x. The
+    # order edge moves by about a pixel across the detector, so the corners of this box sit just
+    # outside the order; they are filled by the inpainting below and let us keep a real continuum
+    # fit, and therefore a real fringe pattern, out to the last row of the slit.
     y_min = int(np.ceil(np.max(y2d[red_order2d][0])))
     y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
     to_interpolate = np.logical_and(red_order, image.mask == 0)
@@ -484,12 +501,8 @@ def stack_fringe_patterns(images, cutoff: float) -> tuple:
 
         image_coefficients, image_samplable = fringe_interpolation_coefficients(
             image.fringe, image.fringe > MIN_FRINGE_VALUE)
-        # The stencil has to stay FRINGE_EDGE_PAD inside the pattern, but the signal to noise cut is
-        # a statement about the pixel we are sampling and not about its stencil, so erode only the
-        # footprint. Eroding for the S/N too would let every noisy pixel take a halo out of the stack.
-        structure = np.ones((2 * FRINGE_EDGE_PAD + 1, 2 * FRINGE_EDGE_PAD + 1), dtype=bool)
         high_sn = image.data / image.uncertainty > 10.0
-        stackable = np.logical_and(binary_erosion(image_samplable, structure=structure), high_sn)
+        stackable = np.logical_and(image_samplable, high_sn)
         this_fringe, this_valid = sample_fringe(image_coefficients, reference_x, reference_y,
                                                 -x_offset, -y_offset, valid=stackable)
         if not np.any(this_valid):

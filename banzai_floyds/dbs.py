@@ -446,6 +446,45 @@ def populate_order_heights_locations(db_address):
                          good_after=order_height['good_after'], good_until=order_height['good_until'])
 
 
+def bound_skyflats_to_windows(db_address: str) -> int:
+    """Stamp each order solution's validity window from skyflats.dat onto its calibration record.
+
+    skyflats.dat is the authority on which order solution applies to which dates, but get_cal_record
+    selects on the good_after/good_until columns of the calibration record itself. Left at their
+    unbounded defaults those columns make the date filter a no-op, so a solution the file has
+    already retired stays selectable and a frame can be reduced against an order trace from before
+    the spectrograph last moved.
+
+    Parameters
+    ----------
+    db_address: str
+        The address of the database to use (SQLAlchemy format)
+
+    Returns
+    -------
+    int: the number of order solution records that were given a window
+    """
+    skyflats_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'orders', 'skyflats.dat')
+    skyflats = ascii.read(skyflats_file)
+    # The table names the raw frames; the database holds the order solutions reduced from them
+    windows = {str(row['filename']).replace('-x00.fits', '-f91.fits'):
+               (parse_date_obs(row['good_after']), parse_date_obs(row['good_until']))
+               for row in skyflats}
+    bounded = 0
+    with get_session(db_address) as db_session:
+        records = db_session.query(FLOYDSCalibrationImage).filter(
+            FLOYDSCalibrationImage.type == 'SKYFLAT').all()
+        for record in records:
+            window = windows.get(record.filename)
+            if window is None:
+                continue
+            record.good_after, record.good_until = window
+            db_session.add(record)
+            bounded += 1
+        db_session.commit()
+    return bounded
+
+
 def populate_lsf_params(db_address):
     """Seed the LSF table with the hand-measured Gauss-Hermite shapes shipped in the repo.
     """
