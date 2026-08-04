@@ -11,6 +11,8 @@ from banzai_floyds.frames import FRINGE_INTERPOLATED, FRINGE_NO_PATTERN
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
 from banzai_floyds.fringe import prepare_fringe_data, make_fringe_continuum_model
+from banzai_floyds.fringe import fit_science_source_flux
+from banzai.utils.stats import robust_standard_deviation
 from banzai_floyds.dbs import create_db, save_calibration_info, get_unstacked_same_block_cals
 from banzai_floyds.dbs import FLOYDSCalibrationImage
 from banzai_floyds.tests.utils import generate_fake_science_frame
@@ -678,10 +680,13 @@ def test_correct_fringe_low_snr():
     assert output_frame.meta['L1FRNGOX'] == 0.0
     assert output_frame.meta['L1FRNGOY'] == 0.0
     # The measured pattern is still fit against a defringed continuum in this branch, so it should
-    # scatter less than the pattern that was actually in the frame
+    # scatter less than the pattern that was actually in the frame. This frame is noisy enough that
+    # the continuum lands near zero at a handful of pixels and the ratio there runs into the
+    # hundreds, so compare robust scatters rather than letting one pixel decide.
     measured = output_frame['FRINGE_MEASURED'].data
     usable = np.logical_and(np.logical_and(fringe_region, applied), measured > MIN_FRINGE_VALUE)
-    assert np.std(measured[usable] / output_frame['FRINGE'].data[usable]) < np.std(measured[usable])
+    corrected = measured[usable] / output_frame['FRINGE'].data[usable]
+    assert robust_standard_deviation(corrected) < robust_standard_deviation(measured[usable])
 
 
 def test_pad_fringe_data():
@@ -721,19 +726,48 @@ def test_pad_fringe_data():
         np.testing.assert_allclose(actual, expected, rtol=0.05)
 
 
+def test_source_flux_does_not_follow_the_slit_row_rounding():
+    # Regression test for a sawtooth in the measured fringe pattern.
+    np.random.seed(671209)
+    frame = generate_fake_science_frame(include_sky=False, fringe=False, include_trace=False)
+    x2d, y2d = np.meshgrid(np.arange(frame.data.shape[1], dtype=float),
+                           np.arange(frame.data.shape[0], dtype=float))
+    slit_positions = y2d - frame.orders.center(x2d)[0]
+    # Flat sky plus a sharp trace, times a spectrum slow enough for the smoothing to follow exactly
+    spectrum = 1.0 + 0.3 * np.cos(2.0 * np.pi * x2d / 4000.0)
+    source = (200.0 + 3000.0 * np.exp(-0.5 * (slit_positions / 1.5) ** 2)) * spectrum
+    in_order = frame.orders.data == 1
+    frame.data[:, :] = 0.0
+    frame.data[in_order] = source[in_order]
+
+    continuum = fit_science_source_flux(frame, 6000.0)
+    in_region = np.logical_and(np.logical_and(in_order, frame.wavelengths.data >= 6000.0),
+                               continuum > 0)
+    rounding_error = slit_positions - np.round(slit_positions)
+    slit_rows = np.round(slit_positions).astype(int)
+    for row in [-3, -2, -1, 1, 2, 3]:
+        in_row = np.logical_and(in_region, slit_rows == row)
+        deviation = frame.data[in_row] / continuum[in_row] - 1.0
+        # Fitting per rounded row gives 11-25% here, with a correlation of 0.97 against the
+        # rounding error
+        assert np.std(deviation) < 0.08
+        assert abs(np.corrcoef(deviation, rounding_error[in_row])[0, 1]) < 0.8
+
+
 def test_fit_fringe_continuum():
     np.random.seed(489762)
     level = 10000.0
     # Define fake fringe data that is already the right shape
-    # The data should be a sine wave + a quadratic continuum (slowly varying)
+    # The data should be a sine wave + a slowly varying continuum
     fake_frame = generate_fake_science_frame(fringe=True, fringe_offset=0,
                                              include_super_fringe=True, include_trace=False)
-    # Define fake fringe data that is a sine wave + a quadratic continuum (slowly varying)
     x2d, y2d = np.meshgrid(np.arange(fake_frame.data.shape[1], dtype=float),
                            np.arange(fake_frame.data.shape[0], dtype=float))
     y2d -= fake_frame.orders.center(x2d)[0]
     order_height = fake_frame.orders.order_heights[0]
-    illumination = Legendre([1.0, 0.0, -0.1], domain=[-order_height / 2.0, order_height / 2.0])(y2d)
+    # The real slit illumination varies by about 10% so we make sure we don't overfit
+    illumination = Legendre([1.0, 0.0, -0.1, 0.0, 0.08],
+                            domain=[-order_height / 2.0, order_height / 2.0])(y2d)
     in_order = fake_frame.orders.data == 1
     fake_frame.data[in_order] = level * illumination[in_order] * fake_frame.fringe[in_order]
 
@@ -759,11 +793,16 @@ def test_fit_fringe_continuum():
     # themselves and the continuum comes out over 10% low at the worst pixels. Blueward of that the
     # periods are short enough for the wavelet fit to average over.
     redward = fake_frame.wavelengths.data[order_region][1:-1][overlap] > 9000.0
-    np.testing.assert_allclose(actual[np.logical_not(redward)], expected[np.logical_not(redward)], rtol=0.04)
+    np.testing.assert_allclose(actual[np.logical_not(redward)], expected[np.logical_not(redward)], rtol=0.07)
     np.testing.assert_allclose(actual[redward], expected[redward], rtol=0.15)
+    relative_error = np.abs(actual - expected) / expected
+    assert np.sqrt(np.mean(relative_error[np.logical_not(redward)] ** 2)) < 0.02
 
-    # The leak is worse again in the outermost rows of the slit, where the wavelet fit also has
-    # boundary effects
+    pattern = fake_frame.data[order_region][1:-1][overlap] / actual
+    input_pattern = fake_frame.fringe[order_region][1:-1][overlap]
+    np.testing.assert_allclose(np.std(pattern[np.logical_not(redward)]),
+                               np.std(input_pattern[np.logical_not(redward)]), rtol=0.05)
+    # Check the boundaries explicitly, because they are the most sensitive to issues.
     for edge in [-1, 0]:
         overlap = fake_frame.wavelengths.data[order_region][edge] >= 6000.0
         expected = level * illumination[order_region][edge][overlap]

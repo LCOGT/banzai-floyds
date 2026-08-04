@@ -250,7 +250,8 @@ def find_fringe_offset(data: np.ndarray, uncertainty: np.ndarray, to_fit: np.nda
     return best_fit[0], best_fit[1]
 
 
-def make_fringe_continuum_model(data, wavelet='sym8', level=5, edge_pad: int = None):
+def make_fringe_continuum_model(data, wavelet='sym8', level=5, edge_pad: int = None,
+                                min_y_detail_level: int = 4):
     # The stationary wavelet transform is periodic, so the two x edges wrap into each other.
     # Without padding, the continuum near the red edge of the order rings toward the blue-edge
     # value (and vice versa), leaving a hook artifact in data / continuum. Pad x with an odd
@@ -275,15 +276,19 @@ def make_fringe_continuum_model(data, wavelet='sym8', level=5, edge_pad: int = N
     #         (cH_m, cV_m, cD_m)
     #     )
     # ]
-    # H is X, V is Y, D is Diagonal
+    # H is Y, V is X, D is Diagonal
 
-    # We need to remove all the x-details. We probably need to keep some of the lowest y-details
-    # because the y dimension is so much shorter than the x if we want to fit any illumination pattern
+    # The fringes run along x, so all of the x details have to go. The coarse y details are the slit
+    # illumination profile rather than fringe: the slit spans only ~13 pixels of dispersion in the
+    # tilted direction, about 0.7 of a fringe period over 94 rows, so nothing an 8 to 32 row detail
+    # band can represent is fringe.
+    # swt2 returns the coefficients coarsest first, so entry i is wavelet level level - i.
     filtered_coeffs = []
 
     for i, (cA, details) in enumerate(coeffs):
         cH, cV, cD = details
-        filtered_coeffs.append((cA, (np.zeros_like(cH), np.zeros_like(cV), np.zeros_like(cD))))
+        keep_y = cH if level - i >= min_y_detail_level else np.zeros_like(cH)
+        filtered_coeffs.append((cA, (keep_y, np.zeros_like(cV), np.zeros_like(cD))))
     continuum_model = pywt.iswt2(filtered_coeffs, wavelet=(wavelet, wavelet))
 
     return continuum_model[:h, edge_pad:edge_pad + w]
@@ -340,9 +345,19 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     return padded_data, padded_x2d, padded_y2d
 
 
-def fit_lamp_continuum(image, cutoff: float, wavelet: str = 'sym8', level: int = 5) -> np.ndarray:
+def fit_lamp_continuum(image, cutoff: float, wavelet: str = 'sym8', level: int = 5,
+                       min_y_detail_level: int = 4) -> np.ndarray:
     """
     Fit the smooth continuum of a lamp flat
+
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame of a lamp flat with orders and wavelengths set
+    cutoff: float minimum wavelength in angstroms of the region with fringing
+    wavelet: str name of the wavelet to decompose the flat with
+    level: int number of levels in the stationary wavelet transform
+    min_y_detail_level: int coarsest wavelet levels whose cross-slit details are kept in the
+        continuum, so that it can follow the slit illumination profile
 
     Returns
     -------
@@ -351,7 +366,8 @@ def fit_lamp_continuum(image, cutoff: float, wavelet: str = 'sym8', level: int =
         so that data / continuum is exactly one there.
     """
     fringe_data, fringe_x2d, fringe_y2d = prepare_fringe_data(image, cutoff, level)
-    continuum_model = make_fringe_continuum_model(fringe_data, wavelet, level)
+    continuum_model = make_fringe_continuum_model(fringe_data, wavelet, level,
+                                                  min_y_detail_level=min_y_detail_level)
 
     continuum_coefficients = spline_filter(continuum_model, order=3)
     continuum_data = image.data.copy()
@@ -409,10 +425,15 @@ def fit_science_source_flux(image, cutoff: float, smoothing_window: int = 101,
     residual = data - sky
     continuum = data.copy()
     x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
-    slit_rows = np.round(y2d - image.orders.center(x2d)[0]).astype(int)
-    for row in np.unique(slit_rows[in_region]):
+    slit_positions = y2d - image.orders.center(x2d)[0]
+    slit_rows = np.round(slit_positions).astype(int)
+
+    rows = np.unique(slit_rows[in_region])
+    smoothed_rows = np.full((rows.size, image.shape[1]), np.nan)
+    for i, row in enumerate(rows):
         in_row = np.logical_and(in_region, slit_rows == row)
-        row_order = np.argsort(x2d[in_row])
+        columns = x2d[in_row]
+        row_order = np.argsort(columns)
         window = min(smoothing_window, row_order.size)
         # Window has to be odd
         if window % 2 == 0:
@@ -420,9 +441,23 @@ def fit_science_source_flux(image, cutoff: float, smoothing_window: int = 101,
         if window <= smoothing_order:
             smoothed = np.full(row_order.size, np.median(residual[in_row]))
         else:
-            smoothed = np.empty(row_order.size)
-            smoothed[row_order] = savgol_filter(residual[in_row][row_order], window, smoothing_order)
-        continuum[in_row] = sky[in_row] + smoothed
+            smoothed = savgol_filter(residual[in_row][row_order], window, smoothing_order)
+        smoothed_rows[i, columns[row_order]] = smoothed
+
+    # Linearly interpolate between the two rows that bracket each pixel's true distance from the
+    # order center, falling back to whichever neighbor exists at the ends of the slit and at columns
+    # a row does not reach
+    positions = slit_positions[in_region]
+    lower_index = np.clip(np.searchsorted(rows, positions) - 1, 0, rows.size - 1)
+    upper_index = np.minimum(lower_index + 1, rows.size - 1)
+    columns = x2d[in_region]
+    lower = smoothed_rows[lower_index, columns]
+    upper = smoothed_rows[upper_index, columns]
+    weight = np.clip(positions - rows[lower_index], 0.0, 1.0)
+    weight[np.isnan(lower)] = 1.0
+    weight[np.isnan(upper)] = 0.0
+    interpolated = (1.0 - weight) * np.nan_to_num(lower) + weight * np.nan_to_num(upper)
+    continuum[in_region] = sky[in_region] + interpolated
     return continuum
 
 
@@ -434,10 +469,14 @@ class FringeExtractor(Stage):
     # This appears to be specific to our data and the code does produce a warning
     # but the results look the best with this level of decomposition
     WAVELET_LEVEL = 5
+    # Keep the cross-slit details from this level up (16 rows and coarser)
+    # in the continuum to caputure the illumination.
+    MIN_Y_DETAIL_LEVEL = 4
 
     def do_stage(self, image):
         cutoff = self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
-        continuum = fit_lamp_continuum(image, cutoff, self.WAVELET_CLASS, self.WAVELET_LEVEL)
+        continuum = fit_lamp_continuum(image, cutoff, self.WAVELET_CLASS, self.WAVELET_LEVEL,
+                                       self.MIN_Y_DETAIL_LEVEL)
         in_order = np.logical_and(image.orders.data > 0, image.mask == 0)
         pattern = np.zeros_like(image.data)
         pattern[in_order] = image.data[in_order] / continuum[in_order]
