@@ -428,4 +428,5 @@ class FLOYDSFrameFactory(LCOFrameFactory):
         frame = super(FLOYDSFrameFactory, self).open(file_info, runtime_context)
         # Munge the SATURATE keyword in en12 because it's been wrong for years
         if frame.instrument.camera == 'en12' and int(frame.saturate) == 38400:
-            frame.saturate = 59000
+            frame.data.saturate = 59000
+            frame.data.max_linearity = 56000
