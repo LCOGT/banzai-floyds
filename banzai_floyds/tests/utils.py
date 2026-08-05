@@ -139,7 +139,9 @@ def plot_array(data, overlays=None):
 
 def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=False, fringe_offset=0,
                                 fringe_offset_x=0, include_trace=True, background=0.0,
-                                include_super_fringe=False):
+                                include_super_fringe=False, flux_normalization=10000.0,
+                                second_trace_offset=None, second_trace_fraction=0.4,
+                                trace_wavelength_range=None):
     """
     Generate a fake science frame to run tests on.
 
@@ -161,6 +163,14 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         Background level to add to the frame
     include_super_fringe: bool
         Include the super fringe pattern in the frame attributes?
+    flux_normalization: float
+        Peak counts in the object trace. Lower values make a fainter object.
+    second_trace_offset: float
+        If set, add a second object this many pixels from the first one in the slit
+    second_trace_fraction: float
+        Brightness of the second object relative to the first
+    trace_wavelength_range: tuple of two floats
+        If set, only include the object trace between these wavelengths
 
     Returns
     -------
@@ -212,7 +222,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                      orders=orders.new(expanded_order_height),
                                      lsf_params=lsf_params)
     profile_sigma = fwhm_to_sigma(profile_fwhm)
-    flux_normalization = 10000.0
 
     sky_continuum = 800.0
     sky_normalization = 6000.0
@@ -232,11 +241,21 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         weight = smooth_order_weights(order_models[i].coef, (x2d, y2d), orders.order_heights[i],
                                       order_models[i].domain, k=EDGE_SHARPNESS)
         trace_center = profile_centers[i](wavelengths.data)
+        if trace_wavelength_range is None:
+            trace_weight = weight
+        else:
+            in_trace_range = np.logical_and(wavelengths.data >= trace_wavelength_range[0],
+                                            wavelengths.data <= trace_wavelength_range[1])
+            trace_weight = weight * in_trace_range
         if include_trace:
             if flat_spectrum:
-                data[in_order] += weight[in_order] * flux_normalization * gauss(
+                data[in_order] += trace_weight[in_order] * flux_normalization * gauss(
                     slit_coordinates[in_order], trace_center[in_order],
                     profile_sigma)
+                if second_trace_offset is not None:
+                    data[in_order] += trace_weight[in_order] * flux_normalization * second_trace_fraction * gauss(
+                        slit_coordinates[in_order], trace_center[in_order] + second_trace_offset,
+                        profile_sigma)
             else:
                 profile = gauss(slit_coordinates[in_order], trace_center[in_order],
                                 profile_sigma)
@@ -247,7 +266,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                     # add some random emission lines
                     input_spectrum += strength * gauss(wavelengths.data[in_order],
                                                        input_line, fwhm_to_sigma(fhwm)) * profile
-                data[in_order] += weight[in_order] * input_spectrum
+                data[in_order] += trace_weight[in_order] * input_spectrum
 
         data[in_order] += weight[in_order] * background
 

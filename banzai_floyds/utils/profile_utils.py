@@ -6,14 +6,17 @@ from numpy.polynomial.legendre import Legendre
 def profile_fits_to_data(data_shape, profile_centers, profile_sigmas, orders, wavelengths_data):
     profile_data = np.zeros(data_shape)
     x2d, y2d = np.meshgrid(np.arange(profile_data.shape[1]), np.arange(profile_data.shape[0]))
-    order_iter = zip(orders.order_ids, profile_centers, profile_sigmas, orders.center(x2d))
-    for order_id, profile_center, profile_sigma, order_center in order_iter:
+    order_iter = zip(orders.order_ids, profile_centers, profile_sigmas, orders.center(x2d), orders.order_heights)
+    for order_id, profile_center, profile_sigma, order_center, order_height in order_iter:
         in_order = orders.data == order_id
         wavelengths = wavelengths_data[in_order]
+        # A width polynomial extrapolated outside the wavelengths that were actually traced can go
+        # negative, which makes the weights meaningless, so keep the width physical
+        widths = np.clip(profile_sigma(wavelengths), 0.5, order_height / 2.0)
         # TODO: Make sure this is normalized correctly
         # Note that the widths in the value set here are sigma and not fwhm
         profile_data[in_order] = gauss(y2d[in_order] - order_center[in_order],
-                                       profile_center(wavelengths), profile_sigma(wavelengths))
+                                       profile_center(wavelengths), widths)
     return profile_data
 
 

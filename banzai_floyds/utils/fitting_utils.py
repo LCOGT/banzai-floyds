@@ -80,7 +80,7 @@ def parameter_variances(fit):
 
 def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, degree: int,
                         domain: Sequence[float], huber_scale: float = 6.0, clip_sigma: float = 4.0,
-                        maxiters: int = 5) -> Legendre:
+                        maxiters: int = 5, return_used: bool = False) -> Legendre:
     """
     Chi^2 Legendre fit with the outliers rejected, e.g. a cosmic ray.
     First we solve for the Huber M-estimate by iteratively reweighted least squares
@@ -88,6 +88,10 @@ def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, d
     sec. 15.7).
     That gives a model that is less sensitive to the outlier.
     We then clip on the residuals to that model, which is set by the MAD.
+
+    Beyond huber_scale, the reweighting drives a point's weight to k / |y - model|, independent of
+    its claimed uncertainty. A point with a spuriously small uncertainty therefore can't drag the
+    model through itself and escape the clip.
 
     Parameters
     ----------
@@ -105,10 +109,12 @@ def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, d
         Points further than this many robust standard deviations from the Huber model are rejected.
     maxiters : int
         Maximum number of reweighting iterations.
+    return_used : bool
+        Also return a boolean array flagging the points that survived the clip.
 
     Returns
     -------
-    Legendre object with the best fit
+    Legendre object with the best fit, and the boolean array of points used if return_used
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -132,8 +138,13 @@ def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, d
     robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)
     good = deviations < clip_sigma * robust_sigma
     if good.sum() <= degree + 1:
+        if return_used:
+            return model, np.ones(len(x), dtype=bool)
         return model
-    return Legendre.fit(x[good], y[good], degree, domain=domain, w=1.0 / uncertainty[good])
+    model = Legendre.fit(x[good], y[good], degree, domain=domain, w=1.0 / uncertainty[good])
+    if return_used:
+        return model, good
+    return model
 
 
 def interp_with_errors(x, y, yerr, x_new):

@@ -1,8 +1,12 @@
 from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table
+from banzai.logs import get_logger
 from banzai_floyds.utils.binning_utils import rebin_data_combined
 from banzai_floyds.utils.flux_utils import flux_calibrate
+
+
+logger = get_logger()
 
 
 def set_extraction_region(image):
@@ -34,10 +38,11 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
 
-    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [], 
+    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [],
                background_out_key: [], 'mask': []}
     if include_order:
         results['order'] = []
+    n_skipped = {}
     for data_to_sum in binned_data.groups:
         wavelength_bin = data_to_sum[bin_key][0]
         order = data_to_sum['order'][0]
@@ -45,11 +50,13 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         if wavelength_bin == 0:
             continue
         if data_to_sum['extraction_window'].sum() == 0:
+            n_skipped[order] = n_skipped.get(order, 0) + 1
             continue
         # Cut any bins that don't include the profile center. If the weights are small (i.e. we only caught the edge
         # of the profile), this blows up numerically. The threshold here is a little arbitrary. It needs to be small
         # enough to not have numerical artifacts but large enough to not reject broad profiles.
         if np.max(data_to_sum[weights_key][data_to_sum['extraction_window']]) < 5e-3:
+            n_skipped[order] = n_skipped.get(order, 0) + 1
             continue
 
         wavelength_bin_width = data_to_sum[bin_key + '_width'][0]
@@ -86,6 +93,10 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         results['mask'].append(mask)
         if include_order:
             results['order'].append(order)
+    for order in sorted(n_skipped):
+        # These bins are silently missing from the extracted spectrum, which usually means the
+        # profile is not where the flux is
+        logger.warning(f'Skipped {n_skipped[order]} wavelength bins in order {order} that missed the profile')
     return Table(results)
 
 
