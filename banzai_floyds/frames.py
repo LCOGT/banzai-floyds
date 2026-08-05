@@ -421,3 +421,9 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     @staticmethod
     def is_empty_coordinate(coordinate):
         return 'nan' in str(coordinate).lower() or 'n/a' in str(coordinate).lower()
+
+    def open(self, file_info, runtime_context) -> Optional[ObservationFrame]:
+        frame = super(FLOYDSFrameFactory, self).open(file_info, runtime_context)
+        # Munge the SATURATE keyword in en12 because it's been wrong for years
+        if frame.instrument.camera == 'en12' and int(frame.saturate) == 38400:
+            frame.saturate = 59000
