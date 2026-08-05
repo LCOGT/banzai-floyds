@@ -426,7 +426,12 @@ class FLOYDSFrameFactory(LCOFrameFactory):
 
     def open(self, file_info, runtime_context) -> Optional[ObservationFrame]:
         frame = super(FLOYDSFrameFactory, self).open(file_info, runtime_context)
+        if frame is None:
+            return None
         # Munge the SATURATE keyword in en12 because it's been wrong for years
-        if frame.instrument.camera == 'en12' and int(frame.data.saturate) == 38400:
-            frame.data.saturate = 59000
-            frame.data.max_linearity = 56000
+        if frame.instrument.camera == 'en12':
+            for hdu in frame.ccd_hdus:
+                if hdu.saturate is not None and int(hdu.saturate) == 38400:
+                    hdu.saturate = 59000
+                    hdu.max_linearity = 56000
+        return frame
