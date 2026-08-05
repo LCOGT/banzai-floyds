@@ -9,6 +9,8 @@ from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from astropy.table import Table
 from banzai_floyds import dbs
+from typing import Optional
+from banzai.frames import ObservationFrame
 
 # Set the bounds for what we consider a valid fringe
 MIN_FRINGE_VALUE = 0.1
