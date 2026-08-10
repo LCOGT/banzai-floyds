@@ -40,6 +40,46 @@ def gauss_hermite(x, center, sigma, amplitude, h3=0.0, h4=0.0):
     return amplitude * np.exp(-0.5 * w ** 2) * (1.0 + h3 * _normalized_hermite(3, w) + h4 * _normalized_hermite(4, w))
 
 
+# Below MIN_BETA a Moffat puts more flux outside a 2.5 sigma extraction window than in it. At
+# MAX_BETA it is a Gaussian to better than 1%, so there is nothing left to measure past it, and a
+# profile fit before the pipeline had a wing term is written as a Moffat at MAX_BETA.
+MIN_BETA = 1.5
+MAX_BETA = 20.0
+
+
+def moffat_alpha(sigma, beta):
+    """
+    The Moffat core width with the same full width at half maximum as a Gaussian of this sigma.
+
+    FWHM = 2 alpha sqrt(2^(1/beta) - 1), so alpha = FWHM / (2 sqrt(2^(1/beta) - 1)).
+
+    Parametrizing by the width rather than by alpha is what makes the fit behave. alpha and beta run
+    along a valley in chi^2 -- the profile tends to a Gaussian as beta grows with alpha ~ sqrt(beta),
+    so the two are almost perfectly correlated and neither is individually measurable when the wings
+    are weak. The full width at half maximum is the combination that stays fixed along that valley,
+    which is why seeing is quoted as a FWHM, and holding it as the parameter takes the valley out of
+    the search.
+    """
+    return sigma_to_fwhm(sigma) / (2.0 * np.sqrt(2.0 ** (1.0 / beta) - 1.0))
+
+
+def moffat(x, center, sigma, amplitude, beta):
+    """
+    Moffat profile (Moffat 1969), written in terms of the width rather than the core radius.
+
+    I(x) = amplitude (1 + ((x - center) / alpha)^2)^-beta,   alpha = alpha(sigma, beta)
+
+    sigma is the Gaussian sigma with the same full width at half maximum, so it means the same thing
+    here as it does for `gauss` and the extraction and background windows keep their meaning whatever
+    beta comes out. beta sets how heavy the wings are: small beta is a long tail, and the profile
+    tends to a Gaussian as beta goes to infinity.
+
+    Unlike a Gauss-Hermite this is positive everywhere by construction, whatever the parameters, so
+    the extraction weights it feeds (Horne 1986) can never go negative.
+    """
+    return amplitude * (1.0 + ((np.asarray(x, dtype=float) - center) / moffat_alpha(sigma, beta)) ** 2) ** -beta
+
+
 def fwhm_to_sigma(fwhm):
     return fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 
@@ -78,20 +118,146 @@ def parameter_variances(fit):
     return np.clip(np.diag(covariance), 0.0, None)
 
 
+class ClampedLegendre:
+    """
+    A Legendre polynomial that continues as a straight line outside the range it was fit over.
+
+    A high order polynomial fit to points that stop short of the end of its domain swings freely past
+    the last one, and the higher the degree the harder it swings. Reducing the degree until the ends
+    behave trades a worse fit everywhere for a better one at the ends, which is the wrong trade. What
+    the points outside their range don't constrain is the curvature, not the trend, so we continue
+    from the edge of the measured range along the tangent there:
+
+        f(x) = p(x_e) + p'(x_e) (x - x_e),  x_e = clip(x, measured_range)
+
+    which is exactly p(x) inside the range.
+
+    This exposes the part of numpy.polynomial.legendre.Legendre the pipeline uses: coef, domain,
+    degree(), and calling the object.
+    """
+    def __init__(self, model: Legendre, measured_range: Sequence[float] = None):
+        self._model = model
+        self._slope = model.deriv()
+        if measured_range is None:
+            measured_range = model.domain
+        self._measured_range = (min(measured_range), max(measured_range))
+
+    @property
+    def coef(self) -> np.ndarray:
+        return self._model.coef
+
+    @property
+    def domain(self) -> np.ndarray:
+        return self._model.domain
+
+    @property
+    def measured_range(self) -> tuple[float, float]:
+        return self._measured_range
+
+    def degree(self) -> int:
+        return self._model.degree()
+
+    def __call__(self, x):
+        x = np.asarray(x, dtype=float)
+        edge = np.clip(x, self._measured_range[0], self._measured_range[1])
+        return self._model(edge) + self._slope(edge) * (x - edge)
+
+
+# A degree d Legendre over n points has structure on n / d. Requiring that to stay this many times
+# wider than the object's full width at half maximum is what keeps a background fit across the slit
+# from absorbing the object itself, however high the degree goes.
+BACKGROUND_SCALE_MARGIN = 1.5
+
+
+def resolvable_background_degree(n_points: int, sigma: float) -> float:
+    """
+    Highest degree Legendre across n_points of slit whose structure is still
+    BACKGROUND_SCALE_MARGIN times wider than an object of this width.
+
+    Callers clip this to the range of degrees they are willing to use; what it encodes is only the
+    scale separation between the background and the object.
+    """
+    return n_points / (BACKGROUND_SCALE_MARGIN * sigma_to_fwhm(sigma))
+
+
+def legendre_design(x: np.ndarray, degree: int, domain: Sequence[float]) -> np.ndarray:
+    """Legendre basis on x, one column per term, so a Legendre fit is an ordinary linear solve."""
+    return np.array([Legendre.basis(i, domain=domain)(x) for i in range(degree + 1)]).T
+
+
+def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray,
+                      huber_scale: float = 6.0, clip_sigma: float = 4.0,
+                      maxiters: int = 5) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Weighted linear least squares with the outliers rejected, e.g. a cosmic ray.
+
+    First we solve for the Huber M-estimate by iteratively reweighted least squares (Huber 1964;
+    Press et al., Numerical Recipes 3rd ed., sec. 15.7). That gives a model that is less sensitive
+    to the outlier. We then clip on the residuals to that model, which is set by the MAD.
+
+    Beyond huber_scale, the reweighting drives a point's weight to k / |y - model|, independent of
+    its claimed uncertainty. A point with a spuriously small uncertainty therefore can't drag the
+    model through itself and escape the clip.
+
+    Parameters
+    ----------
+    design : array, shape (n_points, n_terms)
+        One column per basis function, evaluated at the points being fit.
+    y : array
+        Values being fit.
+    uncertainty : array
+        1-sigma uncertainties on `y`, same shape as `y`.
+    huber_scale : float
+        Residual, in sigma, beyond which the Huber weights start falling off as 1 / |r|.
+    clip_sigma : float
+        Points further than this many robust standard deviations from the Huber model are rejected.
+    maxiters : int
+        Maximum number of reweighting iterations.
+
+    Returns
+    -------
+    (coefficients, used), with used flagging the points that survived the clip
+    """
+    design = np.asarray(design, dtype=float)
+    y = np.asarray(y, dtype=float)
+    uncertainty = np.asarray(uncertainty, dtype=float)
+
+    def solve(weights):
+        return np.linalg.lstsq(design * weights[:, np.newaxis], y * weights, rcond=None)[0]
+
+    weights = 1.0 / uncertainty
+    coefficients = solve(weights)
+    for _ in range(maxiters):
+        # w = min(1, k / |r|) / sigma, written to avoid dividing by a residual of zero
+        residuals = y - design @ coefficients
+        new_weights = 1.0 / (np.maximum(np.abs(residuals) / uncertainty / huber_scale, 1.0) * uncertainty)
+        converged = np.allclose(new_weights, weights)
+        weights = new_weights
+        coefficients = solve(weights)
+        if converged:
+            break
+
+    residuals = (y - design @ coefficients) / uncertainty
+    deviations = np.abs(residuals - np.median(residuals))
+    # Never clip tighter than the formal uncertainties. The MAD of the few tens of points in a
+    # background region is noisy, and a low draw would start rejecting perfectly good pixels.
+    robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)
+    good = deviations < clip_sigma * robust_sigma
+    if good.sum() <= design.shape[1]:
+        return coefficients, np.ones(len(y), dtype=bool)
+    # A zero weight drops a row from the normal equations, which is what rejecting it means
+    clipped_weights = np.zeros(len(y))
+    clipped_weights[good] = 1.0 / uncertainty[good]
+    return solve(clipped_weights), good
+
+
 def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, degree: int,
                         domain: Sequence[float], huber_scale: float = 6.0, clip_sigma: float = 4.0,
                         maxiters: int = 5, return_used: bool = False) -> Legendre:
     """
     Chi^2 Legendre fit with the outliers rejected, e.g. a cosmic ray.
-    First we solve for the Huber M-estimate by iteratively reweighted least squares
-    (Huber 1964; Press et al., Numerical Recipes 3rd ed.,
-    sec. 15.7).
-    That gives a model that is less sensitive to the outlier.
-    We then clip on the residuals to that model, which is set by the MAD.
 
-    Beyond huber_scale, the reweighting drives a point's weight to k / |y - model|, independent of
-    its claimed uncertainty. A point with a spuriously small uncertainty therefore can't drag the
-    model through itself and escape the clip.
+    This is `robust_linear_fit` on the Legendre basis; see it for how the rejection works.
 
     Parameters
     ----------
@@ -116,34 +282,12 @@ def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, d
     -------
     Legendre object with the best fit, and the boolean array of points used if return_used
     """
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    uncertainty = np.asarray(uncertainty, dtype=float)
-
-    weights = 1.0 / uncertainty
-    model = Legendre.fit(x, y, degree, domain=domain, w=weights)
-    for _ in range(maxiters):
-        # w = min(1, k / |r|) / sigma, written to avoid dividing by a residual of zero
-        new_weights = 1.0 / (np.maximum(np.abs(y - model(x)) / uncertainty / huber_scale, 1.0) * uncertainty)
-        converged = np.allclose(new_weights, weights)
-        weights = new_weights
-        model = Legendre.fit(x, y, degree, domain=domain, w=weights)
-        if converged:
-            break
-
-    residuals = (y - model(x)) / uncertainty
-    deviations = np.abs(residuals - np.median(residuals))
-    # Never clip tighter than the formal uncertainties. The MAD of the few tens of points in a
-    # background region is noisy, and a low draw would start rejecting perfectly good pixels.
-    robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)
-    good = deviations < clip_sigma * robust_sigma
-    if good.sum() <= degree + 1:
-        if return_used:
-            return model, np.ones(len(x), dtype=bool)
-        return model
-    model = Legendre.fit(x[good], y[good], degree, domain=domain, w=1.0 / uncertainty[good])
+    coefficients, used = robust_linear_fit(legendre_design(np.asarray(x, dtype=float), degree, domain),
+                                           y, uncertainty, huber_scale=huber_scale,
+                                           clip_sigma=clip_sigma, maxiters=maxiters)
+    model = Legendre(coefficients, domain=domain)
     if return_used:
-        return model, good
+        return model, used
     return model
 
 

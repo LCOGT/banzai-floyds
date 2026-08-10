@@ -7,6 +7,9 @@ import os
 from astropy.io import fits
 from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
+from banzai_floyds.utils.fitting_utils import MAX_BETA
+from banzai_floyds.utils.fitting_utils import ClampedLegendre
+from numpy.polynomial.legendre import Legendre
 from astropy.table import Table
 from banzai_floyds import dbs
 
@@ -93,25 +96,37 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
         # TODO: Save telluric and sensitivity corrections that were applied
 
-        filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')
-
-        fits_1d[0].header['L1ID2D'] = filename_2d
+        fits_1d[0].header['L1ID2D'] = filename_1d.replace('-1d.fits', '-2d.fits')
         output_product_1d = DataProduct.from_fits(fits_1d, filename_1d, self.get_output_directory(runtime_context))
+        output_product_2d = self.get_2d_spectrum_product(runtime_context, filename_1d=filename_1d)
+        return output_product_1d, output_product_2d
 
+    def get_2d_spectrum_product(self, runtime_context, filename_1d=None):
+        """The 2D spectrum, named the same whether or not it has a 1D spectrum alongside it.
+
+        filename_1d is None when there is no 1D spectrum to cross reference.
+        """
         # TODO consider saving the background coeffs or the profile coeffs?
+        filename_2d = self.get_output_filename(runtime_context).replace('.fits', '-2d.fits')
+        self.meta.pop('EXTNAME', None)
         frame_2d = LCOObservationFrame([hdu for hdu in self._hdus
                                         if hdu.name not in ['SPECTRUM', 'EXTRACTED', 'SENSITIVITY', 'TELLURIC']],
                                        os.path.join(self.get_output_directory(runtime_context), filename_2d))
-        frame_2d.meta['L1ID1D'] = filename_1d
+        if filename_1d is not None:
+            frame_2d.meta['L1ID1D'] = filename_1d
         fits_2d = frame_2d.to_fits(runtime_context)
-        output_product_2d = DataProduct.from_fits(fits_2d, filename_2d, self.get_output_directory(runtime_context))
-        return output_product_1d, output_product_2d
+        return DataProduct.from_fits(fits_2d, filename_2d, self.get_output_directory(runtime_context))
 
     def get_output_data_products(self, runtime_context):
-        if self.obstype == 'SPECTRUM' or self.obstype == 'STANDARD':
-            return self.get_1d_and_2d_spectra_products(runtime_context)
-        else:
+        if self.obstype != 'SPECTRUM' and self.obstype != 'STANDARD':
             return super().get_output_data_products(runtime_context)
+        # With no object detected in either order the trace falls back to the middle of the order, so
+        # an extraction is a sum of noise at an arbitrary position in the slit. The 2D frame is still
+        # wavelength calibrated and sky subtracted and worth keeping, but a 1D spectrum that looks
+        # like any other while containing no object is worse than no 1D spectrum at all.
+        if not self.meta.get('L1OBJDET', True):
+            return [self.get_2d_spectrum_product(runtime_context)]
+        return self.get_1d_and_2d_spectra_products(runtime_context)
 
     def save_processing_metadata(self, context):
         super().save_processing_metadata(context)
@@ -124,41 +139,72 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @profile.setter
     def profile(self, value):
-        centers, sigmas, fitted_points = value
-        self._profile_fits = centers, sigmas
+        # The wing term is optional: without it the profile is a pure Gaussian, which is a Moffat at
+        # MAX_BETA to better than 1%.
+        if len(value) == 4:
+            centers, sigmas, betas, fitted_points = value
+        else:
+            centers, sigmas, fitted_points = value
+            betas = [Legendre([MAX_BETA], domain=sigma.domain) for sigma in sigmas]
+        # A bare Legendre was fit over its whole domain and is meant to be evaluated over all of it,
+        # so wrapping it here leaves it alone and lets everything downstream treat the two alike.
+        centers = [ClampedLegendre(center) if isinstance(center, Legendre) else center for center in centers]
+        sigmas = [ClampedLegendre(sigma) if isinstance(sigma, Legendre) else sigma for sigma in sigmas]
+        betas = [ClampedLegendre(beta) if isinstance(beta, Legendre) else beta for beta in betas]
+        self._profile_fits = centers, sigmas, betas
         if fitted_points is None:
             fitted_points = Table({'wavelength': [], 'center': [], 'order': []})
         header = fits.Header()
-        for order, center, sigma in zip([1, 2], centers, sigmas):
+        for order, center, sigma, beta in zip([1, 2], centers, sigmas, betas):
             for i, coef in enumerate(sigma.coef):
                 header[f'O{order}SIG{i:02}'] = coef, f'P_{i:02} coefficient for width for order {order}'
             for i, coef in enumerate(center.coef):
                 header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
+            for i, coef in enumerate(beta.coef):
+                header[f'O{order}BET{i:02}'] = coef, f'P_{i:02} coefficient for Moffat beta for order {order}'
 
             header[f'O{order}CTRO'] = center.degree(), f'Polynomial Order for the center in order {order}'
             header[f'O{order}SIGO'] = sigma.degree(), f'Polynomial Order for the width in order {order}'
+            header[f'O{order}BETO'] = beta.degree(), f'Polynomial Order for Moffat beta in order {order}'
 
             domain_str = '{0} domain value for {1} fit of the profile for order {2}'
             header[f'O{order}SIGDM0'] = sigma.domain[0], domain_str.format('Min', 'sigma', order)
             header[f'O{order}SIGDM1'] = sigma.domain[1], domain_str.format('Max', 'sigma', order)
             header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', 'center', order)
             header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', 'center', order)
+            header[f'O{order}BETDM0'] = beta.domain[0], domain_str.format('Min', 'beta', order)
+            header[f'O{order}BETDM1'] = beta.domain[1], domain_str.format('Max', 'beta', order)
+
+            # Outside this range the polynomials continue along their tangent instead of following
+            # their own high order terms, so it has to be saved with the coefficients for the fit to
+            # mean the same thing when the frame is opened again.
+            measured_str = '{0} wavelength the {1} of the profile was measured at for order {2}'
+            header[f'O{order}SIGW0'] = sigma.measured_range[0], measured_str.format('Min', 'width', order)
+            header[f'O{order}SIGW1'] = sigma.measured_range[1], measured_str.format('Max', 'width', order)
+            header[f'O{order}CTRW0'] = center.measured_range[0], measured_str.format('Min', 'center', order)
+            header[f'O{order}CTRW1'] = center.measured_range[1], measured_str.format('Max', 'center', order)
+            header[f'O{order}BETW0'] = beta.measured_range[0], measured_str.format('Min', 'beta', order)
+            header[f'O{order}BETW1'] = beta.measured_range[1], measured_str.format('Max', 'beta', order)
         self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
 
-        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, sigmas,
+        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, sigmas, betas,
                                                      self.orders, self.wavelengths.data),
                                 name='PROFILE', meta=fits.Header({}))
         self.add_or_update(profile_hdu)
         if self.binned_data is not None:
             profile_centers = np.zeros(len(self.binned_data))
             profile_sigma = np.zeros(len(self.binned_data))
+            profile_beta = np.full(len(self.binned_data), MAX_BETA)
             for order in [1, 2]:
                 in_order = self.binned_data['order'] == order
                 profile_centers[in_order] = centers[order - 1](self.binned_data['wavelength'][in_order])
                 profile_sigma[in_order] = sigmas[order - 1](self.binned_data['wavelength'][in_order])
+                profile_beta[in_order] = betas[order - 1](self.binned_data['wavelength'][in_order])
 
             self.binned_data['y_profile'] = self.binned_data['y_order'] - profile_centers
             self.binned_data['profile_sigma'] = profile_sigma
+            # The background stage fits the object alongside the sky, so it needs the wings too
+            self.binned_data['profile_beta'] = profile_beta
             x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
             self.binned_data['weights'] = self['PROFILE'].data[y, x]
 

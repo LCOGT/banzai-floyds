@@ -141,7 +141,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                 fringe_offset_x=0, include_trace=True, background=0.0,
                                 include_super_fringe=False, flux_normalization=10000.0,
                                 second_trace_offset=None, second_trace_fraction=0.4,
-                                trace_wavelength_range=None):
+                                trace_wavelength_range=None, profile_fwhm=10.0):
     """
     Generate a fake science frame to run tests on.
 
@@ -171,6 +171,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         Brightness of the second object relative to the first
     trace_wavelength_range: tuple of two floats
         If set, only include the object trace between these wavelengths
+    profile_fwhm: float
+        FWHM of the object profile in pixels. Wide values are what push a background window off the
+        end of a 93 pixel order.
 
     Returns
     -------
@@ -181,7 +184,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     # DISPERSIONS = {1: 3.13, 2: 1.72}
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    profile_fwhm = 10.0
     order_height = 93
     read_noise = 6.5
     # Real order edges roll off smoothly over a few pixels (see the vignetting profile in a
