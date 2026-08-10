@@ -365,6 +365,46 @@ def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selecti
     return calibration_image
 
 
+def get_unstacked_same_block_cals(image, calibration_type: str, selection_criteria: list, db_address: str) -> list:
+    """Find the individual, unstacked calibrations taken in the same observing block as a frame.
+    This includes is_master=False frames, as opposed to other banzai calibration queries.
+
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame
+        The observation frame to find calibrations for
+    calibration_type: str
+        The obstype of calibration frame to search for
+    selection_criteria: list
+        The list of attributes to match against the calibration frames
+    db_address: str
+        The address of the database to use (SQLAlchemy format)
+
+    Returns
+    -------
+    list of FLOYDSCalibrationImage records ordered by dateobs, empty if the image has no block id
+    """
+    if image.blockid is None:
+        return []
+    calibration_criteria = FLOYDSCalibrationImage.type == calibration_type.upper()
+    calibration_criteria &= FLOYDSCalibrationImage.instrument_id == image.instrument.id
+    calibration_criteria &= FLOYDSCalibrationImage.is_master.is_(False)
+    calibration_criteria &= FLOYDSCalibrationImage.is_bad.is_(False)
+    calibration_criteria &= FLOYDSCalibrationImage.blockid == image.blockid
+
+    for criterion in selection_criteria:
+        # We have to cast to strings according to the sqlalchemy docs for version 1.3:
+        # https://docs.sqlalchemy.org/en/latest/core/type_basics.html?highlight=json#sqlalchemy.types.JSON
+        calibration_criteria &= FLOYDSCalibrationImage.attributes[criterion].as_string() ==\
+                                str(getattr(image, criterion))
+
+    with get_session(db_address=db_address) as db_session:
+        image_filter = db_session.query(FLOYDSCalibrationImage).filter(calibration_criteria)
+        # Order by time so that if we stack multiple flats from the same block, the earliest one is
+        # images[0], which is the alignment reference by convention
+        return image_filter.order_by(FLOYDSCalibrationImage.dateobs).all()
+
+
 def save_calibration_info(calibration_image: FLOYDSCalibrationImage, db_address):
     record_attributes = vars(calibration_image)
     # There is not a clean way to back a dict object from a calibration image object without this instance state
@@ -404,6 +444,45 @@ def populate_order_heights_locations(db_address):
                          int(order_height['height']),
                          float(order_height['slit_width']),
                          good_after=order_height['good_after'], good_until=order_height['good_until'])
+
+
+def bound_skyflats_to_windows(db_address: str) -> int:
+    """Stamp each order solution's validity window from skyflats.dat onto its calibration record.
+
+    skyflats.dat is the authority on which order solution applies to which dates, but get_cal_record
+    selects on the good_after/good_until columns of the calibration record itself. Left at their
+    unbounded defaults those columns make the date filter a no-op, so a solution the file has
+    already retired stays selectable and a frame can be reduced against an order trace from before
+    the spectrograph last moved.
+
+    Parameters
+    ----------
+    db_address: str
+        The address of the database to use (SQLAlchemy format)
+
+    Returns
+    -------
+    int: the number of order solution records that were given a window
+    """
+    skyflats_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'orders', 'skyflats.dat')
+    skyflats = ascii.read(skyflats_file)
+    # The table names the raw frames; the database holds the order solutions reduced from them
+    windows = {str(row['filename']).replace('-x00.fits', '-f91.fits'):
+               (parse_date_obs(row['good_after']), parse_date_obs(row['good_until']))
+               for row in skyflats}
+    bounded = 0
+    with get_session(db_address) as db_session:
+        records = db_session.query(FLOYDSCalibrationImage).filter(
+            FLOYDSCalibrationImage.type == 'SKYFLAT').all()
+        for record in records:
+            window = windows.get(record.filename)
+            if window is None:
+                continue
+            record.good_after, record.good_until = window
+            db_session.add(record)
+            bounded += 1
+        db_session.commit()
+    return bounded
 
 
 def populate_lsf_params(db_address):

@@ -42,7 +42,7 @@ def create_db():
     parser.add_argument("--log-level", default='debug', choices=['debug', 'info', 'warning',
                                                                  'critical', 'fatal', 'error'])
     parser.add_argument('--db-address', dest='db_address',
-                        default='sqlite3:///test.db',
+                        default='sqlite:///test.db',
                         help='Database address: Should be in SQLAlchemy form')
     args = parser.parse_args()
     logs.set_log_level(args.log_level)
@@ -54,7 +54,7 @@ def populate_photometric_standards():
     parser = argparse.ArgumentParser("Ingest the location of the known flux standard tables.\n\n"
                                      "This only needs to be run once on initialization of the database.")
     parser.add_argument('--db-address', dest='db_address',
-                        default='sqlite3:///test.db',
+                        default='sqlite:///test.db',
                         help='Database address: Should be in SQLAlchemy form')
     args = parser.parse_args()
     banzai_floyds.dbs.ingest_standards(args.db_address)
@@ -63,7 +63,7 @@ def populate_photometric_standards():
 def add_order_location():
     parser = argparse.ArgumentParser(inspect.getdoc(banzai_floyds.dbs.add_order_location))
     parser.add_argument('--db-address', dest='db_address',
-                        default='sqlite3:///test.db',
+                        default='sqlite:///test.db',
                         help='Database address: Should be in SQLAlchemy form')
     parser.add_argument('--instrument-id', dest='instrument_id', type=int, required=True,
                         help='Instrument ID from the database to add a new order location for')
@@ -152,6 +152,17 @@ def populate_order_heights_locations():
                         help='Database address: Should be in SQLAlchemy form')
     args = parser.parse_args()
     banzai_floyds.dbs.populate_order_heights_locations(args.db_address)
+
+
+def bound_skyflats_to_windows():
+    parser = argparse.ArgumentParser("Stamp the order solution validity windows from skyflats.dat onto "
+                                     "their calibration records.")
+    parser.add_argument('--db-address', dest='db_address',
+                        default='sqlite3:///test.db',
+                        help='Database address: Should be in SQLAlchemy form')
+    args = parser.parse_args()
+    bounded = banzai_floyds.dbs.bound_skyflats_to_windows(args.db_address)
+    logger.info(f'Bounded {bounded} order solution validity windows')
 
 
 def populate_lsf_params():

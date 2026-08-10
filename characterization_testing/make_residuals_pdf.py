@@ -1,18 +1,12 @@
-"""Process every raw FLOYDS arc (a00) frame matching the archive queries and build a
-multi-page PDF of wavelength-solution residual plots with the RMSE printed on each panel.
+"""Build a multi-page PDF of FLOYDS wavelength-solution residual plots from the processed a91
+frames in test_data, with the RMSE printed on each panel.
 
-Raw a00 frames are downloaded to test_data/raw and are only re-downloaded if the file is
-not already on disk. Run from the characterization_testing directory in the banzai-floyds
+Run process_arcs.py first to download and reduce the raw arcs; this script only reads the a91
+frames that produced. Run from the characterization_testing directory in the banzai-floyds
 environment:
 
-    python make_residuals_pdf.py                # download + reduce a00s, build PDF
-    python make_residuals_pdf.py --pdf-only     # rebuild the PDF from already-processed a91 files
-    python make_residuals_pdf.py --workers 8    # more parallel pipeline workers (default 4)
-
-Assumes the setup cells of WavelengthCalibration.ipynb have been run once so that
-test_data/test.db exists with the sites/instruments and processed skyflats (order solutions).
-The pipeline workers all write calibration records to the same sqlite file; if you see
-"database is locked" errors, lower --workers.
+    python make_residuals_pdf.py               # build the PDF from the a91s on disk
+    python make_residuals_pdf.py --workers 8   # more parallel workers (default 4)
 
 The residuals shown are the line centroids stored in the CENTROIDS extension of each
 processed frame Blends (rows flagged in the CENTROIDS 'blend'
@@ -23,7 +17,6 @@ measured_wavelength column from CENTROIDS but excluded from the RMSE.
 import argparse
 import os
 import sys
-import importlib.resources
 from concurrent.futures import ProcessPoolExecutor
 from glob import glob
 
@@ -31,8 +24,7 @@ os.environ['OPENTSDB_PYTHON_METRICS_TEST_MODE'] = 'True'
 os.environ.setdefault('DB_ADDRESS', 'sqlite:///test_data/test.db')
 
 import numpy as np
-import requests
-from astropy.io import fits, ascii
+from astropy.io import fits
 from astropy.table import Table
 from numpy.polynomial.legendre import Legendre
 import matplotlib
@@ -40,120 +32,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-ARCHIVE_FRAMES_URL = 'https://archive-api.lco.global/frames/'
-# Query params from the last cell of WavelengthCalibration.ipynb
-QUERY_PARAMS_SETS = [
-    {'start': '2021-06-21', 'end': '2021-07-01', 'instrument_id': 'en06', 'reduction_level': 0},
-    {'start': '2022-04-15', 'end': '2022-04-19', 'instrument_id': 'en12', 'reduction_level': 0},
-    # More modern data for both sites
-    {'start': '2026-06-01', 'end': '2026-06-15', 'instrument_id': 'en06', 'reduction_level': 0},
-    {'start': '2026-06-01', 'end': '2026-06-15', 'instrument_id': 'en12', 'reduction_level': 0},
-]
-RAW_DIR = 'test_data/raw'
 OUTPUT_PDF = 'wavelength_residuals.pdf'
-
-_context = None
-
-
-def get_a00_frames(params):
-    """Return the archive records for all a00 (raw arc) frames matching the query params."""
-    frames = []
-    response = requests.get(
-        ARCHIVE_FRAMES_URL, 
-        params={**params, 'limit': 100},
-        headers={'Authorization': f"Token {os.environ['ARCHIVE_AUTH_TOKEN']}"}
-    ).json()
-    while True:
-        frames += [frame for frame in response['results'] if 'a00' in frame['basename']]
-        if response.get('next'):
-            response = requests.get(response['next'], headers={'Authorization': f"Token {os.environ['ARCHIVE_AUTH_TOKEN']}"}).json()
-        else:
-            break
-    return frames
-
-
-def download_frame(frame, raw_dir=RAW_DIR):
-    """Download a raw frame to `raw_dir`, skipping the download if the file already exists.
-
-    Returns the local path to the file on disk.
-    """
-    os.makedirs(raw_dir, exist_ok=True)
-    path = os.path.join(raw_dir, frame['filename'])
-    if os.path.exists(path):
-        print(f'Already on disk: {frame["filename"]}')
-        return path
-    print(f'Downloading {frame["filename"]}')
-    response = requests.get(frame['url'], stream=True)
-    response.raise_for_status()
-    with open(path, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=1 << 20):
-            f.write(chunk)
-    return path
-
-
-def _init_worker():
-    """Build a banzai context once per worker process."""
-    global _context
-    from banzai_floyds import settings
-    import banzai.main
-
-    settings.processed_path = os.path.join(os.getcwd(), 'test_data')
-    settings.fpack = True
-    settings.db_address = os.environ['DB_ADDRESS']
-    settings.RAW_DATA_FRAME_URL = 'https://archive-api.lco.global/frames'
-    _context = banzai.main.parse_args(settings, parse_system_args=False)
-
-
-def _process_one(path):
-    from banzai.utils.stage_utils import run_pipeline_stages
-    try:
-        run_pipeline_stages([{'filename': os.path.basename(path), 'RLEVEL': 0, 'path': path}], _context)
-        return path, None
-    except Exception as e:
-        return path, str(e)
-
-
-def process_frames(paths, workers):
-    with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker) as pool:
-        for path, error in pool.map(_process_one, paths):
-            if error is not None:
-                print(f'Failed to process {os.path.basename(path)}: {error}', file=sys.stderr)
-            else:
-                print(f'Processed {os.path.basename(path)}')
-
-
-def _skyflat_windows():
-    """Read the per-site order-solution (skyflat) validity windows from skyflats.dat so that we can do the same for the previous arc solution
-    """
-    from banzai.utils.date_utils import parse_date_obs
-    skyflats_file = os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'orders', 'skyflats.dat')
-    skyflats = ascii.read(skyflats_file)
-    windows = {}
-    for row in skyflats:
-        window = (parse_date_obs(row['good_after']), parse_date_obs(row['good_until']))
-        windows.setdefault(row['site'], set()).add(window)
-    return {site: sorted(site_windows) for site, site_windows in windows.items()}
-
-
-def bound_arcs_to_skyflat_windows(db_address=None):
-    """Set each processed arc's validity window to the order-solution (skyflat) window to be used for the warm start arc fits.
-    """
-    from banzai.dbs import get_session, Instrument
-    from banzai_floyds.dbs import FLOYDSCalibrationImage
-    db_address = db_address or os.environ['DB_ADDRESS']
-    windows_by_site = _skyflat_windows()
-    with get_session(db_address) as db_session:
-        site_of = {instrument.id: instrument.site for instrument in db_session.query(Instrument).all()}
-        arcs = db_session.query(FLOYDSCalibrationImage).filter(FLOYDSCalibrationImage.type == 'ARC').all()
-        for arc in arcs:
-            covering = [window for window in windows_by_site.get(site_of.get(arc.instrument_id), [])
-                        if window[0] <= arc.dateobs <= window[1]]
-            if not covering:
-                continue
-            arc.good_after, arc.good_until = max(covering)
-            db_session.add(arc)
-        db_session.commit()
-    print(f'Bounded {len(arcs)} arc validity windows to their skyflat epochs')
 
 
 def measure_frame(filename):
@@ -269,22 +148,14 @@ def make_dispersion_curvature_page(pdf, frame, order_names, order_colors):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--pdf-only', action='store_true',
-                        help='Skip the archive query/processing and just rebuild the PDF '
-                             'from the a91 files already in test_data')
     parser.add_argument('--workers', type=int, default=4,
                         help='Number of parallel worker processes (default 4)')
     args = parser.parse_args()
 
-    if not args.pdf_only:
-        paths = []
-        for params in QUERY_PARAMS_SETS:
-            new_frames = get_a00_frames(params)
-            print(f'Found {len(new_frames)} a00 frames in the archive for {params}')
-            paths += [download_frame(frame) for frame in new_frames]
-        process_frames(paths, args.workers)
-        bound_arcs_to_skyflat_windows()
-
     processed = sorted(glob('test_data/*/*/*/processed/*a91*.fits.fz'),
                        key=os.path.basename)
+    if not processed:
+        print('No processed a91 arcs in test_data. Run process_arcs.py first to download and '
+              'reduce them.', file=sys.stderr)
+        sys.exit(1)
     make_pdf(processed, args.workers)

@@ -4,8 +4,6 @@ from banzai.stages import Stage
 from banzai.logs import get_logger
 from scipy import ndimage
 
-from banzai_floyds.fringe import fit_smooth_fringe_spline, find_fringe_offset
-
 
 logger = get_logger()
 
@@ -28,35 +26,42 @@ def update_binned_mask(image, cr_mask: np.ndarray, bit: int = 8) -> None:
     image.binned_data['mask'][cr_mask[y, x]] |= bit
 
 
-def flag_lampflat_cosmic_rays(image, cutoff: float, sigma_threshold: float = 5.0,
-                              min_shape_value: float = 0.1, order_edge_buffer: int = 2) -> np.ndarray:
-    """Flag cosmic rays in a LAMPFLAT comparing to the shifted stacked master.
+def detect_cosmic_rays(image, sigclip: float, sigfrac: float, objlim: float,
+                       order_edge_buffer: int = 2, background: np.ndarray = None) -> np.ndarray:
+    """Run LA Cosmic (van Dokkum 2001, via astroscrappy) over the orders of a frame.
 
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame with orders set, in electrons
+    sigclip: float, how many sigma above the noise a cosmic ray has to be
+    sigfrac: float, the fraction of sigclip a pixel touching a detection has to reach
+    objlim: float, how far above the fine structure of the image a cosmic ray has to be, which is
+        what keeps sharp real structure (sky lines, fringes) from looking like cosmic rays
+    order_edge_buffer: int width in pixels of the order edges to leave alone, as they are sharp
+    background: optional 2d array of the smooth signal, which van Dokkum recommends supplying for
+        spectroscopic data
+
+    Returns
+    -------
+    2d bool array of the pixels that look like cosmic rays
     """
-    cr_mask = np.zeros(image.data.shape, dtype=bool)
-    if image.fringe is None:
-        logger.info('No master LAMPFLAT available yet, skipping cosmic ray flagging', image=image)
-        return cr_mask
+    mask = np.logical_or.reduce([image.mask > 0, order_edge_guard_band(image.orders, order_edge_buffer),
+                                 image.orders.data == 0])
+    cr_mask, _ = detect_cosmics(image.data.astype(np.float32),
+                                inmask=mask,
+                                inbkg=None if background is None else background.astype(np.float32),
+                                invar=(image.uncertainty ** 2).astype(np.float32),
+                                sigclip=sigclip, sigfrac=sigfrac, objlim=objlim, gain=1.0,
+                                readnoise=float(image.meta['RDNOISE']),
+                                satlevel=float(image.meta['SATURATE']))
+    # Large cosmics can have holes in the them because we look for sharp edges, so fill the holes
+    return ndimage.binary_fill_holes(cr_mask)
 
-    reference_spline = fit_smooth_fringe_spline(image.fringe, image.fringe > min_shape_value)
-    offset = find_fringe_offset(image, reference_spline, cutoff)
 
-    x2d, y2d = np.meshgrid(np.arange(image.data.shape[1]), np.arange(image.data.shape[0]))
-    bad = np.logical_or.reduce([image.mask > 0, order_edge_guard_band(image.orders, order_edge_buffer),
-                                image.orders.data == 0])
-    for order_id in image.orders.order_ids:
-        in_order = np.logical_and(image.orders.data == order_id, np.logical_not(bad))
-        shifted_shape = np.zeros(image.data.shape)
-        shifted_shape[in_order] = reference_spline(np.array([x2d[in_order], y2d[in_order] - offset]).T)
-        valid = np.logical_and(in_order, shifted_shape > min_shape_value)
-        if not np.any(valid):
-            continue
-        # Rescale the shifted stack to flux units because we normally store the stack as relative to the median value
-        scale = np.median(image.data[valid] / shifted_shape[valid])
-        predicted = scale * shifted_shape[valid]
-        significance = (image.data[valid] - predicted) / image.uncertainty[valid]
-        cr_mask[valid] = significance > sigma_threshold
-    return cr_mask
+def flag_lampflat_cosmic_rays(image, sigclip: float = 8.0, sigfrac: float = 0.03,
+                              objlim: float = 5.0, order_edge_buffer: int = 2) -> np.ndarray:
+    """Flag cosmic rays in a lamp flat. Same detector as the science frames, higher threshold."""
+    return detect_cosmic_rays(image, sigclip, sigfrac, objlim, order_edge_buffer)
 
 
 class CosmicRayDetector(Stage):
@@ -82,42 +87,33 @@ class CosmicRayDetector(Stage):
     def do_stage(self, image):
         # This stage runs after gain normalization so everything is in electrons.
         # BackgroundFitter runs immediately before us, so image.background is the fitted sky.
-        # Van Dokkum (2001) recommends handing LA Cosmic a background estimate for spectroscopic
-        # data so that sharp real structure (read sky lines) is not flagged as a cosmic ray.
-        background = image.background.astype(np.float32)
-
-        off_order = image.orders.data == 0
-        mask = np.logical_or.reduce([image.mask > 0, order_edge_guard_band(image.orders, self.ORDER_EDGE_BUFFER),
-                                     off_order])
-        cr_mask, _ = detect_cosmics(image.data.astype(np.float32),
-                                    inmask=mask,
-                                    inbkg=background,
-                                    invar=(image.uncertainty ** 2).astype(np.float32),
-                                    sigclip=self.SIGCLIP, sigfrac=self.SIGFRAC,
-                                    objlim=self.OBJLIM, gain=1.0,
-                                    readnoise=float(image.meta['RDNOISE']),
-                                    satlevel=float(image.meta['SATURATE']))
-        # Large cosmics can have holes in the them because we look for sharp edges, so fill the holes
-        cr_mask = ndimage.binary_fill_holes(cr_mask)
+        cr_mask = detect_cosmic_rays(image, self.SIGCLIP, self.SIGFRAC, self.OBJLIM,
+                                     self.ORDER_EDGE_BUFFER, background=image.background)
         image.mask[cr_mask] |= 8
         update_binned_mask(image, cr_mask)
         logger.info(f'Flagged {cr_mask.sum()} cosmic-ray pixels', image=image)
         return image
 
 
-class LampFlatCosmicRayComparer(Stage):
-    """Flag cosmic rays in flats by comparing to a shifted stacked LAMPFLAT.
+class LampFlatCosmicRayDetector(Stage):
+    """Flag cosmic rays in lamp flats, with astroscrappy the same as the science frames.
 
-    Flats are short exposures so we don't expect to have a lot of cosmic ray hits. The structure
-    in the flats (fringes) are sharp like sky lines, so astroscrappy doesn't work well.
+    Be aware: flats are short exposures so we don't expect a lot of cosmic ray hits, and the fringes are
+    sharp structure that a cosmic ray finder can mistake for cosmic-ray morphology (so we raise thresholds).
+
+    Scored against cosmic rays injected into real flats, these thresholds recover 89-97% of the
+    pixels of an event carrying 30% of the lamp level and 68-71% at 10%, for a false-positive rate
+    of 0.00-0.05% of the order. More info can be found in the characterization_testing folder.
     """
-    SIGMA_THRESHOLD = 5.0
-    MIN_SHAPE_VALUE = 0.1
+    SIGCLIP = 8.0
+    SIGFRAC = 0.03
+    OBJLIM = 5.0
     ORDER_EDGE_BUFFER = 2
 
     def do_stage(self, image):
-        cr_mask = flag_lampflat_cosmic_rays(image, self.runtime_context.FRINGE_CUTOFF_WAVELENGTH,
-                                            self.SIGMA_THRESHOLD, self.MIN_SHAPE_VALUE, self.ORDER_EDGE_BUFFER)
+        cr_mask = flag_lampflat_cosmic_rays(image, self.SIGCLIP, self.SIGFRAC, self.OBJLIM,
+                                            self.ORDER_EDGE_BUFFER)
         image.mask[cr_mask] |= 8
-        logger.info(f'Flagged {cr_mask.sum()} cosmic-ray pixels via master-flat comparison', image=image)
+        update_binned_mask(image, cr_mask)
+        logger.info(f'Flagged {cr_mask.sum()} cosmic-ray pixels', image=image)
         return image

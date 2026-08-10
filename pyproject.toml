@@ -23,6 +23,7 @@ dependencies = [
     "torch",
     "ipython",
     "pywavelets",
+    "scikit-image",
     "alembic"
 ]
 
@@ -71,3 +72,4 @@ banzai_floyds_add_order_location = "banzai_floyds.main:add_order_location"
 banzai_floyds_add_order_height = "banzai_floyds.main:add_order_height"
 banzai_floyds_populate_order_heights_locations = "banzai_floyds.main:populate_order_heights_locations"
 banzai_floyds_populate_lsf_params = "banzai_floyds.main:populate_lsf_params"
+banzai_floyds_bound_skyflats = "banzai_floyds.main:bound_skyflats_to_windows"

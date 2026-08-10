@@ -9,6 +9,26 @@ from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from astropy.table import Table
 from banzai_floyds import dbs
+from typing import Optional
+from banzai.frames import ObservationFrame
+
+# Most of the fringes are at the 50% level
+# so we set bounds that are a little bigger to keep the model from going crazy
+MIN_FRINGE_VALUE = 0.1
+MAX_FRINGE_VALUE = 2.5
+
+# Mask bits on the master fringe frame.
+FRINGE_INTERPOLATED = 16
+FRINGE_NO_PATTERN = 32
+
+
+class NoUsableFringePattern(Exception):
+    """Raised when a fringe pattern has no pixels we could correct a frame with."""
+
+
+def valid_fringe_pixels(fringe: np.ndarray) -> np.ndarray:
+    """Pixels of a fringe pattern that carry real fringing rather than slit edges or division artifacts."""
+    return np.logical_and(fringe > MIN_FRINGE_VALUE, fringe < MAX_FRINGE_VALUE)
 
 
 class FLOYDSObservationFrame(LCOObservationFrame):
@@ -20,7 +40,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self._binned_data = None
         self._extracted = None
         self._spectrum = None
-        self.fringe = None
+        self._fringe = None
         self._sensitivity = None
         self._telluric = None
         self.background_windows = None
@@ -220,6 +240,32 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.add_or_update(DataTable(value, name='SENSITIVITY', meta=fits.Header({})))
 
     @property
+    def fringe(self):
+        return self._fringe
+
+    @fringe.setter
+    def fringe(self, value):
+        """
+        Store a fringe pattern, zeroing the pixels that should not be corrected with.
+
+        Everything downstream reads a zero in the pattern as "no fringing here". A pattern with
+        nothing left to correct with is an error rather than a pattern that silently corrects
+        nothing.
+        """
+        if value is None:
+            self._fringe = None
+            return
+        fringe = np.where(valid_fringe_pixels(value), value, 0.0)
+        if not np.any(fringe):
+            raise NoUsableFringePattern(f'No pixels of the fringe pattern are between {MIN_FRINGE_VALUE} '
+                                        f'and {MAX_FRINGE_VALUE}')
+        self._fringe = fringe
+        if 'FRINGE' in self:
+            self['FRINGE'].data[:, :] = fringe
+        else:
+            self.add_or_update(ArrayData(fringe.astype(np.float32), name='FRINGE', meta=fits.Header({})))
+
+    @property
     def wavelengths(self):
         return self._wavelengths
 
@@ -378,3 +424,15 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     @staticmethod
     def is_empty_coordinate(coordinate):
         return 'nan' in str(coordinate).lower() or 'n/a' in str(coordinate).lower()
+
+    def open(self, file_info, runtime_context) -> Optional[ObservationFrame]:
+        frame = super(FLOYDSFrameFactory, self).open(file_info, runtime_context)
+        if frame is None:
+            return None
+        # Munge the SATURATE keyword in en12 because it's been wrong for years
+        if frame.instrument.camera == 'en12':
+            for hdu in frame.ccd_hdus:
+                if hdu.saturate is not None and int(hdu.saturate) == 38400:
+                    hdu.saturate = 59000
+                    hdu.max_linearity = 56000
+        return frame

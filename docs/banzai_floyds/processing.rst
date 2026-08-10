@@ -41,6 +41,16 @@ center (a weighted straight-line fit of x against the position along the order).
 the centroids carry the measurement errors (in pixels), so we fit x as a function of wavelength, x = g(wavelength), as a
 Legendre polynomial and then invert it to get wavelength(x) over the order domain.
 
+Cosmic Ray Rejection
+--------------------
+We use the `astroscrappy` package to identify cosmic rays in the science frame based on their sharp morphology.
+This is based on the LA Cosmic algorithm from van Dokkum 2001, PASP, 113, 1420.
+For the science data, we iterate a background estimation as recommended by the original paper,
+because sky lines are sharp features and often get flagged if we don't.
+For flat field frames, we use a higher `sigclip` value to avoid flagging the fringes as cosmic rays.
+Since flats are generally short, there are likely few cosmic ray hits anyway.
+For this same reason, we do not apply cosmic ray rejection to the arcs.
+
 Fringe Correction
 -----------------
 We have found that the fringe pattern shifts on the chip likely due to flexure. Oddly though, the fringe pattern
