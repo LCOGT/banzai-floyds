@@ -82,8 +82,8 @@ def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = Non
     region: optional 2d bool array limiting where we are willing to fill.
     max_distance: float, only fill pixels this close to valid data, in pixels
     fill_value: float, value given to pixels we do not fill.
-    extrapolate: bool, whether to fill holes that valid data does not bracket. We currently
-        just extend the boundary value if extrapolate is false.
+    extrapolate: bool, whether to fill holes that valid data does not bracket.
+    Pixels that aren't bracketed by valid data will be filled by fill_value.
 
     Returns
     -------
