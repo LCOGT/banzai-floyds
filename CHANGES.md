@@ -4,7 +4,7 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
-- Significant hardenning to fringe fitting code
+- Significant hardening to fringe fitting code
 - Processed lamp flats now carry their own fringe pattern in a FRINGE extension, the way a stacked
   master does, so a single flat from a science frame's own block can calibrate it directly. Their
   SCI extension holds the fitted lamp continuum (SCI x FRINGE returns the flat) and the CONTINUUM

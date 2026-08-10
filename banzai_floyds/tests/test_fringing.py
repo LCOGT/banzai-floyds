@@ -134,7 +134,7 @@ def test_inpaint_fringe_does_not_extrapolate():
 
     # prepare_fringe_data wants the pattern continued past the edge of the order for the sampling
     # stencil to land on, so it can ask for it
-    filled, interpolated = inpaint_fringe(pattern, valid, extrapolate=True)
+    filled, interpolated = inpaint_fringe(pattern, valid, extrapolate=False)
     assert np.all(interpolated[5:55, 2:10])
     assert not np.allclose(filled[5:55, 2:10], 1.0)
 

@@ -12,7 +12,7 @@ SATURATED = 2
 
 class SaturatedOrdersTest(Stage):
     """
-    Reject frames with too much of the light in their orders saturated.
+    Reject frames that have too many pixels that are saturated.
 
     banzai's SaturationTest measures the fraction of the whole detector, but the orders only cover
     a few percent of a FLOYDS frame, so a lamp flat can be saturated across the whole red order and

@@ -93,7 +93,7 @@ def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = Non
     filled = np.where(valid, data, fill_value)
     distance = distance_transform_edt(np.logical_not(valid))
     to_fill = np.logical_and(np.logical_not(valid), distance <= max_distance)
-    if not extrapolate:
+    if extrapolate:
         to_fill = np.logical_and(to_fill, interpolable_region(valid))
     if region is not None:
         to_fill = np.logical_and(to_fill, region)
@@ -124,7 +124,7 @@ def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray,
     # The cubic spline stencil reaches edge_pad pixels, so at the boundary of the pattern it pulls
     # in the flat fill value and biases the outermost rows of the slit. Extending the pattern
     # smoothly past its boundary keeps those rows samplable instead of having to erode them away.
-    fringe, _ = inpaint_fringe(fringe, samplable, max_distance=edge_pad, extrapolate=True)
+    fringe, _ = inpaint_fringe(fringe, samplable, max_distance=edge_pad, extrapolate=False)
     return spline_filter(fringe, order=3), samplable
 
 
@@ -319,7 +319,7 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
     to_interpolate = np.logical_and(red_order, image.mask == 0)
     filled, _ = inpaint_fringe(image.data, to_interpolate, fill_value=np.median(image.data[to_interpolate]),
-                               extrapolate=True)
+                               extrapolate=False)
     coefficients = spline_filter(filled, order=3)
     fringe_x2d, fringe_y2d = np.meshgrid(x_range, np.arange(y_min, y_max + 1))
 
@@ -470,7 +470,7 @@ class FringeExtractor(Stage):
     # but the results look the best with this level of decomposition
     WAVELET_LEVEL = 5
     # Keep the cross-slit details from this level up (16 rows and coarser)
-    # in the continuum to caputure the illumination.
+    # in the continuum to capture the illumination.
     MIN_Y_DETAIL_LEVEL = 4
 
     def do_stage(self, image):
@@ -558,7 +558,7 @@ def stack_fringe_patterns(images, cutoff: float) -> tuple:
                                'altitude': image.altitude})
     covered = super_fringe_weights > 0
     super_fringe[covered] /= super_fringe_weights[covered]
-    super_fringe, interpolated = inpaint_fringe(super_fringe, covered, region=reference_order)
+    super_fringe, interpolated = inpaint_fringe(super_fringe, covered, region=reference_order, extrapolate=False)
     # inpaint_fringe leaves everything it did not fill at 1, which would read as a flat, perfectly
     # correctable pattern, so put those back to 0 for the threshold downstream to reject
     super_fringe[np.logical_not(np.logical_or(covered, interpolated))] = 0.0

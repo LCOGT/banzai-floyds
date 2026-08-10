@@ -12,7 +12,8 @@ from banzai_floyds import dbs
 from typing import Optional
 from banzai.frames import ObservationFrame
 
-# Set the bounds for what we consider a valid fringe
+# Most of the fringes are at the 50% level
+# so we set bounds that are a little bigger to keep the model from going crazy
 MIN_FRINGE_VALUE = 0.1
 MAX_FRINGE_VALUE = 2.5
 
