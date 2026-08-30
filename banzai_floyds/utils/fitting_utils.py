@@ -118,68 +118,6 @@ def parameter_variances(fit):
     return np.clip(np.diag(covariance), 0.0, None)
 
 
-class ClampedLegendre:
-    """
-    A Legendre polynomial that continues as a straight line outside the range it was fit over.
-
-    A high order polynomial fit to points that stop short of the end of its domain swings freely past
-    the last one, and the higher the degree the harder it swings. Reducing the degree until the ends
-    behave trades a worse fit everywhere for a better one at the ends, which is the wrong trade. What
-    the points outside their range don't constrain is the curvature, not the trend, so we continue
-    from the edge of the measured range along the tangent there:
-
-        f(x) = p(x_e) + p'(x_e) (x - x_e),  x_e = clip(x, measured_range)
-
-    which is exactly p(x) inside the range.
-
-    This exposes the part of numpy.polynomial.legendre.Legendre the pipeline uses: coef, domain,
-    degree(), and calling the object.
-    """
-    def __init__(self, model: Legendre, measured_range: Sequence[float] = None):
-        self._model = model
-        self._slope = model.deriv()
-        if measured_range is None:
-            measured_range = model.domain
-        self._measured_range = (min(measured_range), max(measured_range))
-
-    @property
-    def coef(self) -> np.ndarray:
-        return self._model.coef
-
-    @property
-    def domain(self) -> np.ndarray:
-        return self._model.domain
-
-    @property
-    def measured_range(self) -> tuple[float, float]:
-        return self._measured_range
-
-    def degree(self) -> int:
-        return self._model.degree()
-
-    def __call__(self, x):
-        x = np.asarray(x, dtype=float)
-        edge = np.clip(x, self._measured_range[0], self._measured_range[1])
-        return self._model(edge) + self._slope(edge) * (x - edge)
-
-
-# A degree d Legendre over n points has structure on n / d. Requiring that to stay this many times
-# wider than the object's full width at half maximum is what keeps a background fit across the slit
-# from absorbing the object itself, however high the degree goes.
-BACKGROUND_SCALE_MARGIN = 1.5
-
-
-def resolvable_background_degree(n_points: int, sigma: float) -> float:
-    """
-    Highest degree Legendre across n_points of slit whose structure is still
-    BACKGROUND_SCALE_MARGIN times wider than an object of this width.
-
-    Callers clip this to the range of degrees they are willing to use; what it encodes is only the
-    scale separation between the background and the object.
-    """
-    return n_points / (BACKGROUND_SCALE_MARGIN * sigma_to_fwhm(sigma))
-
-
 def legendre_design(x: np.ndarray, degree: int, domain: Sequence[float]) -> np.ndarray:
     """Legendre basis on x, one column per term, so a Legendre fit is an ordinary linear solve."""
     return np.array([Legendre.basis(i, domain=domain)(x) for i in range(degree + 1)]).T
@@ -292,12 +230,39 @@ def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, d
 
 
 def interp_with_errors(x, y, yerr, x_new):
+    """
+    Linearly interpolate y onto x_new, propagating the uncertainties.
+
+    Parameters
+    ----------
+    x: array
+        Input x values. Must be sorted in ascending order with no repeated values.
+    y: array
+        Input y values.
+    yerr: array
+        Uncertainties on y, assumed to be independent.
+    x_new: array
+        x values to interpolate onto. Must lie within the range of x.
+
+    Returns
+    -------
+    y_new, yerr_new: arrays
+        Interpolated values and their uncertainties.
+
+    Notes
+    -----
+    For y_new = (1 - a) y_i + a y_i+1, independent uncertainties propagate as
+    sigma^2 = (1 - a)^2 sigma_i^2 + a^2 sigma_i+1^2. Note that the interpolated points are
+    correlated with each other because neighboring output points share input points, so fitting
+    the results as if they were independent will underestimate the parameter uncertainties.
+    """
     if np.min(x_new) < np.min(x) or np.max(x_new) > np.max(x):
         raise ValueError('X for interpolation must be within the input range')
     y_new = np.interp(x_new, x, y)
 
     # This is a cute way to find the two bracketing indices for each new x value
-    left_indices = np.searchsorted(x, x_new, side='right') - 1
+    # The clip keeps x_new values that land exactly on the last input point in bounds
+    left_indices = np.clip(np.searchsorted(x, x_new, side='right') - 1, 0, len(x) - 2)
 
     # Calculate the fractional distance between the bracketing x-values
     # This is the term that shows up in the propogation of uncertatinty

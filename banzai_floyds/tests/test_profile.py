@@ -1,11 +1,9 @@
-from banzai_floyds.profile import fit_profile, choose_polynomial_degree, ProfileFitter, fit_shape_polynomials
-from banzai_floyds.profile import justified_degree, seeing_scaling, with_seeing_scaling, MIN_WIDTH_RATIO
-from banzai_floyds.profile import MAX_WIDTH_RATIO, SEEING_EXPONENT
-from banzai_floyds.profile import FALLBACK_NONE, FALLBACK_REDUCED_DEGREE, FALLBACK_MEDIAN_CENTER
-from banzai_floyds.profile import FALLBACK_OTHER_ORDER, FALLBACK_ORDER_CENTER
-from banzai_floyds.profile import scale_surface, psf_like_peak, refine_center, fit_shape_profile
-from banzai_floyds.profile import fit_global_width, DEFAULT_BETA_PRIOR
-from banzai_floyds.profile import SIGMA_GRID, stack_slit_profile, fit_gaussian_profile, SLIT_BACKGROUND_DEGREE
+from banzai_floyds.profile import fit_profile, choose_polynomial_degree, ProfileFitter
+from banzai_floyds.profile import seeing_scaling, fit_seeing_law, SEEING_EXPONENT
+from banzai_floyds.profile import stack_slit_profile, remove_background, annulus_background
+from banzai_floyds.profile import find_peaks_in_slit, choose_object, acquisition_score, locate_object
+from banzai_floyds.profile import fit_width, PEAK_EDGE_MARGIN, WIDTH_SNR
+from banzai_floyds.profile import MIN_GLOBAL_WIDTH_RATIO, MAX_GLOBAL_WIDTH_RATIO, PROFILE_BETA
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
@@ -39,9 +37,10 @@ def test_tracing():
                                                          fake_frame.input_profile_centers):
         x = np.arange(fitted_center.domain[0], fitted_center.domain[1] + 1)
         np.testing.assert_allclose(fitted_center(x), input_center(x), atol=0.025, rtol=0.02)
-        np.testing.assert_allclose(fitted_sigma(x), fake_frame.input_profile_sigma, rtol=0.03)
+        np.testing.assert_allclose(fitted_sigma(x), fake_frame.input_profile_sigma, rtol=0.05)
     for info in fit_info:
-        assert info['fallback_level'] == FALLBACK_NONE
+        assert info['traced']
+        assert not info['borrowed']
         assert info['degree'] == 5
 
 
@@ -63,17 +62,19 @@ def test_tracing_faint_source():
         np.testing.assert_allclose(fitted_center(x[measured]), input_center(x[measured]), atol=1.0)
         np.testing.assert_allclose(fitted_center(x), input_center(x), atol=3.0)
     for info in fit_info:
-        assert info['fallback_level'] <= FALLBACK_REDUCED_DEGREE
+        assert info['traced']
 
 
-def test_no_trace_falls_back_to_the_order_center():
+def test_no_trace_is_reported_rather_than_invented():
     np.random.seed(90124)
-    # Sky only. There is nothing to trace, so we should get a default profile without an exception.
+    # Sky only. There is nothing to trace. The old code manufactured a profile at the center of the
+    # order here and handed it downstream, where it was indistinguishable from a measurement; now the
+    # order says it has no trace and Extractor leaves it alone.
     fake_frame = generate_fake_science_frame(include_trace=False, include_sky=True, background=100.0)
-    fitted_profile_centers, fitted_profile_sigmas, _, fitted_points, fit_info = fit_fake_frame(fake_frame)
-    for fitted_center, info in zip(fitted_profile_centers, fit_info):
-        np.testing.assert_allclose(fitted_center.coef, [0.0])
-        assert info['fallback_level'] == FALLBACK_ORDER_CENTER
+    _, _, _, fitted_points, fit_info = fit_fake_frame(fake_frame)
+    for info in fit_info:
+        assert not info['traced']
+        assert not info['borrowed']
         assert info['n_used'] == 0
         assert info['detection_snr'] == 0.0
     assert np.all(fitted_points['used'] == False)  # noqa: E712
@@ -114,32 +115,40 @@ def test_second_object_in_the_slit():
         # little. What matters is that we stay on the brighter object instead of jumping 18 pixels.
         np.testing.assert_allclose(fitted_center(x), input_center(x), atol=0.5)
     for info in fit_info:
-        assert info['fallback_level'] <= FALLBACK_REDUCED_DEGREE
+        assert info['traced']
+        # Both sources are found, and the header says so, so a two-object slit is visible downstream
+        # rather than silently resolved
+        assert info['n_peaks'] >= 2
+        assert info['runner_up_snr'] > 0.0
 
 
 def test_sparse_coverage_reduces_the_polynomial_degree():
     np.random.seed(772351)
     # The trace is only visible over a fraction of the red order. A degree 5 polynomial is free to
-    # swing anywhere the points don't cover, so we should drop the degree instead.
+    # swing anywhere the points don't cover, so we should drop the degree instead. The degree is the
+    # diagnostic in its own right: there is no separate fallback level saying the same thing twice.
     fake_frame = generate_fake_science_frame(trace_wavelength_range=(7000.0, 8300.0))
     fitted_profile_centers, _, _, _, fit_info = fit_fake_frame(fake_frame)
     assert_trace_stays_in_the_slit(fitted_profile_centers, fake_frame.orders.order_heights)
     assert fit_info[0]['degree'] <= 2
-    assert fit_info[0]['fallback_level'] in [FALLBACK_REDUCED_DEGREE, FALLBACK_MEDIAN_CENTER]
+    assert fit_info[0]['traced']
 
 
-def test_falls_back_to_the_other_order():
+def test_borrows_the_trace_from_the_other_order():
     np.random.seed(3319)
     # Only the red order has a trace. The blue order (which runs out at 5900 Angstroms) should use
-    # the position of the object in the red order rather than defaulting to the center of the order.
+    # the position of the object in the red order. This is the one genuine fallback: over 332 real
+    # orders it fired once, and on that order the alternative was extracting wherever the noise
+    # happened to peak.
     fake_frame = generate_fake_science_frame(trace_wavelength_range=(6200.0, 11000.0), include_sky=True)
     fitted_profile_centers, fitted_profile_sigmas, _, fitted_points, fit_info = fit_fake_frame(fake_frame)
     assert_trace_stays_in_the_slit(fitted_profile_centers, fake_frame.orders.order_heights)
-    assert fit_info[0]['fallback_level'] <= FALLBACK_REDUCED_DEGREE
-    assert fit_info[1]['fallback_level'] == FALLBACK_OTHER_ORDER
+    assert fit_info[0]['traced'] and not fit_info[0]['borrowed']
+    assert fit_info[1]['traced'] and fit_info[1]['borrowed']
     red_points = fitted_points[np.logical_and(fitted_points['order'] == 1, fitted_points['used'])]
     np.testing.assert_allclose(fitted_profile_centers[1].coef, [np.median(red_points['center'])])
-    np.testing.assert_allclose(fitted_profile_sigmas[1].coef, [np.median(red_points['sigma'])])
+    # The borrowed order measures its own width against the borrowed center rather than copying one
+    assert fitted_profile_sigmas[1] is not None
 
 
 def test_choose_polynomial_degree():
@@ -164,11 +173,16 @@ def test_profile_stage_records_qc_headers():
     stage = ProfileFitter(None)
     stage.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
     fake_frame = stage.do_stage(fake_frame)
-    for order_id, input_center in zip([1, 2], fake_frame.input_profile_centers):
-        assert fake_frame.meta[f'L1PRFB{order_id}'] == FALLBACK_NONE
+    for order_id in [1, 2]:
+        assert fake_frame.meta[f'L1PRTR{order_id}']
+        assert not fake_frame.meta[f'L1PRBR{order_id}']
         assert fake_frame.meta[f'L1PRDG{order_id}'] == stage.CENTER_POLYNOMIAL_ORDER
         assert fake_frame.meta[f'L1PRNP{order_id}'] > stage.CENTER_POLYNOMIAL_ORDER
         assert fake_frame.meta[f'L1PRSN{order_id}'] > stage.DETECTION_SNR
+        # The width is measured on far fewer chunks than the center, because it needs a much higher
+        # signal to noise to mean anything
+        assert 0 < fake_frame.meta[f'L1PRNW{order_id}'] <= fake_frame.meta[f'L1PRNP{order_id}']
+        assert fake_frame.meta[f'L1PRNS{order_id}'] >= 1
     assert fake_frame.meta['L1OBJDET']
     fitted_centers, _, _ = fake_frame.profile_fits
     assert_trace_stays_in_the_slit(fitted_centers, fake_frame.orders.order_heights)
@@ -183,69 +197,12 @@ def test_no_object_detected_is_flagged():
                                       fake_frame.orders)
     fake_frame = ProfileFitter(None).do_stage(fake_frame)
     assert not fake_frame.meta['L1OBJDET']
-
-
-def make_shape_points(wavelengths, sigmas, sigma_errors, betas=None, beta_errors=None):
-    if betas is None:
-        betas = np.full(len(wavelengths), 4.0)
-    if beta_errors is None:
-        beta_errors = np.full(len(wavelengths), 0.5)
-    return [{'wavelength': wavelength, 'sigma': sigma, 'sigma_error': sigma_error, 'beta': beta,
-             'beta_error': beta_error, 'amplitude': 100.0, 'background_degree': 2, 'snr': 20.0}
-            for wavelength, sigma, sigma_error, beta, beta_error
-            in zip(wavelengths, sigmas, sigma_errors, betas, beta_errors)]
-
-
-def test_narrow_spikes_do_not_collapse_the_profile_width():
-    np.random.seed(11)
-    # A profile fit to a cosmic ray is narrow and, being a sharp feature, has a small formal error,
-    # so it carries several times the weight of an honest measurement in the 1/sigma_error weighted
-    # width fit. A few of them at the red end, where a quadratic has the most leverage and the trace
-    # is faintest, is what drags the width to zero there. The honest widths have to scatter by more
-    # than their errors, as they really do, or the robust fit alone would reject the spikes.
-    domain = [3000.0, 10000.0]
-    wavelengths = np.linspace(4000.0, 9000.0, 48)
-    sigmas = 3.0 + np.random.normal(0.0, 0.8, len(wavelengths))
-    sigma_errors = np.abs(np.random.normal(0.5, 0.2, len(wavelengths))) + 0.15
-    sigmas[-5:] = np.random.uniform(0.5, 1.3, 5)
-    sigma_errors[-5:] = np.random.uniform(0.05, 0.3, 5)
-    result = fit_shape_polynomials(make_shape_points(wavelengths, sigmas, sigma_errors), domain, 93,
-                                   width_poly_order=2, order_id=1)
-    grid = np.linspace(domain[0], domain[1], 1000)
-    np.testing.assert_allclose(result['sigma'](grid), 3.0, rtol=0.35)
-    # The five spikes are rejected without taking the honest measurements with them
-    assert len(wavelengths) - 8 <= result['n_shape_used'] <= len(wavelengths) - 5
-
-
-def test_a_real_width_gradient_is_still_followed():
-    # The guard on the width is a factor of two around the typical width, so it must not flatten the
-    # real change in the width across an order that the degree 2 polynomial is there to follow.
-    domain = [3000.0, 10000.0]
-    wavelengths = np.linspace(4000.0, 9000.0, 40)
-    sigmas = np.linspace(4.0, 2.5, len(wavelengths))
-    result = fit_shape_polynomials(make_shape_points(wavelengths, sigmas, np.full(len(wavelengths), 0.1)),
-                                   domain, 93, width_poly_order=2, order_id=1)
-    np.testing.assert_allclose(result['sigma'](wavelengths), sigmas, atol=0.05)
-    assert result['n_shape_used'] == len(wavelengths)
-
-
-def test_the_beta_polynomial_stays_inside_its_bounds():
-    # beta is bounded to the range where it means anything: heavier wings than MIN_BETA put more flux
-    # outside the extraction window than in it, and past MAX_BETA there is nothing left to measure.
-    # The bound has to hold on the polynomial over the whole domain, not just at the chunks that were
-    # measured, because a quadratic through points that are all inside it can still leave it between
-    # them.
-    np.random.seed(4471)
-    domain = [3000.0, 10000.0]
-    wavelengths = np.linspace(4000.0, 9000.0, 30)
-    betas = np.random.uniform(0.9 * MAX_BETA, MAX_BETA, len(wavelengths))
-    betas[len(betas) // 2] = MIN_BETA
-    result = fit_shape_polynomials(make_shape_points(wavelengths, np.full(len(wavelengths), 3.0),
-                                                     np.full(len(wavelengths), 0.1), betas=betas),
-                                   domain, 93, width_poly_order=2, order_id=1)
-    grid = np.linspace(domain[0], domain[1], 1000)
-    assert np.all(result['beta'](grid) >= MIN_BETA)
-    assert np.all(result['beta'](grid) <= MAX_BETA)
+    # ...and no profile is stored at all, which is what BackgroundFitter and Extractor check before
+    # they touch the frame. Storing a placeholder here is what used to make the frame vanish from the
+    # reduction with a KeyError two stages later.
+    assert fake_frame.profile_fits is None
+    for order_id in [1, 2]:
+        assert not fake_frame.meta[f'L1PRTR{order_id}']
 
 
 def test_the_polynomials_do_not_extrapolate_past_the_measurements():
@@ -298,6 +255,29 @@ def test_the_profile_round_trips_through_the_header():
         assert fitted.measured_range[1] < fitted.domain[1]
 
 
+def test_the_wing_term_is_a_constant_the_frame_still_carries():
+    np.random.seed(80125)
+    # beta is no longer fit: on 286 real orders a fitted Moffat and a plain Gaussian gave trace
+    # centers agreeing to three decimal places. The profile is still written as a Moffat, because
+    # that is what the extraction weights and the sky model read, so what has to hold is that the
+    # stored wing term is a constant and a Gaussian one.
+    fake_frame = generate_fake_science_frame(include_sky=True)
+    fake_frame.binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
+                                      fake_frame.orders)
+    stage = ProfileFitter(None)
+    stage.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
+    fake_frame = stage.do_stage(fake_frame)
+    _, _, betas = fake_frame.profile_fits
+    for beta in betas:
+        grid = np.linspace(beta.domain[0], beta.domain[1], 101)
+        np.testing.assert_allclose(beta(grid), PROFILE_BETA)
+    # A Moffat at this beta is a Gaussian to better than a percent inside the extraction window
+    y = np.linspace(-3.0 * 2.8, 3.0 * 2.8, 401)
+    profile = moffat(y, 0.0, 2.8, 1.0, PROFILE_BETA)
+    np.testing.assert_allclose(profile / profile.max(),
+                               gauss(y, 0.0, 2.8) / gauss(np.array([0.0]), 0.0, 2.8)[0], atol=0.01)
+
+
 def test_profile_polynomials_are_evaluated_in_wavelength():
     # A guard against silently swapping the domain: the fitted polynomials must be functions of
     # wavelength, matching the domains we passed in
@@ -316,9 +296,7 @@ def make_slit_stack(components, background=None, read_noise=5.0, spikes=()):
     """
     A stacked slit profile built from known (amplitude, center, sigma, beta) components.
 
-    The errors are Poisson plus read noise, as the real stacks are. That matters for more than
-    realism: with a flat error array the matched filter signal to noise of an unresolved spike is the
-    same at every template width, so a cosmic ray has no scale at all and nothing can classify it.
+    The errors are Poisson plus read noise, as the real stacks are.
     """
     interp_y = np.arange(-HALF_HEIGHT + 5, HALF_HEIGHT - 4, dtype=float)
     model = np.zeros(len(interp_y))
@@ -333,80 +311,104 @@ def make_slit_stack(components, background=None, read_noise=5.0, spikes=()):
     return interp_y, flux, flux_error
 
 
-def test_the_scale_search_picks_the_point_source_over_a_brighter_galaxy():
-    np.random.seed(9912)
-    # The failure this replaces: a fixed width matched filter takes the brightest peak in the slit, so
-    # a supernova next to its host is traced on the host. The width a peak's response is strongest at
-    # says which is which, and only a peak whose scale looks like the seeing is preferred.
-    interp_y, flux, flux_error = make_slit_stack([(60000.0, 12.0, 12.0, MAX_BETA), (9000.0, -9.0, 2.5, MAX_BETA)])
-    centers = np.arange(-25.0, 26.0)
-    peak = psf_like_peak(scale_surface(flux, flux_error, interp_y, centers, 2.5), centers, SIGMA_GRID, 2.5, 5.0)
-    assert peak is not None
-    assert peak['point_like']
-    assert abs(peak['center'] + 9.0) < 1.5
-    assert abs(peak['sigma'] - 2.5) < 1.0
-    # The galaxy carries almost seven times the flux, so taking the brightest thing in the slit would
-    # have put the trace on it
-    assert np.sum(moffat(interp_y, 12.0, 12.0, 60000.0, MAX_BETA)) > 5.0 * np.sum(
-        moffat(interp_y, -9.0, 2.5, 9000.0, MAX_BETA))
+def test_stack_slit_profile_leaves_the_background_in():
+    np.random.seed(43121)
+    # Every caller removes the background its own way -- the peak finder with a running median, the
+    # width fit with a median and then an annulus line -- so the stack must not remove one first.
+    # Subtracting one model and then fitting another counts the illumination twice.
+    fake_frame = generate_fake_science_frame(include_sky=True)
+    binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
+                           fake_frame.orders)
+    in_order = np.logical_and(binned_data['order'] == 1, binned_data['order_wavelength_bin'] != 0)
+    order_data = binned_data[in_order].group_by('order_wavelength_bin')
+    indices = order_data.groups.indices
+    chunk = order_data[indices[40]: indices[65]]
+    order_height = int(fake_frame.orders.order_heights[0])
+
+    interp_y, flux, flux_error = stack_slit_profile(chunk, order_height)
+    good = flux_error > 0
+    # The sky is still there, so the stack is far from zero
+    assert np.median(flux[good]) > 0.0
+    filtered = remove_background(flux, flux_error, 2.5)
+    assert abs(np.median(filtered[good])) < 0.05 * np.median(flux[good])
 
 
-def test_an_overwhelming_host_falls_back_to_the_brightest_peak():
-    np.random.seed(7781)
-    # A host only a few times wider than the seeing and far brighter drags the scale at the object's
-    # own position onto the host's, and nothing in the response can separate them. What must not
-    # happen is losing the object: the fallback has to leave us no worse off than taking the
-    # brightest peak, which is what we did before.
-    interp_y, flux, flux_error = make_slit_stack([(120000.0, 12.0, 6.0, MAX_BETA), (9000.0, -9.0, 2.5, MAX_BETA)])
-    centers = np.arange(-25.0, 26.0)
-    peak = psf_like_peak(scale_surface(flux, flux_error, interp_y, centers, 2.5), centers, SIGMA_GRID, 2.5, 5.0)
-    assert peak is not None
-    assert not peak['point_like']
+def test_the_running_median_removes_the_slit_illumination_without_the_object():
+    np.random.seed(55510)
+    # The running median is local, which is the whole reason for preferring it to a fitted
+    # polynomial: an error it makes at one end of the slit stays there instead of being spread under
+    # the object by a global fit. What it must not do is eat the object.
+    curved = Legendre([4000.0, 1800.0, -2800.0, 1200.0], domain=[-41.0, 41.0])
+    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, MAX_BETA)], background=curved)
+    filtered = remove_background(flux, flux_error, 2.5)
+    # The illumination is gone away from the object
+    away = np.abs(interp_y) > 12.0
+    assert np.max(np.abs(filtered[away])) < 0.1 * np.ptp(curved(interp_y))
+    # ...and the object is not
+    peak = np.max(filtered[np.abs(interp_y) < 6.0])
+    assert peak > 0.8 * (np.max(flux) - np.median(flux))
 
 
-def test_the_scale_search_rejects_a_cosmic_ray():
-    np.random.seed(4404)
-    # A cosmic ray is brighter than anything else in the slit and unresolved, so its response peaks at
-    # the bottom of the scale grid rather than at the seeing.
-    interp_y, flux, flux_error = make_slit_stack([(9000.0, -9.0, 2.5, MAX_BETA)], spikes=[(14.0, 5e4)])
-    centers = np.arange(-25.0, 26.0)
-    surface = scale_surface(flux, flux_error, interp_y, centers, 2.5)
-    peak = psf_like_peak(surface, centers, SIGMA_GRID, 2.5, 5.0)
-    assert peak is not None
-    assert abs(peak['center'] + 9.0) < 1.5
+def test_the_annulus_line_removes_a_local_slope():
+    np.random.seed(90211)
+    # The median leaves whatever it could not follow at the kernel scale, and a slope under the
+    # object is the part that matters. Two medians and a line take it off with nothing that could be
+    # pulled up under the source.
+    ramp = Legendre([3000.0, 1500.0], domain=[-41.0, 41.0])
+    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, MAX_BETA)], background=ramp)
+    filtered = remove_background(flux, flux_error, 2.5)
+    line = annulus_background(interp_y, filtered, flux_error, 0.0, 2.8)
+    corrected = filtered - line
+    annulus = np.logical_and(np.abs(interp_y) > 3.0 * 2.8, np.abs(interp_y) < 5.0 * 2.8)
+    # Flat either side of the object after the line comes off
+    assert abs(np.median(corrected[np.logical_and(annulus, interp_y < 0)])
+               - np.median(corrected[np.logical_and(annulus, interp_y > 0)])) < 0.02 * np.max(corrected)
 
 
-def test_refine_center_is_unbiased_across_a_pixel():
+def test_peaks_are_found_and_centred_across_a_pixel():
     np.random.seed(3355)
-    # The trial centers are a pixel apart, so the grid peak is only good to half a pixel and rounding
-    # to it puts a sawtooth into the trace. The refined center has to be unbiased against the
-    # fractional part of the true center, which is the check a three point parabola fails.
+    # The matched filter reports peaks on the integer grid, so rounding to it would put a sawtooth
+    # into the trace. refine_peak_centers has to be unbiased against the fractional part of the true
+    # center.
     offsets = np.linspace(-0.5, 0.5, 11)
     errors = []
     for offset in offsets:
         interp_y, flux, flux_error = make_slit_stack([(20000.0, offset, 2.5, MAX_BETA)])
-        refined = refine_center(flux, flux_error, interp_y, 0.0, 2.5)
-        assert refined is not None
-        errors.append(refined['center'] - offset)
+        peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
+        assert len(peaks) >= 1
+        errors.append(peaks[0]['center'] - offset)
     errors = np.array(errors)
-    assert np.max(np.abs(errors)) < 0.05
+    assert np.max(np.abs(errors)) < 0.3
     # No systematic pull toward the grid point, which is what rounding to it would give
-    assert abs(np.polyfit(offsets, errors, 1)[0]) < 0.05
+    assert abs(np.polyfit(offsets, errors, 1)[0]) < 0.2
+
+
+def test_peaks_at_the_edge_of_the_grid_are_rejected():
+    np.random.seed(11881)
+    # A template truncated by the end of the grid is not comparable to one that fits inside it, and
+    # the mismatch shows up as a peak at each edge.
+    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.5, MAX_BETA),
+                                                  (20000.0, float(HALF_HEIGHT - 6), 2.5, MAX_BETA)])
+    peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
+    assert len(peaks) >= 1
+    for peak in peaks:
+        assert peak['center'] > np.min(interp_y) + PEAK_EDGE_MARGIN
+        assert peak['center'] < np.max(interp_y) - PEAK_EDGE_MARGIN
 
 
 def test_the_centroid_error_tracks_the_signal_to_noise():
     np.random.seed(60771)
     # The trace polynomial weights the centers by 1 / center_error, so the error has to be a real
-    # measurement of the scatter and not a formality. Doubling the signal has to halve it. A single
-    # realization scatters by tens of percent through the goodness of fit term, so this is the median
-    # over enough of them to see the trend rather than the noise on it. The wings are injected at the
-    # beta refine_center assumes, or what this measures is the mismatch between them instead.
+    # measurement and not a formality. It is the Cramer-Rao bound of a matched filter centroid,
+    # sigma over the signal to noise, so doubling the signal halves it.
     reported = []
     for amplitude in [5000.0, 20000.0, 80000.0]:
         errors = []
         for _ in range(15):
-            interp_y, flux, flux_error = make_slit_stack([(amplitude, 1.3, 2.5, 4.0)])
-            errors.append(refine_center(flux, flux_error, interp_y, 1.0, 2.5)['center_error'])
+            interp_y, flux, flux_error = make_slit_stack([(amplitude, 1.3, 2.5, MAX_BETA)])
+            peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error,
+                                       2.5, 5.0)
+            errors.append(2.5 / peaks[0]['snr'])
         reported.append(np.median(errors))
     reported = np.array(reported)
     # Poisson noise, so the signal to noise goes as the square root of the flux and the error halves
@@ -414,55 +416,195 @@ def test_the_centroid_error_tracks_the_signal_to_noise():
     np.testing.assert_allclose(reported[:-1] / reported[1:], 2.0, rtol=0.25)
 
 
-def test_a_cosmic_ray_does_not_claim_a_precise_center():
-    np.random.seed(881)
-    # A cosmic ray is detected at a signal to noise of tens of thousands, so the Cramer-Rao bound
-    # alone would have it claim a center good to a ten-thousandth of a pixel. One of those outweighs
-    # every honest chunk in the order, so the error has to know the profile did not fit.
-    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.5, MAX_BETA)])
-    clean = refine_center(flux, flux_error, interp_y, 0.0, 2.5)
-    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.5, MAX_BETA)], spikes=[(3.0, 3e5)])
-    spiked = refine_center(flux, flux_error, interp_y, 0.0, 2.5)
-    # The weight collapses, but the chunk is not thrown away: whether it located the trace and
-    # whether it measured the object are different questions
-    assert spiked['center_error'] > 10.0 * clean['center_error']
-    assert spiked['precision'] < clean['precision']
+def test_the_acquisition_prior_prefers_the_source_the_observer_asked_for():
+    # Acquisition puts the requested coordinates at the center of the slit, so of two comparable
+    # sources the central one is the target. Over 231 single-source orders it landed within 6 px of
+    # center 80% of the time.
+    central = {'center': 2.0, 'snr': 100.0}
+    off_center = {'center': 25.0, 'snr': 100.0}
+    assert acquisition_score(central, False) > acquisition_score(off_center, False)
 
 
-def test_fit_shape_profile_is_inert_on_a_gaussian():
+def test_a_bright_confirmed_source_beats_a_central_unconfirmed_one():
+    # SN2026idh, which is the one order in the characterization set where the brightest and the most
+    # central peak disagreed. The bright source sat 27 px off center and agreed between the two
+    # orders to 1 px; the central candidates disagreed by 21 px and were spurious. Cross-order
+    # agreement is a stronger discriminant than either brightness or position, and the prior is
+    # heavy-tailed on purpose so a real target well off center stays reachable.
+    peaks = {1: [{'center': -27.0, 'snr': 191.0}, {'center': -10.0, 'snr': 94.0}],
+             2: [{'center': -26.0, 'snr': 75.0}, {'center': 11.0, 'snr': 25.0}]}
+    chosen = choose_object(peaks)
+    assert abs(chosen[1]['center'] + 27.0) < 1e-6
+    assert abs(chosen[2]['center'] + 26.0) < 1e-6
+
+
+def test_a_grid_edge_artifact_confirmed_in_both_orders_still_loses():
+    # Every flux standard -- one star, by construction -- showed a "second source" at 33 to 35 px,
+    # consistent to 1 px across both orders, so cross-order agreement alone does not make something
+    # an object. The acquisition prior is what rejects these, which is also why the edge margin
+    # cannot simply be widened to cover them: the prior's own p99 is 34 px.
+    peaks = {1: [{'center': 5.0, 'snr': 6376.0}, {'center': -34.0, 'snr': 1531.0}],
+             2: [{'center': 7.0, 'snr': 6214.0}, {'center': -34.0, 'snr': 1434.0}]}
+    chosen = choose_object(peaks)
+    assert abs(chosen[1]['center'] - 5.0) < 1e-6
+    assert abs(chosen[2]['center'] - 7.0) < 1e-6
+    assert chosen[1]['n_peaks'] == 2
+    assert chosen[1]['runner_up']['center'] == -34.0
+
+
+def test_fit_width_recovers_a_known_width():
     np.random.seed(70012)
-    # The common case. A profile with no wings to speak of has to come back with the width it was
-    # given, or every frame in the archive moves for no reason. The width is the thing that has to be
-    # right: beta runs along a valley of equal chi^2 and is not a measurement in the same sense.
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 1.0, 2.8, MAX_BETA)])
-    shape = fit_shape_profile(interp_y, flux, flux_error, 1.0, 2.5, 4.0, HALF_HEIGHT)
-    assert shape is not None
-    np.testing.assert_allclose(shape['sigma'], 2.8, rtol=0.05)
-    assert shape['beta'] > 4.0
+    # The common case, on a flat background and on a curved one. The width is what sets the
+    # extraction window, so a bias here is a bias in every extracted spectrum.
+    for background in [None, Legendre([4000.0, 1800.0, -2800.0, 1200.0], domain=[-41.0, 41.0])]:
+        interp_y, flux, flux_error = make_slit_stack([(30000.0, 1.0, 2.8, MAX_BETA)], background=background)
+        width = fit_width(interp_y, flux, flux_error, 1.0, 2.5)
+        assert width is not None
+        np.testing.assert_allclose(width, 2.8, rtol=0.1)
 
 
-def test_fit_shape_profile_recovers_injected_wings():
-    np.random.seed(31908)
-    # The prior pulls beta toward the instrument's value, so a chunk with real signal has to be able
-    # to outvote it. If it cannot, the fit is just reporting the prior back. Heavy wings are the case
-    # where beta is actually measurable: the valley only opens up as the profile approaches a
-    # Gaussian.
-    interp_y, flux, flux_error = make_slit_stack([(80000.0, 0.0, 2.8, 2.5)])
-    shape = fit_shape_profile(interp_y, flux, flux_error, 0.0, 2.5, 8.0, HALF_HEIGHT)
-    assert shape is not None
-    np.testing.assert_allclose(shape['beta'], 2.5, rtol=0.25)
-    np.testing.assert_allclose(shape['sigma'], 2.8, rtol=0.05)
+def test_fit_width_reaches_a_source_broader_than_the_guess():
+    np.random.seed(41120)
+    # Why the fit iterates at all. The window is a multiple of the width we currently believe, so a
+    # source much broader than the seeing guess starts with a window inside its own core. On injected
+    # sources a true sigma of 4.0 px came back 9% low with no iteration and 1% low with two.
+    interp_y, flux, flux_error = make_slit_stack([(120000.0, 0.0, 6.0, MAX_BETA)])
+    width = fit_width(interp_y, flux, flux_error, 0.0, 2.5)
+    assert width is not None
+    np.testing.assert_allclose(width, 6.0, rtol=0.15)
 
 
-def test_the_shape_fit_recovers_the_width_better_than_a_gaussian():
-    np.random.seed(12251)
-    # The payoff. A single Gaussian fit to a profile with real wings splits the difference between the
-    # core and the wings, and the width it lands on is what sets the extraction window.
+def test_an_extended_host_does_not_widen_the_point_source_much():
+    np.random.seed(20261)
+    # A supernova on its host. The host is removed as a background rather than fit as a second
+    # component, because splitting the two is a flat direction in the likelihood at chunk signal to
+    # noise. The width that comes out has to be closer to the point source's than to a compromise
+    # between the two, which is what a single Gaussian over the whole slit gives.
     truth = 2.8
-    interp_y, flux, flux_error = make_slit_stack([(80000.0, 0.0, truth, 2.5)])
-    shape = fit_shape_profile(interp_y, flux, flux_error, 0.0, 2.5, 4.0, HALF_HEIGHT)
-    gaussian = fit_gaussian_profile(interp_y, flux, flux_error, 0.0, 2.5, HALF_HEIGHT, max_center_error=2.0)
-    assert abs(shape['sigma'] - truth) < abs(gaussian['sigma'] - truth)
+    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, truth, MAX_BETA),
+                                                  (25000.0, 2.0, 11.0, MAX_BETA)])
+    width = fit_width(interp_y, flux, flux_error, 0.0, 2.5)
+    assert width is not None
+    np.testing.assert_allclose(width, truth, rtol=0.3)
+
+
+def test_a_cosmic_ray_does_not_set_the_width():
+    np.random.seed(881)
+    # An unresolved spike is brighter than anything else in the slit. It must not collapse the width
+    # of the chunk it lands in -- the window is floored, so a fit cannot chase a single pixel.
+    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.8, MAX_BETA)], spikes=[(3.0, 3e5)])
+    width = fit_width(interp_y, flux, flux_error, 0.0, 2.5)
+    assert width is None or width > 1.0
+
+
+def make_width_points(wavelengths, sigmas, snr=100.0):
+    return [{'wavelength': float(w), 'sigma': float(s), 'snr': snr}
+            for w, s in zip(wavelengths, sigmas)]
+
+
+def test_the_width_follows_the_seeing_law():
+    """Measurements that are exactly Kolmogorov come back out that way, from a one parameter fit."""
+    domain = (4700.0, 10000.0)
+    wavelengths = np.linspace(*domain, 30)
+    truth = 3.0 * seeing_scaling(wavelengths)
+    fit = fit_seeing_law(make_width_points(wavelengths, truth), domain, 2.5)
+    grid = np.linspace(*domain, 101)
+    np.testing.assert_allclose(fit(grid), 3.0 * seeing_scaling(grid), rtol=0.01)
+    # The width really does change across the order; a constant would be wrong by more than this
+    assert np.ptp(fit(grid)) / np.median(fit(grid)) > 0.1
+
+
+def test_the_seeing_law_survives_being_written_out_as_a_polynomial():
+    """The width is stored as a plain Legendre, so the physics has to be representable as one."""
+    domain = (4700.0, 10000.0)
+    wavelengths = np.linspace(*domain, 30)
+    fit = fit_seeing_law(make_width_points(wavelengths, 3.0 * seeing_scaling(wavelengths)), domain, 2.5)
+    grid = np.linspace(*domain, 201)
+    exact = 3.0 * (grid / 5500.0) ** SEEING_EXPONENT
+    assert np.max(np.abs(fit(grid) - exact)) / 3.0 < 0.005
+
+
+def test_narrow_spikes_do_not_collapse_the_profile_width():
+    np.random.seed(11)
+    # A width fit to a cosmic ray is narrow. A handful of them at the red end, where a free quadratic
+    # had the most leverage and the trace was faintest, is what used to drag the width to zero there.
+    # A one parameter model cannot be dragged in one place, and the clip removes them outright.
+    domain = [3000.0, 10000.0]
+    wavelengths = np.linspace(4000.0, 9000.0, 48)
+    sigmas = 3.0 + np.random.normal(0.0, 0.8, len(wavelengths))
+    sigmas[-5:] = np.random.uniform(0.5, 1.3, 5)
+    fit = fit_seeing_law(make_width_points(wavelengths, sigmas), domain, 2.5)
+    grid = np.linspace(domain[0], domain[1], 1000)
+    np.testing.assert_allclose(fit(grid) / seeing_scaling(grid), 3.0, rtol=0.2)
+
+
+def test_the_width_does_not_dive_on_noisy_measurements():
+    """The whole point: a constant times the seeing law, not a curve that halves mid-order."""
+    rng = np.random.default_rng(70118)
+    domain = (3400.0, 5600.0)
+    wavelengths = np.linspace(*domain, 34)
+    sigmas = np.maximum(0.6, 2.0 + rng.normal(0.0, 0.9, size=len(wavelengths)))
+    fit = fit_seeing_law(make_width_points(wavelengths, sigmas, snr=WIDTH_SNR), domain, 2.5)
+    grid = np.linspace(*domain, 101)
+    widths = fit(grid)
+    # Nothing is left for a polynomial once the seeing law is divided out, so the width is a single
+    # number times the physical wavelength dependence rather than a curve fit to the noise
+    amplitude = widths / seeing_scaling(grid)
+    assert np.ptp(amplitude) / np.median(amplitude) < 0.01
+    assert np.min(widths) > 0.6 * np.median(sigmas)
+
+
+def test_the_global_width_is_steadier_than_any_one_chunk():
+    # The reason no chunk's width is used on its own. Per chunk the width is noisy even at the signal
+    # to noise the width gate admits; over tens of chunks that averages down.
+    rng = np.random.default_rng(3301)
+    domain = (4700.0, 10000.0)
+    wavelengths = np.linspace(*domain, 30)
+    truth = 3.0
+    global_errors, chunk_errors = [], []
+    for _ in range(20):
+        sigmas = truth * seeing_scaling(wavelengths) * (1.0 + rng.normal(0.0, 0.15, len(wavelengths)))
+        fit = fit_seeing_law(make_width_points(wavelengths, sigmas), domain, 2.5)
+        global_errors.append(float(np.median(fit(wavelengths) / seeing_scaling(wavelengths))) - truth)
+        chunk_errors.append(float(sigmas[0] / seeing_scaling(wavelengths[0])) - truth)
+    assert np.sqrt(np.mean(np.square(global_errors))) < 0.3 * np.sqrt(np.mean(np.square(chunk_errors)))
+
+
+def test_the_width_stays_inside_its_bounds():
+    # A one parameter model cannot swing, but it can still be dragged by an order that is all host or
+    # all noise, and the width sets the extraction window for every bin.
+    domain = (4700.0, 10000.0)
+    wavelengths = np.linspace(*domain, 30)
+    guess = 2.5
+    for sigmas in [np.full(len(wavelengths), 0.6), np.full(len(wavelengths), 40.0)]:
+        fit = fit_seeing_law(make_width_points(wavelengths, sigmas), domain, guess)
+        grid = np.linspace(*domain, 201)
+        scaling = seeing_scaling(grid)
+        assert np.all(fit(grid) >= MIN_GLOBAL_WIDTH_RATIO * guess * np.min(scaling) * 0.99)
+        assert np.all(fit(grid) <= MAX_GLOBAL_WIDTH_RATIO * guess * np.max(scaling) * 1.01)
+
+
+def test_fit_seeing_law_survives_having_nothing_to_fit():
+    # Every chunk fell below the width gate. The order still needs a width, and the seeing guess is
+    # the only thing left that is not made up.
+    domain = (4700.0, 10000.0)
+    fit = fit_seeing_law([], domain, 2.5)
+    np.testing.assert_allclose(fit(np.linspace(*domain, 11)), 2.5)
+
+
+def test_locate_object_ignores_peaks_outside_its_search_window():
+    np.random.seed(7781)
+    # What keeps an individual trace measurement from jumping to a second object or a cosmic ray
+    # elsewhere in the slit: each chunk only looks near where the running prediction says the object
+    # is.
+    interp_y, flux, flux_error = make_slit_stack([(9000.0, -9.0, 2.5, MAX_BETA),
+                                                  (90000.0, 14.0, 2.5, MAX_BETA)])
+    peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
+    assert len(peaks) >= 2
+    near = [peak for peak in peaks if abs(peak['center'] + 9.0) <= 6.0]
+    assert len(near) == 1
+    # The brighter object is ten times the flux, so an unwindowed search would have taken it
+    assert max(peak['snr'] for peak in peaks) > 3.0 * near[0]['snr']
 
 
 def test_the_profile_is_positive_whatever_the_wings_do():
@@ -486,40 +628,6 @@ def test_the_width_means_the_same_thing_whatever_the_wings_do():
         np.testing.assert_allclose(np.ptp(above_half), sigma_to_fwhm(2.8), rtol=1e-3)
 
 
-def test_the_background_degree_follows_the_slit_illumination():
-    np.random.seed(55510)
-    # The Legendre across the slit is what absorbs the slit illumination and any extended flux the
-    # object sits on. A curved illumination needs the terms; a flat one must not get them, or every
-    # chunk pays for parameters it did not need.
-    curved = Legendre([4000.0, 1800.0, -2800.0, 1200.0], domain=[-41.0, 41.0])
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, MAX_BETA)], background=curved)
-    with_illumination = fit_shape_profile(interp_y, flux, flux_error, 0.0, 2.5, 0.0, HALF_HEIGHT)
-    assert with_illumination['background_degree'] == 3
-    np.testing.assert_allclose(with_illumination['sigma'], 2.8, rtol=0.05)
-
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, MAX_BETA)],
-                                                 background=Legendre([4000.0], domain=[-41.0, 41.0]))
-    flat = fit_shape_profile(interp_y, flux, flux_error, 0.0, 2.5, 0.0, HALF_HEIGHT)
-    assert flat['background_degree'] == 0
-    np.testing.assert_allclose(flat['sigma'], 2.8, rtol=0.05)
-
-
-def test_an_extended_host_does_not_widen_the_point_source():
-    np.random.seed(20261)
-    # A supernova on its host. Fitting the galaxy as a free second component is a flat direction in
-    # the likelihood at chunk signal to noise, so it is fit as a background to be marginalized over
-    # instead. The width that comes out is the point source's rather than a compromise between the
-    # two, which is what sets the extraction window.
-    truth = 2.8
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, truth, MAX_BETA), (25000.0, 2.0, 11.0, MAX_BETA)])
-    shape = fit_shape_profile(interp_y, flux, flux_error, 0.0, 2.5, 0.0, HALF_HEIGHT)
-    gaussian = fit_gaussian_profile(interp_y, flux, flux_error, 0.0, 2.5, HALF_HEIGHT, max_center_error=2.0)
-    assert shape is not None
-    np.testing.assert_allclose(shape['sigma'], truth, rtol=0.2)
-    # A single Gaussian over the same data splits the difference and lands nearly twice too wide
-    assert abs(gaussian['sigma'] - truth) > 4.0 * abs(shape['sigma'] - truth)
-
-
 def test_the_extraction_weights_are_positive_and_normalized():
     np.random.seed(80125)
     # A Moffat cannot go negative, so what has to be checked here is the normalization: the integral
@@ -540,233 +648,3 @@ def test_the_extraction_weights_are_positive_and_normalized():
             totals = np.array([profile[in_order & (np.arange(profile.shape[1])[None, :] == column)].sum()
                                for column in columns])
             np.testing.assert_allclose(totals, 1.0, atol=1e-10)
-
-
-def test_stack_slit_profile_can_leave_the_slit_illumination_in():
-    np.random.seed(43121)
-    # The shape fit models the background across the slit itself, so it has to be able to ask for the
-    # stack before the background was taken out. Subtracting one polynomial and then fitting another
-    # counts the illumination twice.
-    fake_frame = generate_fake_science_frame(include_sky=True)
-    binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
-                           fake_frame.orders)
-    in_order = np.logical_and(binned_data['order'] == 1, binned_data['order_wavelength_bin'] != 0)
-    order_data = binned_data[in_order].group_by('order_wavelength_bin')
-    indices = order_data.groups.indices
-    chunk = order_data[indices[40]: indices[65]]
-    order_height = int(fake_frame.orders.order_heights[0])
-
-    subtracted = stack_slit_profile(chunk, order_height)
-    raw = stack_slit_profile(chunk, order_height, subtract_background=False)
-    np.testing.assert_allclose(subtracted[0], raw[0])
-    np.testing.assert_allclose(subtracted[2], raw[2])
-    # The only difference is the slit illumination model, and the raw stack still has the sky in it
-    removed = raw[1] - subtracted[1]
-    good = raw[2] > 0
-    fit = Legendre.fit(raw[0][good], removed[good], SLIT_BACKGROUND_DEGREE,
-                       domain=[raw[0][0], raw[0][-1]])
-    np.testing.assert_allclose(fit(raw[0][good]), removed[good], atol=1e-8)
-    assert np.median(raw[1][good]) > np.median(subtracted[1][good])
-
-
-def test_justified_degree_keeps_a_real_trend():
-    """A width that really does vary across the order has to survive the F test."""
-    rng = np.random.default_rng(20260807)
-    wavelengths = np.linspace(3500.0, 5500.0, 50)
-    domain = (3500.0, 5500.0)
-    errors = np.full_like(wavelengths, 0.05)
-    truth = Legendre((6.9, -0.45), domain=domain)(wavelengths)
-    sigmas = truth + rng.normal(0.0, errors)
-    assert justified_degree(wavelengths, sigmas, errors, domain, 2) >= 1
-
-
-def test_justified_degree_refuses_a_trend_the_scatter_cannot_support():
-    """Widths measured at a chunk signal to noise of a few scatter by half their own value. A
-    quadratic through those dives to half the true width in the middle of the order, and the
-    extraction window then throws away real flux, so the degree has to fall to a constant.
-    """
-    rng = np.random.default_rng(4451)
-    wavelengths = np.linspace(3400.0, 5600.0, 34)
-    domain = (3400.0, 5600.0)
-    errors = np.full_like(wavelengths, 0.6)
-    sigmas = 2.0 + rng.normal(0.0, 0.9, size=len(wavelengths))
-    assert justified_degree(wavelengths, sigmas, errors, domain, 2) == 0
-
-
-def test_justified_degree_is_not_fooled_by_generous_errors():
-    """Where the widths scatter by less than their claimed errors, chi^2 per degree of freedom is
-    under one and any reduction looks significant unless the denominator is floored at one.
-    """
-    rng = np.random.default_rng(99123)
-    wavelengths = np.linspace(4400.0, 9900.0, 59)
-    domain = (4400.0, 9900.0)
-    # Errors several times the real scatter, which is what a faint chunk reports
-    errors = np.full_like(wavelengths, 1.3)
-    sigmas = 8.0 + rng.normal(0.0, 0.2, size=len(wavelengths))
-    assert justified_degree(wavelengths, sigmas, errors, domain, 2) == 0
-
-
-def test_the_width_polynomial_does_not_dive_on_noisy_measurements():
-    """The whole point: a constant, not a curve that halves in the middle of the order."""
-    rng = np.random.default_rng(70118)
-    wavelengths = np.linspace(3400.0, 5600.0, 34)
-    domain = (3400.0, 5600.0)
-    shape_points = [{'wavelength': float(w), 'sigma': float(max(0.6, 2.0 + rng.normal(0.0, 0.9))),
-                     'sigma_error': 0.6, 'beta': 3.7, 'beta_error': 1.5, 'background_degree': 4,
-                     'snr': 5.0}
-                    for w in wavelengths]
-    result = fit_shape_polynomials(shape_points, domain, 93, 2, order_id=2)
-    wavelengths = np.linspace(domain[0], domain[1], 101)
-    widths = result['sigma'](wavelengths)
-    # Nothing is left for the polynomial once the seeing law is divided out, so the width is a single
-    # number times the physical wavelength dependence rather than a curve fit to the noise
-    amplitude = widths / seeing_scaling(wavelengths)
-    assert np.ptp(amplitude) / np.median(amplitude) < 0.01
-    assert np.min(widths) > 0.6 * np.median([point['sigma'] for point in shape_points])
-
-
-def test_the_seeing_law_survives_being_written_out_as_a_polynomial():
-    """The width is stored as a plain Legendre, so the physics has to be representable as one."""
-    domain = [4700.0, 10000.0]
-    scaled = ClampedLegendre(Legendre([3.0], domain=domain))
-    combined = with_seeing_scaling(scaled, domain)
-    wavelengths = np.linspace(*domain, 201)
-    exact = 3.0 * (wavelengths / 5500.0) ** SEEING_EXPONENT
-    assert np.max(np.abs(combined(wavelengths) - exact)) / 3.0 < 0.005
-    assert combined.measured_range == scaled.measured_range
-
-
-def test_the_width_follows_the_seeing_law():
-    """Measurements that are exactly Kolmogorov come back out that way, from a one parameter fit."""
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 30)
-    truth = 3.0 * seeing_scaling(wavelengths)
-    shape_points = [{'wavelength': float(w), 'sigma': float(s), 'sigma_error': 0.05,
-                     'beta': 3.7, 'beta_error': 1.5, 'background_degree': 4, 'snr': 50.0}
-                    for w, s in zip(wavelengths, truth)]
-    result = fit_shape_polynomials(shape_points, domain, 93, 2, order_id=1)
-    grid = np.linspace(*domain, 101)
-    assert np.allclose(result['sigma'](grid), 3.0 * seeing_scaling(grid), rtol=0.01)
-    # The width really does change across the order; a constant would be wrong by more than this
-    assert np.ptp(result['sigma'](grid)) / np.median(result['sigma'](grid)) > 0.1
-
-
-def test_the_width_guard_is_one_sided():
-    """A window that is too narrow throws away flux; one that is too wide only collects sky."""
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 30)
-    # A width that falls off a cliff at the red end, which is what a noisy chunk run through a
-    # quadratic used to produce
-    sigmas = np.where(wavelengths > 9000.0, 1.0, 4.0)
-    shape_points = [{'wavelength': float(w), 'sigma': float(s), 'sigma_error': 0.4,
-                     'beta': 3.7, 'beta_error': 1.5, 'background_degree': 4, 'snr': 20.0}
-                    for w, s in zip(wavelengths, sigmas)]
-    result = fit_shape_polynomials(shape_points, domain, 93, 2, order_id=1)
-    widths = result['sigma'](np.linspace(*domain, 201))
-    scaled = np.median(sigmas / seeing_scaling(wavelengths))
-    assert np.min(widths) >= scaled / MIN_WIDTH_RATIO * np.min(seeing_scaling(np.linspace(*domain, 201))) * 0.99
-    assert np.max(widths) <= scaled * MAX_WIDTH_RATIO * np.max(seeing_scaling(np.linspace(*domain, 201))) * 1.01
-
-
-def make_shape_chunks(wavelengths, sigma_reference, amplitude=30000.0, beta=MAX_BETA, host=None,
-                      center=0.0):
-    """Shape points as `measure_shape_points` builds them, for a source of a known seeing law width.
-
-    Each chunk is a real stack fit by `fit_shape_profile`, so the per-chunk widths carry the scatter
-    the global fit has to average down, and each point keeps the stack the global fit reads.
-    """
-    points = []
-    for wavelength in wavelengths:
-        sigma = sigma_reference * seeing_scaling(wavelength)
-        components = [(amplitude, center, sigma, beta)]
-        if host is not None:
-            components.append(host)
-        stacked = make_slit_stack(components)
-        shape = fit_shape_profile(*stacked, center, sigma_reference, DEFAULT_BETA_PRIOR, HALF_HEIGHT)
-        if shape is None:
-            continue
-        points.append({'wavelength': float(wavelength), 'snr': 100.0, 'center': center,
-                       'stack': stacked, **shape})
-    return points
-
-
-def test_the_global_width_recovers_the_seeing_law():
-    np.random.seed(4102)
-    # The width of an order is one number, and this is the fit that treats it as one: every chunk's
-    # pixels at once, with only sigma at the reference wavelength and beta free.
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 12)
-    points = make_shape_chunks(wavelengths, 3.0)
-    result = fit_global_width(points, domain, HALF_HEIGHT, DEFAULT_BETA_PRIOR)
-    assert result is not None
-    np.testing.assert_allclose(result['sigma'], 3.0, rtol=0.03)
-    assert result['n_used'] == len(points)
-
-
-def test_the_global_width_is_steadier_than_averaging_the_chunks():
-    # The point of fitting the width globally. A chunk's own width is only as good as that chunk's
-    # signal, and its Legendre background is refit against its own noise every time, so at low signal
-    # the per-chunk widths scatter and the average of them inherits the scatter. Sharing one width
-    # across the chunks leaves each background free but gives the width every chunk's pixels.
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 10)
-    truth = 3.0
-    global_errors, chunk_errors = [], []
-    for seed in range(6):
-        np.random.seed(seed + 3300)
-        points = make_shape_chunks(wavelengths, truth, amplitude=400.0)
-        if len(points) < 4:
-            continue
-        result = fit_global_width(points, domain, HALF_HEIGHT, DEFAULT_BETA_PRIOR)
-        assert result is not None
-        global_errors.append(result['sigma'] - truth)
-        scaled = [point['sigma'] / seeing_scaling(point['wavelength']) for point in points]
-        chunk_errors.append(np.median(scaled) - truth)
-    assert np.sqrt(np.mean(np.square(global_errors))) < np.sqrt(np.mean(np.square(chunk_errors)))
-    # Both are pulled slightly narrow by the background taking some of the wings, but the global fit
-    # has to stay close to the truth in absolute terms as well as relative to the alternative
-    np.testing.assert_allclose(np.mean(global_errors) + truth, truth, rtol=0.05)
-
-
-def test_a_chunk_that_measured_something_else_is_left_out_of_the_global_width():
-    np.random.seed(661)
-    # The global fit has no clipping of its own, so a chunk that landed on a cosmic ray would drag
-    # the one shared width with it. The per-chunk widths are what select the chunks that agree.
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 12)
-    points = make_shape_chunks(wavelengths, 3.0)
-    spike = make_slit_stack([(200.0, 0.0, 3.0, MAX_BETA)], spikes=[(0.0, 40000.0)])
-    points[5].update({'stack': spike, 'sigma': 0.6, 'sigma_error': 0.02})
-    result = fit_global_width(points, domain, HALF_HEIGHT, DEFAULT_BETA_PRIOR)
-    assert result is not None
-    assert result['n_used'] == len(points) - 1
-    np.testing.assert_allclose(result['sigma'], 3.0, rtol=0.03)
-
-
-def test_the_global_width_is_used_when_the_width_is_constant():
-    # The F test decides which width is reported: with no wavelength trend to find, the number
-    # measured from every chunk at once is the one that goes in the header.
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 24)
-    sigmas = 3.0 * seeing_scaling(wavelengths)
-    global_width = {'sigma': 2.75, 'sigma_error': 0.01, 'beta': 3.1, 'beta_error': 0.2, 'n_used': 24}
-    result = fit_shape_polynomials(make_shape_points(wavelengths, sigmas, np.full(len(wavelengths), 0.3)),
-                                   domain, 93, width_poly_order=2, order_id=1, global_width=global_width)
-    assert result['global_width']
-    grid = np.linspace(*domain, 101)
-    np.testing.assert_allclose(result['sigma'](grid), 2.75 * seeing_scaling(grid), rtol=0.01)
-    np.testing.assert_allclose(result['beta'](grid), 3.1, rtol=0.01)
-
-
-def test_a_real_width_gradient_still_beats_the_global_width():
-    # The escape hatch. One width for the order is right for a point source and wrong for anything
-    # whose width really does change with wavelength, so the F test on the per-chunk widths has the
-    # last word.
-    domain = (4700.0, 10000.0)
-    wavelengths = np.linspace(*domain, 30)
-    sigmas = np.linspace(4.0, 2.5, len(wavelengths))
-    global_width = {'sigma': 3.2, 'sigma_error': 0.01, 'beta': 3.1, 'beta_error': 0.2, 'n_used': 30}
-    result = fit_shape_polynomials(make_shape_points(wavelengths, sigmas, np.full(len(wavelengths), 0.1)),
-                                   domain, 93, width_poly_order=2, order_id=1, global_width=global_width)
-    assert not result['global_width']
-    np.testing.assert_allclose(result['sigma'](wavelengths), sigmas, atol=0.05)

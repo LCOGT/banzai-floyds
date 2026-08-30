@@ -1,34 +1,3 @@
-"""
-Sky background for FLOYDS, fit across the whole slit with the object included as a component.
-
-The sky used to be fit only outside a window around the trace, which is the classic thing to do and
-fails here for a geometric reason. The window has to be several sigma wide to clear the wings of the
-profile, and a FLOYDS order is only ~93 pixels tall: a wide profile, or a trace that sits away from
-the middle of the order, pushes the window off the end of the slit. What is left is a handful of
-pixels on one side of the trace, which cannot hold a cubic, and the fit levers across the gap. On a
-1800s comet frame the sky model reached 11,000 counts where the data was 2,300.
-
-Including the object in the model removes the window entirely. Every pixel of the interior of the
-slit constrains the sky, however wide the profile is and wherever in the order the trace falls, and
-the region that is fit is set by the height of the order rather than by the profile, so there is
-nothing left that can collapse. For one wavelength bin the model is
-
-    d(y) = A M(y; sigma, beta) + P_d(y)
-
-with M the same Moffat the profile stage fit (Moffat 1969) held at the width and wings that stage
-measured, y measured from the trace so the object sits at zero, and P_d a Legendre across the slit.
-Everything left is linear, so A and the background coefficients come out of a single weighted linear
-least squares solve. Only P_d is returned: A is a byproduct, and the extraction measures the
-object's flux itself with the profile as weights (Horne 1986).
-
-A is left free to go negative rather than being bounded at zero. A bin where the object has no flux
-should return an amplitude that scatters around zero, and clamping it would bias the background up
-by exactly the amount of the clamped noise in every such bin.
-
-The wavelength bins are tilted with respect to the columns, so the data is interpolated onto the bin
-centers before fitting and the fitted surface interpolated back, which is closer to what IRAF did
-than to a 2D fit (Kelson 2003): only the background model is interpolated, never the pixel values.
-"""
 import numpy as np
 from astropy.table import Table, vstack
 from numpy.polynomial.legendre import Legendre
@@ -198,6 +167,14 @@ class BackgroundFitter(Stage):
     BACKGROUND_ORDER = 3
 
     def do_stage(self, image):
+        # Without a profile the binned data has no profile_sigma or profile_beta column, and reading
+        # one raises. banzai catches that by dropping the frame from the reduction entirely, so a
+        # frame with no object in the slit used to produce no product at all rather than an
+        # unextracted one. There is no object to fit a sky around here, so hand the frame back.
+        if image.profile_fits is None:
+            logger.warning('No object was detected, so there is no profile to fit the sky around.',
+                           image=image)
+            return image
         background, degrees_used = fit_background(image.binned_data, background_order=self.BACKGROUND_ORDER)
         image.background = background
         for order, degrees in degrees_used.items():

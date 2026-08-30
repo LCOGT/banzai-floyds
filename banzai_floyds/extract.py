@@ -12,6 +12,15 @@ logger = get_logger()
 def set_extraction_region(image):
     image.binned_data['extraction_window'] = False
     for order_id in [2, 1]:
+        # An order the profile stage could not trace, and could not borrow a trace for, carries a
+        # placeholder profile at the center of the order. Leaving its window empty is what keeps that
+        # placeholder from being quietly extracted as if it were a measurement: the order drops out
+        # of the extracted spectrum, which is visible, instead of appearing at the wrong position,
+        # which is not.
+        if not image.meta.get(f'L1PRTR{order_id}', True):
+            logger.warning(f'No trace was measured for order {order_id}, so it is not extracted.',
+                           image=image)
+            continue
         in_order = image.binned_data['order'] == order_id
         data = image.binned_data[in_order]
         extraction_region = image.extraction_windows[order_id - 1]
@@ -111,6 +120,12 @@ class Extractor(Stage):
     DEFAULT_EXTRACT_WINDOW = 3.0
 
     def do_stage(self, image):
+        # Nothing was found in the slit. Hand the frame back untouched rather than raising on the
+        # missing profile columns, which banzai would turn into the frame being dropped from the
+        # reduction with no product written at all.
+        if image.profile_fits is None:
+            logger.warning('No object was detected, so there is nothing to extract.', image=image)
+            return image
         if not image.extraction_windows:
             window = [-self.DEFAULT_EXTRACT_WINDOW, self.DEFAULT_EXTRACT_WINDOW]
             image.extraction_windows = [window, window]

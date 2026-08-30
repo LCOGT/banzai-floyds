@@ -63,6 +63,10 @@ class WavelengthSolution:
             wavelengths[in_order] = self._wavelength_polynomials[order_id - 1](tilted_x)
         return wavelengths
 
+    @property
+    def dispersions(self):
+        return [polynomial.coef[1] for polynomial in self._wavelength_polynomials]
+
     def to_header(self):
         header = fits.Header()
         for i, polynomial in enumerate(self._wavelength_polynomials):
