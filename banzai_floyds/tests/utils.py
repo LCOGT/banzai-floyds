@@ -205,9 +205,11 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
                                  domain=(0, 1700))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    trace1 = Legendre((5, 10, 4), domain=(wavelength_model1(0), wavelength_model1(1700)))
-    trace2 = Legendre((-10, -8, -3), domain=(wavelength_model2(475), wavelength_model2(1975)))
-    profile_centers = [trace1, trace2]
+    # The object sits at one place in the slit and the slow drift with wavelength is differential
+    # atmospheric refraction, neither of which cares which order the light lands in, so both orders
+    # see the same center at the same wavelength.
+    trace = Legendre((5, 10, 4), domain=(3200.0, 10200.0))
+    profile_centers = [trace, trace]
 
     # Work out the wavelength solution for larger than the typical order size so that we
     # can shift the fringe pattern up and down

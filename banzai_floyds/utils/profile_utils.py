@@ -1,5 +1,5 @@
 import numpy as np
-from banzai_floyds.utils.fitting_utils import moffat, MAX_BETA, ClampedLegendre
+from banzai_floyds.utils.fitting_utils import moffat, MAX_BETA
 from numpy.polynomial.legendre import Legendre
 
 
@@ -43,17 +43,6 @@ def normalize_profile(profile_data, orders, x2d):
     return profile_data
 
 
-def measured_range(header, prefix, domain):
-    """The wavelengths a profile polynomial was measured over, defaulting to its whole domain.
-
-    Frames reduced before the fits were extrapolated linearly don't carry the range, and their
-    polynomials were meant to be evaluated over the whole domain.
-    """
-    if f'{prefix}W0' not in header:
-        return domain
-    return header[f'{prefix}W0'], header[f'{prefix}W1']
-
-
 def load_profile_fits(hdu):
     centers = []
     sigmas = []
@@ -67,16 +56,16 @@ def load_profile_fits(hdu):
         sigma_domain = [hdu.meta[f'O{order}SIGDM0'], hdu.meta[f'O{order}SIGDM1']]
         center_poly = Legendre(center_coeffs, domain=center_domain)
         sigma_poly = Legendre(sigma_coeffs, domain=sigma_domain)
-        centers.append(ClampedLegendre(center_poly, measured_range(hdu.meta, f'O{order}CTR', center_domain)))
-        sigmas.append(ClampedLegendre(sigma_poly, measured_range(hdu.meta, f'O{order}SIG', sigma_domain)))
+        centers.append(center_poly)
+        sigmas.append(sigma_poly)
         # Frames reduced before the profile had a wing term were pure Gaussians. A Moffat at
         # MAX_BETA is a Gaussian to better than 1%, so that is how one is written here.
         if f'O{order}BETO' not in hdu.meta:
-            betas.append(ClampedLegendre(Legendre([MAX_BETA], domain=sigma_domain)))
+            betas.append(Legendre([MAX_BETA], domain=sigma_domain))
             continue
         beta_order = hdu.meta[f'O{order}BETO']
         beta_coeffs = [hdu.meta[f'O{order}BET{i:02}'] for i in range(beta_order + 1)]
         beta_domain = [hdu.meta[f'O{order}BETDM0'], hdu.meta[f'O{order}BETDM1']]
         beta_poly = Legendre(beta_coeffs, domain=beta_domain)
-        betas.append(ClampedLegendre(beta_poly, measured_range(hdu.meta, f'O{order}BET', beta_domain)))
+        betas.append(beta_poly)
     return centers, sigmas, betas, hdu.data

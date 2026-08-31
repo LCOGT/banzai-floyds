@@ -8,7 +8,6 @@ from astropy.io import fits
 from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 from banzai_floyds.utils.fitting_utils import MAX_BETA
-from banzai_floyds.utils.fitting_utils import ClampedLegendre
 from numpy.polynomial.legendre import Legendre
 from astropy.table import Table
 from banzai_floyds import dbs
@@ -146,11 +145,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         else:
             centers, sigmas, fitted_points = value
             betas = [Legendre([MAX_BETA], domain=sigma.domain) for sigma in sigmas]
-        # A bare Legendre was fit over its whole domain and is meant to be evaluated over all of it,
-        # so wrapping it here leaves it alone and lets everything downstream treat the two alike.
-        centers = [ClampedLegendre(center) if isinstance(center, Legendre) else center for center in centers]
-        sigmas = [ClampedLegendre(sigma) if isinstance(sigma, Legendre) else sigma for sigma in sigmas]
-        betas = [ClampedLegendre(beta) if isinstance(beta, Legendre) else beta for beta in betas]
         self._profile_fits = centers, sigmas, betas
         if fitted_points is None:
             fitted_points = Table({'wavelength': [], 'center': [], 'order': []})
@@ -175,16 +169,6 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             header[f'O{order}BETDM0'] = beta.domain[0], domain_str.format('Min', 'beta', order)
             header[f'O{order}BETDM1'] = beta.domain[1], domain_str.format('Max', 'beta', order)
 
-            # Outside this range the polynomials continue along their tangent instead of following
-            # their own high order terms, so it has to be saved with the coefficients for the fit to
-            # mean the same thing when the frame is opened again.
-            measured_str = '{0} wavelength the {1} of the profile was measured at for order {2}'
-            header[f'O{order}SIGW0'] = sigma.measured_range[0], measured_str.format('Min', 'width', order)
-            header[f'O{order}SIGW1'] = sigma.measured_range[1], measured_str.format('Max', 'width', order)
-            header[f'O{order}CTRW0'] = center.measured_range[0], measured_str.format('Min', 'center', order)
-            header[f'O{order}CTRW1'] = center.measured_range[1], measured_str.format('Max', 'center', order)
-            header[f'O{order}BETW0'] = beta.measured_range[0], measured_str.format('Min', 'beta', order)
-            header[f'O{order}BETW1'] = beta.measured_range[1], measured_str.format('Max', 'beta', order)
         self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
 
         profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, sigmas, betas,

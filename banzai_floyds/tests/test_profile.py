@@ -1,16 +1,140 @@
-from banzai_floyds.profile import fit_profile, choose_polynomial_degree, ProfileFitter
-from banzai_floyds.profile import seeing_scaling, fit_seeing_law, SEEING_EXPONENT
-from banzai_floyds.profile import stack_slit_profile, remove_background, annulus_background
-from banzai_floyds.profile import find_peaks_in_slit, choose_object, acquisition_score, locate_object
-from banzai_floyds.profile import fit_width, PEAK_EDGE_MARGIN, WIDTH_SNR
-from banzai_floyds.profile import MIN_GLOBAL_WIDTH_RATIO, MAX_GLOBAL_WIDTH_RATIO, PROFILE_BETA
+from banzai_floyds.profile import stack_slit_profile, find_peaks, detect_point_sources
+from banzai_floyds.profile import choose_source_to_extract, matched_filter_snr, seeing_scaling
+from banzai_floyds.profile import ProfileFitter
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
 import numpy as np
+import pytest
 from numpy.polynomial.legendre import Legendre
-from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, fwhm_to_sigma, gauss, moffat, ClampedLegendre
+from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, fwhm_to_sigma, gauss, moffat
 from banzai_floyds.utils.fitting_utils import MIN_BETA, MAX_BETA
+
+
+OBJECT_FWHM = 10.0
+
+
+def detect_in_fake_frame(frame, initial_fwhm=OBJECT_FWHM, **kwargs):
+    """Bin a fake frame the way the stage does and run the detection over it."""
+    binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
+    return detect_point_sources(binned_data, int(frame.orders.order_heights[0]),
+                                initial_fwhm=initial_fwhm, **kwargs)
+
+
+def stack_fake_frame(frame, initial_fwhm=OBJECT_FWHM, **kwargs):
+    binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
+    return binned_data, stack_slit_profile(binned_data, int(frame.orders.order_heights[0]),
+                                           5500.0, 5700.0, initial_fwhm, **kwargs)
+
+
+def input_center(frame, wavelength=5600.0):
+    return float(frame.input_profile_centers[0](wavelength))
+
+
+def test_stack_slit_profile_recovers_the_object_and_the_sky():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0)
+    _, (stacked_y, stacked_flux, stacked_flux_error) = stack_fake_frame(frame)
+
+    # The grid is the interior of the slit, one row per pixel
+    assert np.all(np.diff(stacked_y) == 1)
+    assert np.all(np.isfinite(stacked_flux_error))
+    assert np.all(stacked_flux_error > 0.0)
+
+    # The object sits on top of the sky rather than replacing it
+    peak = stacked_y[np.argmax(stacked_flux)]
+    assert abs(peak - input_center(frame)) <= 1.0
+    sky = np.median(stacked_flux)
+    assert stacked_flux.max() > 2.0 * sky
+
+    # Stacking hundreds of columns beats any single pixel by a large factor
+    assert np.median(stacked_flux_error) < 0.01 * sky
+
+
+def test_stack_slit_profile_ignores_masked_pixels():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0)
+    binned_data, (_, stacked_flux, _) = stack_fake_frame(frame)
+
+    masked = binned_data.copy()
+    # Blow up half the columns and mask them. A stack that ignores the mask cannot survive this.
+    to_mask = masked['x'] % 2 == 0
+    masked['data'][to_mask] += 1.0e6
+    masked['mask'][to_mask] = 1
+    _, masked_flux, masked_flux_error = stack_slit_profile(masked, int(frame.orders.order_heights[0]),
+                                                           5500.0, 5700.0, OBJECT_FWHM)
+
+    np.testing.assert_allclose(masked_flux, stacked_flux, rtol=0.05)
+
+
+def test_detect_point_sources_finds_the_object():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0)
+    sources = detect_in_fake_frame(frame, min_snr=10.0)
+
+    assert len(sources) == 1
+    source, = sources
+    assert source['center'] == pytest.approx(input_center(frame), abs=0.5)
+    assert source['snr'] > 100.0
+    assert source['detection_wavelength'] == 5600.0
+    assert source['max_flux'] > 0.0
+
+
+def test_the_detection_signal_to_noise_grows_with_the_source():
+    snrs = []
+    for flux_normalization in [50.0, 1000.0, 10000.0]:
+        np.random.seed(20802345)
+        frame = generate_fake_science_frame(include_sky=True, flux_normalization=flux_normalization)
+        source, = detect_in_fake_frame(frame, min_snr=10.0)
+        snrs.append(source['snr'])
+    assert np.all(np.diff(snrs) > 0.0)
+
+
+def test_a_source_too_faint_for_the_threshold_is_not_invented():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10.0)
+    assert detect_in_fake_frame(frame, min_snr=10.0) == []
+
+
+def test_blank_sky_has_no_sources():
+    # The slit illumination is a few percent of ~1e5 counts of sky, which is tens of sigma per
+    # point if the running median leaves it standing
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, include_trace=False)
+    assert detect_in_fake_frame(frame, min_snr=10.0) == []
+
+
+def test_two_objects_are_both_found_brightest_first():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
+                                        second_trace_offset=30.0, second_trace_fraction=0.4)
+    sources = detect_in_fake_frame(frame, min_snr=10.0)
+
+    assert len(sources) == 2
+    assert sources[0]['snr'] > sources[1]['snr']
+    centers = sorted(source['center'] for source in sources)
+    assert centers[0] == pytest.approx(input_center(frame), abs=1.0)
+    assert centers[1] == pytest.approx(input_center(frame) + 30.0, abs=1.0)
+
+
+def test_a_cosmic_ray_is_not_a_source():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, include_trace=False)
+    order_center = frame.orders.center(np.arange(frame.data.shape[1]))[0]
+    # A couple of pixels in one column, far brighter than any real object in the frame
+    frame.data[int(order_center[1000]) + 25, 1000:1002] += 5.0e4
+    assert detect_in_fake_frame(frame, min_snr=10.0) == []
+
+
+def test_a_source_against_the_end_of_the_slit_is_rejected():
+    np.random.seed(20802345)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
+                                        second_trace_offset=38.0, second_trace_fraction=0.4)
+    sources = detect_in_fake_frame(frame, min_snr=10.0)
+
+    # The running median has only one side of the slit to work with that close to the end
+    assert len(sources) == 1
+    assert sources[0]['center'] == pytest.approx(input_center(frame), abs=0.5)
 
 
 def fit_fake_frame(fake_frame, **kwargs):
@@ -374,7 +498,7 @@ def test_peaks_are_found_and_centred_across_a_pixel():
     errors = []
     for offset in offsets:
         interp_y, flux, flux_error = make_slit_stack([(20000.0, offset, 2.5, MAX_BETA)])
-        peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
+        peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
         assert len(peaks) >= 1
         errors.append(peaks[0]['center'] - offset)
     errors = np.array(errors)
@@ -389,7 +513,7 @@ def test_peaks_at_the_edge_of_the_grid_are_rejected():
     # the mismatch shows up as a peak at each edge.
     interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.5, MAX_BETA),
                                                   (20000.0, float(HALF_HEIGHT - 6), 2.5, MAX_BETA)])
-    peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
+    peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
     assert len(peaks) >= 1
     for peak in peaks:
         assert peak['center'] > np.min(interp_y) + PEAK_EDGE_MARGIN
@@ -406,7 +530,7 @@ def test_the_centroid_error_tracks_the_signal_to_noise():
         errors = []
         for _ in range(15):
             interp_y, flux, flux_error = make_slit_stack([(amplitude, 1.3, 2.5, MAX_BETA)])
-            peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error,
+            peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error,
                                        2.5, 5.0)
             errors.append(2.5 / peaks[0]['snr'])
         reported.append(np.median(errors))
@@ -599,7 +723,7 @@ def test_locate_object_ignores_peaks_outside_its_search_window():
     # is.
     interp_y, flux, flux_error = make_slit_stack([(9000.0, -9.0, 2.5, MAX_BETA),
                                                   (90000.0, 14.0, 2.5, MAX_BETA)])
-    peaks = find_peaks_in_slit(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
+    peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
     assert len(peaks) >= 2
     near = [peak for peak in peaks if abs(peak['center'] + 9.0) <= 6.0]
     assert len(near) == 1

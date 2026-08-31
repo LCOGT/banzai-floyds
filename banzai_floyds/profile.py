@@ -11,9 +11,8 @@ from banzai.utils.stats import robust_standard_deviation, sigma_clipped_mean
 from banzai_floyds.utils.fitting_utils import (fwhm_to_sigma, gauss)
 from banzai_floyds.matched_filter import matched_filter_signal, matched_filter_normalization
 from banzai_floyds.wavelengths import identify_peaks, refine_peak_centers
-from banzai_floyds.dbs import add_profile_shape
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 
 
 logger = get_logger()
@@ -30,17 +29,20 @@ def seeing_scaling(wavelength: np.ndarray, reference_wavelength: float, exponent
     return (np.asarray(wavelength, dtype=float) / reference_wavelength) ** exponent
 
 
-def stack_slit_profile(binned_data, order_height, wavelow, wavehigh, initial_fwhm, exclude_edge=5):
-    """Combine flux onto a common y-axis within the specified wavelength range across orders.
+def stack_slit_profile(binned_data: Table, order_height: int, wavelow: float, wavehigh: float,
+                       initial_fwhm: float, exclude_edge: int = 5) -> tuple:
+    """Combine the flux of every column onto a common y-axis within a wavelength range.
 
     Parameters
     ----------
     binned_data : Astropy Table
         The binned data containing the flux information.
-    wavelow : float
-        The lower bound of the wavelength range to stack.
-    wavehigh : float
-        The upper bound of the wavelength range to stack.
+    order_height : int
+        The height of the order in pixels.
+    wavelow, wavehigh : float
+        The wavelength range to stack.
+    initial_fwhm : float
+        The expected FWHM of the profile, which sets the correlation length of the kernel.
     exclude_edge : int, optional
         The number of pixels to exclude from the edges of the slit when stacking (default is 5).
 
@@ -48,30 +50,52 @@ def stack_slit_profile(binned_data, order_height, wavelow, wavehigh, initial_fwh
     -------
     stacked_y : array-like
         The common y-axis onto which the flux has been combined.
-    stacked_flux : array-like
-        The flux combined onto a common y-axis within the specified wavelength range.
+    stacked_flux, stacked_flux_error : array-like
+        The flux combined onto that axis and its uncertainty.
+
+    Notes
+    -----
+    Because the orders are curved (due to the double dispersion),
+    we need to resample each wavelength bin's data we are combining
+    onto a common grid.
+    For this, we adopt a standard Gaussian Process with an RBF kernel.
+    The correlation length is held at the profile sigma rather than fit.
     """
     half_height = order_height // 2
     interp_y = np.arange(-half_height + exclude_edge, half_height + 1 - exclude_edge)
-    stacked_flux = np.zeros_like(interp_y, dtype=float)
-    stacked_flux_errors = np.zeros_like(interp_y, dtype=float)
-    binned_data = binned_data[(binned_data['order_wavelength_bin'] >= wavelow) & (binned_data['order_wavelength_bin'] <= wavehigh)]
-    binned_data.sort('y_order')
-    Y_train = binned_data['y_order'].data.reshape(-1, 1)
-    flux_train = binned_data['flux'].data.reshape(-1, 1)
-    error_train = binned_data['error'].data.reshape(-1, 1)
-    rough_smoothing_scale = fwhm_to_sigma(initial_fwhm)
 
-    kernel = RBF(length_scale=rough_smoothing_scale, length_scale_bounds=(1.5, rough_smoothing_scale*2))
+    in_range = np.logical_and(binned_data['order_wavelength_bin'] >= wavelow,
+                              binned_data['order_wavelength_bin'] <= wavehigh)
+    columns = binned_data[in_range].group_by(('order', 'order_wavelength_bin'))
+    length_scale = fwhm_to_sigma(initial_fwhm)
 
-    gp = GaussianProcessRegressor(kernel=kernel, alpha=error_train**2, n_restarts_optimizer=5)
-    gp.fit(Y_train, flux_train)
+    signal = np.zeros(len(interp_y))
+    normalization = np.zeros(len(interp_y))
+    for column in columns.groups:
+        good = column['mask'] == 0
+        if not np.any(good):
+            continue
+        column_data = np.asarray(column['data'][good], dtype=float)
+        baseline = np.median(column_data)
+        amplitude = np.var(column_data - baseline)
+        if amplitude <= 0.0:
+            continue
+        kernel = ConstantKernel(amplitude, 'fixed') * RBF(length_scale=length_scale,
+                                                          length_scale_bounds='fixed')
+        gp = GaussianProcessRegressor(kernel=kernel,
+                                      alpha=np.asarray(column['uncertainty'][good], dtype=float) ** 2.0)
+        gp.fit(np.asarray(column['y_order'][good], dtype=float).reshape(-1, 1), column_data - baseline)
+        column_flux, column_error = gp.predict(interp_y.reshape(-1, 1), return_std=True)
+        weights = column_error ** -2.0
+        signal += weights * (column_flux + baseline)
+        normalization += weights
 
-    y_pred, y_std = gp.predict(interp_y.reshape(-1, 1), return_std=True)
-
-    stacked_flux = y_pred.flatten()
-    stacked_flux_errors = y_std.flatten()
-    return interp_y, stacked_flux, stacked_flux_errors
+    stacked_flux = np.zeros(len(interp_y))
+    stacked_flux_error = np.full(len(interp_y), np.inf)
+    stacked = normalization > 0.0
+    stacked_flux[stacked] = signal[stacked] / normalization[stacked]
+    stacked_flux_error[stacked] = normalization[stacked] ** -0.5
+    return interp_y, stacked_flux, stacked_flux_error
 
 
 def matched_filter_snr(y: np.ndarray, flux: np.ndarray, flux_error: np.ndarray,
@@ -103,8 +127,8 @@ def matched_filter_snr(y: np.ndarray, flux: np.ndarray, flux_error: np.ndarray,
     return float(signal / normalization)
 
 
-def find_peaks_in_slit(interp_y: np.ndarray, flux: np.ndarray, flux_error: np.ndarray,
-                       fwhm: float, min_snr: float) -> list[dict]:
+def find_peaks(interp_y: np.ndarray, flux: np.ndarray, flux_error: np.ndarray,
+               fwhm: float, min_snr: float, edge_margin: float) -> list[dict]:
     """Detect point sources in the slit using a matched filter.
 
     Parameters
@@ -119,11 +143,14 @@ def find_peaks_in_slit(interp_y: np.ndarray, flux: np.ndarray, flux_error: np.nd
         The full width at half maximum of the Gaussian used in the matched filter.
     min_snr : float
         The minimum signal-to-noise ratio required for a detection.
+    edge_margin : float
+        How far from the ends of the slit a peak has to be to be considered real.
 
     Returns
     -------
     list[dict]
-        A list of detected peaks, each represented as a dictionary with keys 'center' and 'snr'.
+        A list of detected peaks, each represented as a dictionary with keys 'center' and 'snr',
+        brightest first.
     """
     domain = (float(interp_y[0]), float(interp_y[-1]))
     peaks = identify_peaks(flux, flux_error, fwhm, 2.0 * fwhm, domain=domain, snr_threshold=min_snr)
@@ -132,30 +159,71 @@ def find_peaks_in_slit(interp_y: np.ndarray, flux: np.ndarray, flux_error: np.nd
     centers = refine_peak_centers(flux, flux_error, peaks, fwhm, domain=domain)
     found = []
     for center in centers:
+        if center < domain[0] + edge_margin or center > domain[1] - edge_margin:
+            continue
         snr = matched_filter_snr(interp_y, flux, flux_error, center, fwhm)
+        if snr < min_snr:
+            continue
         found.append({'center': float(center), 'snr': snr})
     return sorted(found, key=lambda peak: -peak['snr'])
 
 
-def detect_point_sources(binned_data, wavelow=5500.0, wavehigh=5700.0, initial_fwhm=6.0, min_snr=5.0):
+def detect_point_sources(binned_data: Table, order_height: int, wavelow: float = 5500.0,
+                         wavehigh: float = 5700.0, initial_fwhm: float = 6.0, min_snr: float = 5.0,
+                         median_kernel_fwhm: float = 2.0, edge_margin_sigma: float = 3.0) -> list[dict]:
     """Run a match filter across the orders to detect point-like sources.
+
+    Parameters
+    ----------
+    binned_data : Astropy Table
+        The wavelength binned data in the orders.
+    order_height : int
+        The height of the order in pixels.
+    wavelow, wavehigh : float
+        The wavelength range to detect in, overlapping both orders.
+    initial_fwhm : float
+        The expected FWHM of the profile in pixels.
+    min_snr : float
+        The matched filter signal-to-noise a peak needs to count as a detection.
+    median_kernel_fwhm : float
+        Width of the running median that removes the background, in units of the FWHM.
+    edge_margin_sigma : float
+        How far from the ends of the slit a peak has to be, in sigma.
+
+    Returns
+    -------
+    list[dict]
+        The detected sources, brightest first, each with its position in the slit ('center'), its
+        matched filter signal-to-noise ('snr'), the wavelength it was detected at
+        ('detection_wavelength') and its peak flux above the background ('max_flux').
 
     Notes
     -----
     Our detection algorithm is to combine about a hundred pixels an overlapping wavelength region
-    in each order, do a median filter along the y-axis to remove any smooth background component, and
+    in both orders
+    (a single set of sources across orders are detected),
+    do a median filter along the y-axis to remove any smooth background component, and
     then run a match filter to a Gaussian with provided fwhm to detect objects. This was found to me more
     stable than trying to simultaneously fit a background with a polynomial do a match filter. The median
-    filter will smooth the object profile slightly, but is symmteric so shouldn't affect the center.
+    filter will smooth the object profile slightly so we should not
+    use it for width estimation, but is symmetric so shouldn't affect the center.
     """
     # Choose an overlapping wavelength range so we get both orders at the same time
-    interp_y, stacked_flux, stacked_flux_error = stack_slit_profile(binned_data, wavelow, wavehigh)
-    median_kernel_size = int(fwhm_to_sigma(initial_fwhm) * 3)
+    interp_y, stacked_flux, stacked_flux_error = stack_slit_profile(binned_data, order_height, wavelow,
+                                                                    wavehigh, initial_fwhm)
+    kernel_size = int(round(median_kernel_fwhm * initial_fwhm))
     # Kernel size needs to be odd
-    if median_kernel_size % 2 == 0:
-        median_kernel_size += 1
-    stacked_flux -= median_filter(stacked_flux, size=median_kernel_size, mode='reflect')
-    peaks = find_peaks_in_slit(interp_y, stacked_flux, stacked_flux_error, initial_fwhm, min_snr=min_snr)
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    stacked_flux = stacked_flux - median_filter(stacked_flux, size=kernel_size, mode='nearest')
+
+    sigma = fwhm_to_sigma(initial_fwhm)
+    peaks = find_peaks(interp_y, stacked_flux, stacked_flux_error, initial_fwhm, min_snr,
+                       edge_margin_sigma * sigma)
+    detection_wavelength = 0.5 * (wavelow + wavehigh)
+    for peak in peaks:
+        peak['detection_wavelength'] = detection_wavelength
+        peak['max_flux'] = float(np.interp(peak['center'], interp_y, stacked_flux))
     return peaks
 
 
@@ -257,7 +325,7 @@ def trace_object(point_source, binned_data, orders, fwhm, polynomial_order, chun
 
 
 def remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm):
-    """Remove an estimate of the background by taking the median of regions 3-5 sigma away from the center 
+    """Remove an estimate of the background by taking the median of regions 3-5 sigma away from the center
        and fitting a linear model.
 
     Parameters
