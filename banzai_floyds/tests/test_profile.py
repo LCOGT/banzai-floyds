@@ -92,7 +92,10 @@ def test_the_detection_signal_to_noise_grows_with_the_source():
 
 def test_a_source_too_faint_for_the_threshold_is_not_invented():
     np.random.seed(20802345)
-    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10.0)
+    # Faint enough to stay clear of the noise floor: the best matched filter peak on a sky only
+    # frame is already s/n ~10, so a source placed right at the threshold tests the noise rather
+    # than the detector.
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=3.0)
     assert detect_in_fake_frame(frame, min_snr=10.0) == []
 
 

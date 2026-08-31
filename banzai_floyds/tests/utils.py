@@ -181,7 +181,10 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     """
     nx = 2048
     ny = 512
-    # DISPERSIONS = {1: 3.13, 2: 1.72}
+    # DISPERSIONS = {1: 3.49, 2: 1.73}, measured off real wavelength maps as 3.484 and 1.724.
+    # The red order stops at 10139 A rather than the instrument's ~10800 because that is where the
+    # fringe pattern harvested from real data ends, and past it we would be painting a fringe free
+    # tail that no real frame has.
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
     order_height = 93
@@ -196,14 +199,14 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     line_fwhms_angstroms = [15.6, 8.6]
     input_fringe_shift = fringe_offset
 
-    order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1700))
+    order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1541))
     order2 = Legendre((380, 17, 63, -12), domain=(475, 1975))
     data = np.zeros((ny, nx))
     orders = Orders([order1, order2], (ny, nx), [order_height, order_height])
     expanded_order_height = order_height + 20
     # make a reasonable wavelength model
-    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
-                                 domain=(0, 1700))
+    wavelength_model1 = Legendre((7433.3, 2689.6, 20.2, -5.1, 1.0),
+                                 domain=(0, 1541))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     # The object sits at one place in the slit and the slow drift with wavelength is differential
     # atmospheric refraction, neither of which cares which order the light lands in, so both orders
@@ -343,8 +346,8 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
 
 
 def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
-    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
-                                 domain=(0, 1700))
+    wavelength_model1 = Legendre((7433.3, 2689.6, 20.2, -5.1, 1.0),
+                                 domain=(0, 1541))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     read_noise = 4.0
 

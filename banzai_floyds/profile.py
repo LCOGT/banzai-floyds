@@ -8,7 +8,7 @@ from astropy.table import Table
 from banzai.stages import Stage
 from banzai.logs import get_logger
 from banzai.utils.stats import robust_standard_deviation, sigma_clipped_mean
-from banzai_floyds.utils.fitting_utils import (fwhm_to_sigma, gauss)
+from banzai_floyds.utils.fitting_utils import (fwhm_to_sigma, gauss, robust_legendre_fit)
 from banzai_floyds.matched_filter import matched_filter_signal, matched_filter_normalization
 from banzai_floyds.wavelengths import identify_peaks, refine_peak_centers
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -211,11 +211,7 @@ def detect_point_sources(binned_data: Table, order_height: int, wavelow: float =
     # Choose an overlapping wavelength range so we get both orders at the same time
     interp_y, stacked_flux, stacked_flux_error = stack_slit_profile(binned_data, order_height, wavelow,
                                                                     wavehigh, initial_fwhm)
-    kernel_size = int(round(median_kernel_fwhm * initial_fwhm))
-    # Kernel size needs to be odd
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    stacked_flux = stacked_flux - median_filter(stacked_flux, size=kernel_size, mode='nearest')
+    stacked_flux = remove_smooth_background(stacked_flux, initial_fwhm, median_kernel_fwhm)
 
     sigma = fwhm_to_sigma(initial_fwhm)
     peaks = find_peaks(interp_y, stacked_flux, stacked_flux_error, initial_fwhm, min_snr,
@@ -256,7 +252,34 @@ def choose_source_to_extract(point_sources: list[dict], snr_ratio: float = 0.6) 
     return ranked[0]
 
 
-def trace_object(point_source, binned_data, orders, fwhm, polynomial_order, chunk_size, dispersions, snr_threshold):
+def remove_smooth_background(flux: np.ndarray, fwhm: float, median_kernel_fwhm: float = 2.0) -> np.ndarray:
+    """Subtract the sky with a running median narrow enough to leave the object.
+
+    Parameters
+    ----------
+    flux : np.ndarray
+        The flux stacked along the slit.
+    fwhm : float
+        The full width at half maximum of the point source in pixels.
+    median_kernel_fwhm : float
+        Width of the running median, in units of the FWHM.
+
+    Returns
+    -------
+    np.ndarray
+        The flux with the smooth component removed.
+    """
+    kernel_size = int(round(median_kernel_fwhm * fwhm))
+    # Kernel size needs to be odd
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    return flux - median_filter(flux, size=kernel_size, mode='nearest')
+
+
+def trace_object(point_source: dict, binned_data: Table, orders, fwhm: float, polynomial_order: int,
+                 chunk_size: int, snr_threshold: float, max_center_error: float = 4.0,
+                 clip_sigma: float = 4.0, max_chunk_shift: float = 1.0,
+                 min_trace_points: int = 7) -> tuple:
     """Stepping along an object, fit a smooth polynomial to the center of the trace.
 
     Parameters
@@ -271,61 +294,95 @@ def trace_object(point_source, binned_data, orders, fwhm, polynomial_order, chun
     polynomial_order : int
         The order of the polynomial to fit to the trace.
     chunk_size : int
-        The size of the chunks in pixels to use when stepping along the trace.
-    dispersions : list[float]
-        The dispersions for each order.
+        The width of each chunk to stack, in pixels along the dispersion direction.
     snr_threshold : float
-        The minimum signal-to-noise ratio required per chunk
+        The minimum signal-to-noise ratio required per chunk.
+    max_center_error : float
+        Trace points with a centroid uncertainty larger than this (in pixels) are not fit.
+    clip_sigma : float
+        Rejection threshold, in robust standard deviations, for the trace polynomial fit.
+    max_chunk_shift : float
+        How far, in sigma, a chunk's center is allowed to move from the previous chunk's.
+    min_trace_points : int
+        Minimum trace points requried to fit a trace
+
+    Returns
+    -------
+    trace_polynomials : list
+        The center of the object as a function of wavelength for each order, or None where the
+        object was never detected.
+    trace_points : astropy.table.Table
+        Every chunk measurement, with the order, wavelength, center, centroid uncertainty and
+        whether it was used in the fit.
 
     Notes
     -----
+    For each order, we start at the overlapping wavelength region from
+    the source detection and step left and right, chunking the data.
     For each chunk, we do a median filter background subtraction rather than trying to fit some high
     order polynomial. This will smooth out the object some, but it should be symmetric and should not
     affect the center.
     """
-    trace_points = {'order_id': [], 'center': [], 'wavelength': []}
+    sigma = fwhm_to_sigma(fwhm)
+    trace_points = {'order': [], 'wavelength': [], 'center': [], 'center_error': [], 'used': []}
     trace_polynomials = []
-    median_kernel_size = int(fwhm_to_sigma(fwhm) * 3)
 
-    for order_id in orders.order_ids:
-        order_data = binned_data[binned_data['order_id'] == order_id]
-        order_data.group_by('order_wavelength_bin')
-        starting_bin = np.argmin(np.abs(order_data['order_wavelength_bin'] - point_source['detection_wavelength']))
-        # Iterate left and right
-        left_chunks = np.arange(
-            starting_bin['order_wavelength_bin'],
-            np.min(order_data[order_data['order_wavelength_bin'] > 0.0]['order_wavelength_bin']),
-            -chunk_size * dispersions[order_id - 1]
-        )
-        right_chunks = np.arange(
-            starting_bin['order_wavelength_bin'],
-            np.max(order_data['order_wavelength_bin'] - 1),
-            chunk_size * dispersions[order_id - 1]
-        )
-        for chunks in [left_chunks, right_chunks]:
-            # Start at the center at the overlapping wavelength
+    for order_id, order_height in zip(orders.order_ids, orders.order_heights):
+        order_data = binned_data[binned_data['order'] == order_id]
+        # A bin center of zero flags a pixel that fell outside the wavelength bins
+        wavelength_bins = np.unique(order_data['order_wavelength_bin'])
+        wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
+        start = int(np.argmin(np.abs(wavelength_bins - point_source['detection_wavelength'])))
+
+        order_wavelengths = []
+        order_centers = []
+        order_errors = []
+        for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
             center_guess = point_source['center']
-            for i, chunk in enumerate(chunks[1:]):
-                # Stack the flux in the current chunk
+            for low, high in zip(edges[:-1], edges[1:]):
+                chunk_low, chunk_high = wavelength_bins[min(low, high)], wavelength_bins[max(low, high)]
                 stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
-                    chunk, orders.order_heights[order_id - 1], chunks[i], chunk, fwhm
+                    order_data, int(order_height), chunk_low, chunk_high, fwhm
                 )
-                # median filter the stacked flux to remove background
-                stacked_flux -= median_filter(stacked_flux, size=median_kernel_size)
-                # Fit the center with a starting location of the previous best fit center
-                domain = (stacked_y.min(), stacked_y.max())
-                if matched_filter_snr() < snr_threshold:
+                stacked_flux = remove_smooth_background(stacked_flux, fwhm)
+                snr = matched_filter_snr(stacked_y, stacked_flux, stacked_flux_error, center_guess, fwhm)
+                if snr < snr_threshold:
                     continue
-                centers = refine_peak_centers(stacked_y, stacked_flux, stacked_flux_error, [center_guess],
-                                              fwhm, domain=domain)
-                # Store the result
-                trace_points['order_id'].append(order_id)
-                trace_points['center'].append(centers[0])
-                trace_points['wavelength'].append(chunk['wavelength'])
-                center_guess = centers[0]
-        trace_polynomial = Legendre.fit(trace_points['wavelength'], trace_points['center'], polynomial_order)
-        trace_polynomials.append(trace_polynomial)
-    return trace_points, trace_polynomials
+                domain = (float(stacked_y[0]), float(stacked_y[-1]))
+                center, = refine_peak_centers(stacked_flux, stacked_flux_error, [center_guess], fwhm,
+                                              domain=domain)
+                if abs(center - center_guess) > max_chunk_shift * sigma:
+                    continue
+                order_wavelengths.append(0.5 * (chunk_low + chunk_high))
+                order_centers.append(float(center))
+                order_errors.append(sigma / snr)
+                center_guess = center
+
+        order_wavelengths = np.array(order_wavelengths)
+        order_centers = np.array(order_centers)
+        order_errors = np.array(order_errors)
+        fittable = order_errors < max_center_error
+
+        if len(order_centers) < min_trace_points:
+            continue
+        else:
+            domain = (float(np.min(order_wavelengths[fittable])), float(np.max(order_wavelengths[fittable])))
+            trace_polynomial, fit_used = robust_legendre_fit(
+                order_wavelengths[fittable], order_centers[fittable],
+                order_errors[fittable], polynomial_order, domain,
+                clip_sigma=clip_sigma, return_used=True
+            )
+            trace_polynomials.append(trace_polynomial)
+            used = np.zeros(len(order_centers), dtype=bool)
+            used[np.where(fittable)[0][fit_used]] = True
+
+        trace_points['order'] += [order_id] * len(order_centers)
+        trace_points['wavelength'] += list(order_wavelengths)
+        trace_points['center'] += list(order_centers)
+        trace_points['center_error'] += list(order_errors)
+        trace_points['used'] += list(used)
+
+    return trace_polynomials, Table(trace_points)
 
 
 def remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm):
@@ -521,6 +578,8 @@ class ProfileFitter(Stage):
     DETECTION_SNR = 10.0
     # Matched filter s/n to keep an individual trace measurement.
     CHUNK_SNR = 4.0
+    # How far (in sigma) the trace is allowed to move between adjacent chunks
+    MAX_CHUNK_SHIFT = 1.0
 
     def do_stage(self, image):
         logger.info('Fitting profile centers and widths', image=image)
@@ -530,8 +589,8 @@ class ProfileFitter(Stage):
             point_source, image.binned_data,
             image.orders, self.INITIAL_FWHM,
             self.CENTER_POLYNOMIAL_ORDER, self.STEP_SIZE,
-            image.wavelengths.dispersions,
-            self.CHUNK_SNR
+            self.CHUNK_SNR, max_center_error=self.MAX_CENTER_ERROR,
+            clip_sigma=self.N_SIGMA_CLIP, max_chunk_shift=self.MAX_CHUNK_SHIFT
         )
         profile_fwhm = fit_profile_fwhm()
         profile_shape = find_profile_shape()

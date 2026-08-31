@@ -65,7 +65,16 @@ class WavelengthSolution:
 
     @property
     def dispersions(self):
-        return [polynomial.coef[1] for polynomial in self._wavelength_polynomials]
+        """Dispersion in Angstroms per pixel for each order.
+
+        Taken from the linear term of the wavelength solution. The Legendre domain is mapped onto
+        -1 to 1, so that coefficient is the wavelength change over half the order, and it takes a
+        factor of two over the domain length to become a dispersion. Odd terms above the linear one
+        shift the dispersion averaged over the order as well, but they are small enough in a real
+        solution to ignore.
+        """
+        return [2.0 * polynomial.coef[1] / (polynomial.domain[1] - polynomial.domain[0])
+                for polynomial in self._wavelength_polynomials]
 
     def to_header(self):
         header = fits.Header()

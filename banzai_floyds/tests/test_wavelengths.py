@@ -62,6 +62,37 @@ def test_bin_edges():
     np.testing.assert_allclose(wavelength_solution.bin_edges[0], np.arange(5500 - 255.5, 5500. + 256))
 
 
+def test_dispersions_are_angstroms_per_pixel():
+    # 512 pixels spanning 5500 +/- 256 Angstroms is one Angstrom per pixel. The Legendre domain is
+    # mapped onto -1 to 1, so the linear coefficient is the change over half the order, not all of it.
+    wavelength_models = [Legendre([5500.0, 256.0], domain=(0, 512)),
+                         Legendre([7000.0, 1024.0], domain=(0, 512))]
+    tilt_models = [Legendre([0.0], domain=(0, 512)), Legendre([0.0], domain=(0, 512))]
+    orders = Orders([Legendre([128, 0.0], domain=(0, 512)), Legendre([128, 0.0], domain=(0, 512))],
+                    (523, 533), [65.0, 65.0])
+    lsf_params = [{'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}, {'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}]
+    solution = WavelengthSolution(wavelength_models, tilt_models, orders, lsf_params)
+    np.testing.assert_allclose(solution.dispersions, [1.0, 4.0])
+    # It is the spacing of the wavelength bins, which are one pixel wide by construction
+    for dispersion, bin_edges in zip(solution.dispersions, solution.bin_edges):
+        np.testing.assert_allclose(np.diff(bin_edges), dispersion)
+
+
+def test_the_dispersion_of_a_curved_solution_is_its_average():
+    # A real solution curves, so the dispersion at any one pixel is not the number reported. With a
+    # quadratic term the reported value is both the average across the order and the value at its
+    # middle, while the ends differ from it by a few percent.
+    wavelength_model = Legendre([5500.0, 256.0, 20.0], domain=(0, 512))
+    solution = WavelengthSolution([wavelength_model], [Legendre([0.0], domain=(0, 512))],
+                                  Orders([Legendre([128, 0.0], domain=(0, 512))], (523, 533), [65.0]),
+                                  [{'sigma': 2.0, 'h3': 0.0, 'h4': 0.0}])
+    np.testing.assert_allclose(solution.dispersions[0], 1.0)
+    np.testing.assert_allclose(solution.dispersions[0], wavelength_model.deriv()(256.0))
+    np.testing.assert_allclose(solution.dispersions[0],
+                               (wavelength_model(512.0) - wavelength_model(0.0)) / 512.0)
+    assert wavelength_model.deriv()(0.0) < solution.dispersions[0] < wavelength_model.deriv()(512.0)
+
+
 def test_combined_bin_edges():
     expected_blue_bins = np.arange(3581.5, 6012, 1.0)
     expected_red_bins = np.arange(5013.0, 10322, 2.0)
