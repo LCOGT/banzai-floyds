@@ -364,7 +364,8 @@ def trace_object(point_source: dict, binned_data: Table, orders, fwhm: float, po
         fittable = order_errors < max_center_error
 
         if len(order_centers) < min_trace_points:
-            continue
+            trace_polynomials.append(None)
+            used = np.zeros(len(order_centers), dtype=bool)
         else:
             domain = (float(np.min(order_wavelengths[fittable])), float(np.max(order_wavelengths[fittable])))
             trace_polynomial, fit_used = robust_legendre_fit(
@@ -385,7 +386,8 @@ def trace_object(point_source: dict, binned_data: Table, orders, fwhm: float, po
     return trace_polynomials, Table(trace_points)
 
 
-def remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm):
+def remove_coarse_local_background(stacked_y: np.ndarray, stacked_flux: np.ndarray, center: float,
+                                   fwhm: float) -> np.ndarray | None:
     """Remove an estimate of the background by taking the median of regions 3-5 sigma away from the center
        and fitting a linear model.
 
@@ -402,49 +404,94 @@ def remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm):
 
     Returns
     -------
-    stacked_flux : array-like
-        The background-subtracted flux values.
+    stacked_flux : array-like or None
+        The background-subtracted flux values, or None if neither region has any pixels.
     """
     sigma = fwhm_to_sigma(fwhm)
     left_region = np.logical_and(stacked_y >= center - 5 * sigma, stacked_y <= center - 3 * sigma)
     right_region = np.logical_and(stacked_y >= center + 3 * sigma, stacked_y <= center + 5 * sigma)
-    left_background_flux = np.median(stacked_flux[left_region])
-    right_background_flux = np.median(stacked_flux[right_region])
-    p = np.polyfit([stacked_y[left_region], stacked_y[right_region]], [left_background_flux, right_background_flux], 1)
-    stacked_flux -= np.polyval(p, stacked_y)
-    return stacked_flux
+    regions = [region for region in (left_region, right_region) if np.sum(region) > 0]
+    if len(regions) == 0:
+        return None
+    background_y = [np.median(stacked_y[region]) for region in regions]
+    background_flux = [np.median(stacked_flux[region]) for region in regions]
+    if len(regions) == 1:
+        return stacked_flux - background_flux[0]
+    slope = (background_flux[1] - background_flux[0]) / (background_y[1] - background_y[0])
+    return stacked_flux - (background_flux[0] + slope * (stacked_y - background_y[0]))
 
 
-def mean_wavelength(data: Table) -> float:
-    """Inverse variance weighted mean wavelength"""
-    weights = data['uncertainty'] ** -2
-    return float(np.sum(data['wavelength'] * weights) / np.sum(weights))
+def half_maximum_width(stacked_y: np.ndarray, stacked_flux: np.ndarray, center: float) -> float:
+    """Measure the full width at half maximum of a profile by finding where it crosses half its peak.
+
+    Parameters
+    ----------
+    stacked_y : array-like
+        The y-coordinates of the stacked slit profile.
+    stacked_flux : array-like
+        The background subtracted flux of the stacked slit profile.
+    center : float
+        The center of the object in the slit.
+
+    Returns
+    -------
+    float
+        The width between the two half maximum crossings, or nan if the profile does not fall below
+        half of its peak on both sides of the center.
+
+    Notes
+    -----
+    We take the peak as the flux interpolated at the center, not just the max value.
+    """
+    peak = np.interp(center, stacked_y, stacked_flux)
+    half_max = peak / 2.0
+    below = stacked_flux < half_max
+    left = np.where(np.logical_and(below, stacked_y < center))[0]
+    right = np.where(np.logical_and(below, stacked_y > center))[0]
+    if len(left) == 0 or len(right) == 0:
+        return np.nan
+    left_pair = [left[-1], left[-1] + 1]
+    right_pair = [right[0], right[0] - 1]
+    left_crossing = np.interp(half_max, stacked_flux[left_pair], stacked_y[left_pair])
+    right_crossing = np.interp(half_max, stacked_flux[right_pair], stacked_y[right_pair])
+    return float(right_crossing - left_crossing)
 
 
-def fit_profile_fwhm(binned_data, orders, dispersions, point_source, seeing_exponent,
-                     seeing_reference_wavelength, chunk_size=25, initial_fwhm=6, niter=3):
+def fit_profile_fwhm(binned_data: Table, orders, trace_polynomials: list, point_source: dict,
+                     seeing_exponent: float, seeing_reference_wavelength: float, chunk_size: int = 25,
+                     initial_fwhm: float = 6.0, snr_threshold: float = 4.0, niter: int = 3,
+                     clip_sigma: float = 3.0) -> float:
     """Fit the FWHM (full-width half-maximum) for the object to extract.
 
     Parameters
     ----------
     binned_data : Table
         The binned data containing the slit profiles.
-    orders : array-like
-        The orders to fit.
-    dispersions : array-like
-        The dispersions for each order.
+    orders : Orders object
+    trace_polynomials : list
+        The center of the object as a function of wavelength for each order, or None where the
+        object was never detected.
     point_source : dict
         The point source information, including the detection wavelength.
     seeing_exponent : float
         The exponent for the seeing power law.
     seeing_reference_wavelength : float
         The reference wavelength for the seeing power law.
-    chunk_size : int, optional
-        The size of the chunks to use for fitting, by default 25.
-    initial_fwhm : float, optional
-        The initial guess for the FWHM, by default 6.
-    niter : int, optional
-        The number of iterations for the FWHM fitting, by default 3.
+    chunk_size : int
+        The width of each chunk to stack, in pixels along the dispersion direction.
+    initial_fwhm : float
+        The initial guess for the FWHM.
+    snr_threshold : float
+        The minimum signal-to-noise ratio required to measure a chunk.
+    niter : int
+        The number of iterations of the background and FWHM measurement.
+    clip_sigma : float
+        Rejection threshold, in robust standard deviations, for the mean of the chunk measurements.
+
+    Returns
+    -------
+    float
+        The FWHM of the profile, in pixels, at the reference wavelength.
 
     Notes
     -----
@@ -460,37 +507,48 @@ def fit_profile_fwhm(binned_data, orders, dispersions, point_source, seeing_expo
     measured_fwhms = []
     wavelengths = []
 
-    for order_id, order in enumerate(orders):
-        order_data = binned_data[binned_data['order'] == order]
-        order_data.group_by('order_wavelength_bin')
-        starting_bin = np.argmin(np.abs(order_data['order_wavelength_bin'] - point_source['detection_wavelength']))
-        # Iterate left and right
-        left_chunks = np.arange(
-            order_data['order_wavelength_bin'][starting_bin],
-            np.min(order_data[order_data['order_wavelength_bin'] > 0.0]['order_wavelength_bin']),
-            -chunk_size * dispersions[order_id - 1]
-        )
-        right_chunks = np.arange(
-            order_data['order_wavelength_bin'][starting_bin],
-            np.max(order_data['order_wavelength_bin'] - 1),
-            chunk_size * dispersions[order_id - 1]
-        )
-        for chunk in np.concatenate([left_chunks, right_chunks]):
-            fwhm = initial_fwhm
-            for i in range(niter):
-                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(chunk)
-                remove_coarse_local_background(stacked_flux)
-                half_max = point_source['max_flux'] / 2.0
-                interpolated_flux = np.interp(np.arange(stacked_y.min(), stacked_y.max(), 0.05),
-                                              stacked_y, stacked_flux)
-                left = root(np.abs(interpolated_flux - half_max), point_source['center'] - fwhm)
-                right = root(np.abs(interpolated_flux - half_max), point_source['center'] + fwhm)
-                fwhm = right.x - left.x
+    for order_id, order_height, trace in zip(orders.order_ids, orders.order_heights, trace_polynomials):
+        if trace is None:
+            continue
+        order_data = binned_data[binned_data['order'] == order_id]
+        # A bin center of zero flags a pixel that fell outside the wavelength bins
+        wavelength_bins = np.unique(order_data['order_wavelength_bin'])
+        wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
+        start = int(np.argmin(np.abs(wavelength_bins - point_source['detection_wavelength'])))
+
+        for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
+            for low, high in zip(edges[:-1], edges[1:]):
+                chunk_low, chunk_high = wavelength_bins[min(low, high)], wavelength_bins[max(low, high)]
+                wavelength = 0.5 * (chunk_low + chunk_high)
+                center = float(trace(wavelength))
+                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
+                    order_data, int(order_height), chunk_low, chunk_high, initial_fwhm
+                )
+                fwhm = initial_fwhm
+                for i in range(niter):
+                    background_subtracted = remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm)
+                    if background_subtracted is None:
+                        # Don't keep iterating if you can never get a valid background subtraction
+                        fwhm = np.nan
+                        break
+                    snr = matched_filter_snr(stacked_y, background_subtracted, stacked_flux_error, center, fwhm)
+                    if snr < snr_threshold:
+                        # Don't bother iterating if the S/N is too low
+                        fwhm = np.nan
+                        break
+                    fwhm = half_maximum_width(stacked_y, background_subtracted, center)
+                    if not np.isfinite(fwhm):
+                        break
+                if not np.isfinite(fwhm) or fwhm > order_height:
+                    continue
                 measured_fwhms.append(fwhm)
-                wavelengths.append(mean_wavelength(chunk))
+                wavelengths.append(wavelength)
+
+    if len(measured_fwhms) == 0:
+        return np.nan
     fwhms = np.array(measured_fwhms)
-    fwhms /= seeing_scaling(wavelengths, seeing_reference_wavelength, seeing_exponent)
-    return sigma_clipped_mean(fwhms)
+    fwhms /= seeing_scaling(np.array(wavelengths), seeing_reference_wavelength, seeing_exponent)
+    return float(sigma_clipped_mean(fwhms, clip_sigma))
 
 
 def find_profile_shape(binned_data, orders, dispersions, point_source, initial_fwhm, chunk_size=25):
@@ -580,6 +638,9 @@ class ProfileFitter(Stage):
     CHUNK_SNR = 4.0
     # How far (in sigma) the trace is allowed to move between adjacent chunks
     MAX_CHUNK_SHIFT = 1.0
+    # Kolmogorov turbulence, Fried 1966
+    SEEING_EXPONENT = -1.0 / 5.0
+    SEEING_REFERENCE_WAVELENGTH = 5000.0
 
     def do_stage(self, image):
         logger.info('Fitting profile centers and widths', image=image)
@@ -592,7 +653,11 @@ class ProfileFitter(Stage):
             self.CHUNK_SNR, max_center_error=self.MAX_CENTER_ERROR,
             clip_sigma=self.N_SIGMA_CLIP, max_chunk_shift=self.MAX_CHUNK_SHIFT
         )
-        profile_fwhm = fit_profile_fwhm()
+        profile_fwhm = fit_profile_fwhm(
+            image.binned_data, image.orders, profile_center, point_source,
+            self.SEEING_EXPONENT, self.SEEING_REFERENCE_WAVELENGTH, self.STEP_SIZE,
+            self.INITIAL_FWHM, snr_threshold=self.CHUNK_SNR
+        )
         profile_shape = find_profile_shape()
 
         image.meta['L1PROFDG'] = (
