@@ -540,40 +540,58 @@ def test_the_centroid_error_tracks_the_signal_to_noise():
     np.testing.assert_allclose(reported[:-1] / reported[1:], 2.0, rtol=0.25)
 
 
+def test_nothing_detected_gives_nothing_to_extract():
+    assert choose_source_to_extract([]) is None
+
+
 def test_the_acquisition_prior_prefers_the_source_the_observer_asked_for():
     # Acquisition puts the requested coordinates at the center of the slit, so of two comparable
     # sources the central one is the target. Over 231 single-source orders it landed within 6 px of
     # center 80% of the time.
-    central = {'center': 2.0, 'snr': 100.0}
-    off_center = {'center': 25.0, 'snr': 100.0}
-    assert acquisition_score(central, False) > acquisition_score(off_center, False)
+    peaks = [{'center': 2.0, 'snr': 100.0}, {'center': 25.0, 'snr': 100.0}]
+    assert choose_source_to_extract(peaks)['center'] == 2.0
 
 
-def test_a_bright_confirmed_source_beats_a_central_unconfirmed_one():
-    # SN2026idh, which is the one order in the characterization set where the brightest and the most
-    # central peak disagreed. The bright source sat 27 px off center and agreed between the two
-    # orders to 1 px; the central candidates disagreed by 21 px and were spurious. Cross-order
-    # agreement is a stronger discriminant than either brightness or position, and the prior is
-    # heavy-tailed on purpose so a real target well off center stays reachable.
-    peaks = {1: [{'center': -27.0, 'snr': 191.0}, {'center': -10.0, 'snr': 94.0}],
-             2: [{'center': -26.0, 'snr': 75.0}, {'center': 11.0, 'snr': 25.0}]}
-    chosen = choose_object(peaks)
-    assert abs(chosen[1]['center'] + 27.0) < 1e-6
-    assert abs(chosen[2]['center'] + 26.0) < 1e-6
+def test_a_decisively_brighter_source_beats_a_central_one():
+    # SN2026idh, the one order in the characterization set where the brightest and the most central
+    # peak disagreed. The bright source sat 27 px off center and was the real target, so a factor of
+    # two in signal-to-noise has to outweigh the acquisition prior.
+    peaks = [{'center': -27.0, 'snr': 191.0}, {'center': -10.0, 'snr': 94.0}]
+    assert choose_source_to_extract(peaks)['center'] == -27.0
 
 
-def test_a_grid_edge_artifact_confirmed_in_both_orders_still_loses():
-    # Every flux standard -- one star, by construction -- showed a "second source" at 33 to 35 px,
-    # consistent to 1 px across both orders, so cross-order agreement alone does not make something
-    # an object. The acquisition prior is what rejects these, which is also why the edge margin
-    # cannot simply be widened to cover them: the prior's own p99 is 34 px.
-    peaks = {1: [{'center': 5.0, 'snr': 6376.0}, {'center': -34.0, 'snr': 1531.0}],
-             2: [{'center': 7.0, 'snr': 6214.0}, {'center': -34.0, 'snr': 1434.0}]}
-    chosen = choose_object(peaks)
-    assert abs(chosen[1]['center'] - 5.0) < 1e-6
-    assert abs(chosen[2]['center'] - 7.0) < 1e-6
-    assert chosen[1]['n_peaks'] == 2
-    assert chosen[1]['runner_up']['center'] == -34.0
+def test_a_grid_edge_artifact_loses_to_the_star():
+    # Every flux standard -- one star, by construction -- showed a "second source" out at 33 to 35
+    # px. It is far enough down in signal-to-noise that brightness rejects it.
+    peaks = [{'center': 5.0, 'snr': 6376.0}, {'center': -34.0, 'snr': 1531.0}]
+    assert choose_source_to_extract(peaks)['center'] == 5.0
+
+
+def test_a_lone_source_is_extracted_wherever_it_sits():
+    # Position only ever breaks a tie, so a single detection is the target even far off center.
+    peaks = [{'center': -30.0, 'snr': 12.0}]
+    assert choose_source_to_extract(peaks)['center'] == -30.0
+
+
+def test_the_tie_break_turns_on_at_the_signal_to_noise_ratio():
+    # Either side of snr_ratio the two peaks are the same pair, so only the threshold decides
+    # whether brightness or position wins.
+    peaks = [{'center': -25.0, 'snr': 100.0}, {'center': 2.0, 'snr': 61.0}]
+    assert choose_source_to_extract(peaks, snr_ratio=0.6)['center'] == 2.0
+    assert choose_source_to_extract(peaks, snr_ratio=0.62)['center'] == -25.0
+
+
+def test_the_chosen_source_carries_its_detection_information():
+    # The trace, width and shape fits all read these off whichever peak comes back.
+    peaks = [{'center': 2.0, 'snr': 100.0, 'detection_wavelength': 5600.0, 'max_flux': 250.0},
+             {'center': 25.0, 'snr': 40.0, 'detection_wavelength': 5600.0, 'max_flux': 90.0}]
+    assert choose_source_to_extract(peaks) is peaks[0]
+
+
+def test_choosing_does_not_reorder_the_caller_s_list():
+    peaks = [{'center': 25.0, 'snr': 50.0}, {'center': 2.0, 'snr': 100.0}]
+    choose_source_to_extract(peaks)
+    assert peaks[0]['center'] == 25.0
 
 
 def test_fit_width_recovers_a_known_width():

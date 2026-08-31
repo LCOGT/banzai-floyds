@@ -227,7 +227,7 @@ def detect_point_sources(binned_data: Table, order_height: int, wavelow: float =
     return peaks
 
 
-def choose_source_to_extract(point_sources):
+def choose_source_to_extract(point_sources: list[dict], snr_ratio: float = 0.6) -> dict | None:
     """Pick which object to extract. We choose the brightest object unless the top two objects are within
     a few tens of percent of each other, then we choose the closest to center of the slit.
 
@@ -235,21 +235,25 @@ def choose_source_to_extract(point_sources):
     ----------
     point_sources : list[dict]
         A list of detected point sources, each represented as a dictionary with keys 'center' and 'snr'.
+    snr_ratio : float
+        How close in signal-to-noise the runner up has to be for position to decide instead.
 
     Returns
     -------
     dict or None
         The chosen point source to extract, or None if no sources are available.
+
+    Notes
+    -----
+    Acquisition puts the requested coordinates at the center of the slit,
+    so we choose that one if the sources are close to the same brightness (Set by the `snr_ratio` parameter).
     """
-    point_sources.sort(key=lambda peak: -peak['snr'])
     if len(point_sources) == 0:
         return None
-    if len(point_sources) == 1:
-        return point_sources[0]
-    if point_sources[1]['snr'] / point_sources[0]['snr'] > 0.6:
-        # If the top two objects are within a few tens of percent, choose the one closest to the center
-        return min(point_sources[:2], key=lambda peak: abs(peak['center'] - 0.5))
-    return point_sources[0]
+    ranked = sorted(point_sources, key=lambda peak: -peak['snr'])
+    if len(ranked) > 1 and ranked[1]['snr'] / ranked[0]['snr'] > snr_ratio:
+        return min(ranked[:2], key=lambda peak: abs(peak['center']))
+    return ranked[0]
 
 
 def trace_object(point_source, binned_data, orders, fwhm, polynomial_order, chunk_size, dispersions, snr_threshold):
