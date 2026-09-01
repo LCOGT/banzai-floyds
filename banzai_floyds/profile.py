@@ -2,12 +2,11 @@ import numpy as np
 
 from typing import Iterator
 from scipy.ndimage import median_filter
-from scipy.optimize import least_squares
 
 from astropy.table import Table
 from banzai.stages import Stage
 from banzai.logs import get_logger
-from banzai.utils.stats import robust_standard_deviation, sigma_clipped_mean
+from banzai.utils.stats import sigma_clipped_mean
 from banzai_floyds.utils.fitting_utils import (fwhm_to_sigma, gauss, robust_least_squares,
                                                robust_legendre_fit, voigt, MAX_GAMMA_RATIO)
 from banzai_floyds.matched_filter import matched_filter_signal, matched_filter_normalization
@@ -482,6 +481,72 @@ def half_maximum_width(stacked_y: np.ndarray, stacked_flux: np.ndarray, center: 
     return float(right_crossing - left_crossing)
 
 
+def measure_chunk_fwhms(binned_data: Table, orders, trace_polynomials: list, point_source: dict,
+                        chunk_size: int = 25, initial_fwhm: float = 6.0, snr_threshold: float = 4.0,
+                        niter: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """Measure the full width at half maximum of the object chunk by chunk along both orders.
+
+    Parameters
+    ----------
+    binned_data : Table
+        The binned data containing the slit profiles.
+    orders : Orders object
+    trace_polynomials : list
+        The center of the object as a function of wavelength for each order, or None where the
+        object was never detected.
+    point_source : dict
+        The point source information, including the detection wavelength.
+    chunk_size : int
+        The width of each chunk to stack, in pixels along the dispersion direction.
+    initial_fwhm : float
+        The initial guess for the FWHM.
+    snr_threshold : float
+        The minimum signal-to-noise ratio required to measure a chunk.
+    niter : int
+        The number of iterations of the background and FWHM measurement.
+
+    Returns
+    -------
+    wavelengths, fwhms : np.ndarray
+        The center wavelength of every chunk that produced a width, and the width measured there.
+    """
+    measured_fwhms = []
+    wavelengths = []
+
+    for order_id, order_height, trace in zip(orders.order_ids, orders.order_heights, trace_polynomials):
+        if trace is None:
+            continue
+        order_data = binned_data[binned_data['order'] == order_id]
+        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
+            for chunk_low, chunk_high in chunks:
+                wavelength = 0.5 * (chunk_low + chunk_high)
+                center = float(trace(wavelength))
+                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
+                    order_data, int(order_height), chunk_low, chunk_high, initial_fwhm
+                )
+                fwhm = initial_fwhm
+                for i in range(niter):
+                    background_subtracted = remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm)
+                    if background_subtracted is None:
+                        # Don't keep iterating if you can never get a valid background subtraction
+                        fwhm = np.nan
+                        break
+                    snr = matched_filter_snr(stacked_y, background_subtracted, stacked_flux_error, center, fwhm)
+                    if snr < snr_threshold:
+                        # Don't bother iterating if the S/N is too low
+                        fwhm = np.nan
+                        break
+                    fwhm = half_maximum_width(stacked_y, background_subtracted, center)
+                    if not np.isfinite(fwhm):
+                        break
+                if not np.isfinite(fwhm) or fwhm > order_height:
+                    continue
+                measured_fwhms.append(fwhm)
+                wavelengths.append(wavelength)
+
+    return np.array(wavelengths), np.array(measured_fwhms)
+
+
 def fit_profile_fwhm(binned_data: Table, orders, trace_polynomials: list, point_source: dict,
                      seeing_exponent: float, seeing_reference_wavelength: float, chunk_size: int = 25,
                      initial_fwhm: float = 6.0, snr_threshold: float = 4.0, niter: int = 3,
@@ -529,44 +594,11 @@ def fit_profile_fwhm(binned_data: Table, orders, trace_polynomials: list, point_
     the source from a local background (e.g. host galaxy). We iterate the background region and
     FWHM measurement to converge on a solution as those parameters are covariant.
     """
-    measured_fwhms = []
-    wavelengths = []
-
-    for order_id, order_height, trace in zip(orders.order_ids, orders.order_heights, trace_polynomials):
-        if trace is None:
-            continue
-        order_data = binned_data[binned_data['order'] == order_id]
-        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
-            for chunk_low, chunk_high in chunks:
-                wavelength = 0.5 * (chunk_low + chunk_high)
-                center = float(trace(wavelength))
-                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
-                    order_data, int(order_height), chunk_low, chunk_high, initial_fwhm
-                )
-                fwhm = initial_fwhm
-                for i in range(niter):
-                    background_subtracted = remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm)
-                    if background_subtracted is None:
-                        # Don't keep iterating if you can never get a valid background subtraction
-                        fwhm = np.nan
-                        break
-                    snr = matched_filter_snr(stacked_y, background_subtracted, stacked_flux_error, center, fwhm)
-                    if snr < snr_threshold:
-                        # Don't bother iterating if the S/N is too low
-                        fwhm = np.nan
-                        break
-                    fwhm = half_maximum_width(stacked_y, background_subtracted, center)
-                    if not np.isfinite(fwhm):
-                        break
-                if not np.isfinite(fwhm) or fwhm > order_height:
-                    continue
-                measured_fwhms.append(fwhm)
-                wavelengths.append(wavelength)
-
-    if len(measured_fwhms) == 0:
+    wavelengths, fwhms = measure_chunk_fwhms(binned_data, orders, trace_polynomials, point_source,
+                                             chunk_size, initial_fwhm, snr_threshold, niter)
+    if len(fwhms) == 0:
         return np.nan
-    fwhms = np.array(measured_fwhms)
-    fwhms /= seeing_scaling(np.array(wavelengths), seeing_reference_wavelength, seeing_exponent)
+    fwhms = fwhms / seeing_scaling(wavelengths, seeing_reference_wavelength, seeing_exponent)
     return float(sigma_clipped_mean(fwhms, clip_sigma))
 
 
@@ -629,6 +661,74 @@ def fit_shape_params(stacked_y: np.ndarray, stacked_flux: np.ndarray, stacked_fl
     return float(best_fit.x[2])
 
 
+def measure_chunk_shape_params(binned_data: Table, orders, trace_polynomials: list, point_source: dict,
+                               profile_fwhm: float, seeing_exponent: float, seeing_reference_wavelength: float,
+                               chunk_size: int = 25, wing_fraction: float = 0.05,
+                               wing_snr: float = 5.0) -> tuple[np.ndarray, np.ndarray, int]:
+    """Fit the Voigt shape parameter chunk by chunk along both orders.
+
+    Parameters
+    ----------
+    binned_data : astropy.table.Table
+        The wavelength binned data in the orders.
+    orders : Orders object
+    trace_polynomials : list
+        The center of the object as a function of wavelength for each order, None where the object
+        was never traced.
+    point_source : dict
+        The point source information, including detection wavelength and center.
+    profile_fwhm : float
+        The full width at half maximum of the object at the reference wavelength.
+    seeing_exponent : float
+        The power law index of the wavelength dependence of the seeing.
+    seeing_reference_wavelength : float
+        The wavelength the fitted width is quoted at.
+    chunk_size : int
+        The width of each chunk to stack, in pixels along the dispersion direction.
+    wing_fraction : float
+        The fraction of the peak flux a chunk has to measure to be worth fitting.
+    wing_snr : float
+        The signal-to-noise ratio that fraction of the peak has to reach.
+
+    Returns
+    -------
+    wavelengths, shape_params : np.ndarray
+        The center wavelength of every chunk that produced a usable shape, and the gamma_ratio
+        measured there.
+    fitted_chunks : int
+        How many chunks were bright enough to attempt, whether or not the fit produced a shape.
+    """
+    measured_shape_params = []
+    wavelengths = []
+    fitted_chunks = 0
+    for order_id, order_height, trace in zip(orders.order_ids, orders.order_heights, trace_polynomials):
+        if trace is None:
+            continue
+        order_data = binned_data[binned_data['order'] == order_id]
+        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
+            for chunk_low, chunk_high in chunks:
+                wavelength = 0.5 * (chunk_low + chunk_high)
+                fwhm = profile_fwhm * seeing_scaling(wavelength, seeing_reference_wavelength, seeing_exponent)
+                center = float(trace(wavelength))
+                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
+                    order_data, int(order_height), chunk_low, chunk_high, fwhm
+                )
+                background_subtracted = remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm)
+                if background_subtracted is None:
+                    continue
+                peak = np.interp(center, stacked_y, background_subtracted)
+                noise = np.interp(center, stacked_y, stacked_flux_error)
+                if wing_fraction * peak < wing_snr * noise:
+                    continue
+                fitted_chunks += 1
+                shape_params = fit_shape_params(stacked_y, stacked_flux, stacked_flux_error, center, fwhm)
+                if np.isfinite(shape_params) and shape_params < 0.99 * MAX_GAMMA_RATIO:
+                    measured_shape_params.append(shape_params)
+                    wavelengths.append(wavelength)
+
+    return np.array(wavelengths), np.array(measured_shape_params), fitted_chunks
+
+
 def find_profile_shape(binned_data: Table, orders, trace_polynomials: list, point_source: dict,
                        point_sources: list[dict], profile_fwhm: float, seeing_exponent: float,
                        seeing_reference_wavelength: float, chunk_size: int = 25, wing_fraction: float = 0.05,
@@ -683,35 +783,13 @@ def find_profile_shape(binned_data: Table, orders, trace_polynomials: list, poin
     if has_nearby_source(point_source, point_sources, profile_fwhm):
         return np.nan
 
-    measured_shape_params = []
-    fitted_chunks = 0
-    for order_id, order_height, trace in zip(orders.order_ids, orders.order_heights, trace_polynomials):
-        if trace is None:
-            continue
-        order_data = binned_data[binned_data['order'] == order_id]
-        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
-            for chunk_low, chunk_high in chunks:
-                wavelength = 0.5 * (chunk_low + chunk_high)
-                fwhm = profile_fwhm * seeing_scaling(wavelength, seeing_reference_wavelength, seeing_exponent)
-                center = float(trace(wavelength))
-                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
-                    order_data, int(order_height), chunk_low, chunk_high, fwhm
-                )
-                background_subtracted = remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm)
-                if background_subtracted is None:
-                    continue
-                peak = np.interp(center, stacked_y, background_subtracted)
-                noise = np.interp(center, stacked_y, stacked_flux_error)
-                if wing_fraction * peak < wing_snr * noise:
-                    continue
-                fitted_chunks += 1
-                shape_params = fit_shape_params(stacked_y, stacked_flux, stacked_flux_error, center, fwhm)
-                if np.isfinite(shape_params) and shape_params < 0.99 * MAX_GAMMA_RATIO:
-                    measured_shape_params.append(shape_params)
-
-    if len(measured_shape_params) < max(min_chunks, min_usable_fraction * fitted_chunks):
+    _, shape_params, fitted_chunks = measure_chunk_shape_params(
+        binned_data, orders, trace_polynomials, point_source, profile_fwhm, seeing_exponent,
+        seeing_reference_wavelength, chunk_size, wing_fraction, wing_snr
+    )
+    if len(shape_params) < max(min_chunks, min_usable_fraction * fitted_chunks):
         return np.nan
-    return float(sigma_clipped_mean(np.array(measured_shape_params), clip_sigma))
+    return float(sigma_clipped_mean(shape_params, clip_sigma))
 
 
 class ProfileFitter(Stage):
@@ -736,6 +814,13 @@ class ProfileFitter(Stage):
         point_sources = detect_point_sources(image.binned_data, order_height, initial_fwhm=self.INITIAL_FWHM,
                                              min_snr=self.DETECTION_SNR)
         point_source = choose_source_to_extract(point_sources)
+        image.meta['L1PNPEAK'] = (
+            len(point_sources), 'Number of sources detected in the slit in order'
+        )
+        if point_source is None:
+            logger.warning('No object was detected in the slit, so no profile was fit.', image=image)
+            image.meta['L1OBJDET'] = (False, 'Was an object detected in the slit?')
+            return image
         profile_center, fitted_points = trace_object(
             point_source, image.binned_data,
             image.orders, self.INITIAL_FWHM,
@@ -743,11 +828,19 @@ class ProfileFitter(Stage):
             self.CHUNK_SNR, max_center_error=self.MAX_CENTER_ERROR,
             clip_sigma=self.N_SIGMA_CLIP, max_chunk_shift=self.MAX_CHUNK_SHIFT
         )
+        if any(trace is None for trace in profile_center):
+            logger.warning('The object was not traced in every order, so no profile was fit.', image=image)
+            image.meta['L1OBJDET'] = (False, 'Was an object detected in the slit?')
+            return image
         profile_fwhm = fit_profile_fwhm(
             image.binned_data, image.orders, profile_center, point_source,
             SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH, self.STEP_SIZE,
             self.INITIAL_FWHM, snr_threshold=self.CHUNK_SNR
         )
+        if not np.isfinite(profile_fwhm):
+            logger.warning('No chunk was bright enough to measure a width on; adopting the seeing guess.',
+                           image=image)
+            profile_fwhm = self.INITIAL_FWHM
         profile_shape = find_profile_shape(
             image.binned_data, image.orders, profile_center, point_source, point_sources, profile_fwhm,
             SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH, self.STEP_SIZE
@@ -773,8 +866,6 @@ class ProfileFitter(Stage):
         image.meta['L1PROFSN'] = (
             point_source['snr'], 'Matched filter s/n of the object detected'
         )
-        image.meta['L1PNPEAK'] = (
-            len(point_sources), 'Number of sources detected in the slit in order'
-        )
+        image.meta['L1OBJDET'] = (True, 'Was an object detected in the slit?')
         image.profile = profile_center, profile_fwhm, profile_shape, fitted_points
         return image

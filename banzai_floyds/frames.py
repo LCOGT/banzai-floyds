@@ -309,7 +309,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                 # Fallback to CRVAL1 and CRVAL2
                 try:
                     coord = Angle(self.meta.get('CRVAL1'), unit='degree').deg
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     coord = np.nan
         return coord
 
@@ -339,7 +339,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                 # Fallback to CRVAL1 and CRVAL2
                 try:
                     coord = Angle(self.meta.get('CRVAL2'), unit='degree').deg
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     coord = np.nan
         return coord
 
@@ -428,7 +428,3 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     @property
     def calibration_frame_class(self):
         return FLOYDSCalibrationFrame
-
-    @staticmethod
-    def is_empty_coordinate(coordinate):
-        return 'nan' in str(coordinate).lower() or 'n/a' in str(coordinate).lower()

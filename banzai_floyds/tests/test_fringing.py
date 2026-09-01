@@ -7,7 +7,6 @@ from banzai_floyds.fringe import FringeMaker, FringeCorrector, FringeLoader
 from banzai_floyds.fringe import fringe_interpolation_coefficients, fringe_fit_region, find_fringe_offset
 from banzai_floyds.fringe import inpaint_fringe, interpolable_region, FringeExtractor, FRINGE_EDGE_PAD
 from banzai_floyds.frames import MIN_FRINGE_VALUE, MAX_FRINGE_VALUE, NoUsableFringePattern
-from banzai_floyds.frames import FRINGE_NO_PATTERN
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
 from banzai_floyds.fringe import prepare_fringe_data, make_fringe_continuum_model

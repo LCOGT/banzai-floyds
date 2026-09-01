@@ -27,11 +27,6 @@ class WavelengthSolution:
         return self._tilt_polynomials
 
     @property
-    def lsf_sigma(self):
-        """Gauss-Hermite sigma (pixels) per order, indexed by order_id - 1."""
-        return [params['sigma'] for params in self.lsf_params]
-
-    @property
     def fwhm(self):
         """Line FWHM (pixels) per order, indexed by order_id - 1."""
         return [sigma_to_fwhm(params['sigma']) for params in self.lsf_params]
@@ -62,19 +57,6 @@ class WavelengthSolution:
                                         y2d[in_order] - order_center)
             wavelengths[in_order] = self._wavelength_polynomials[order_id - 1](tilted_x)
         return wavelengths
-
-    @property
-    def dispersions(self):
-        """Dispersion in Angstroms per pixel for each order.
-
-        Taken from the linear term of the wavelength solution. The Legendre domain is mapped onto
-        -1 to 1, so that coefficient is the wavelength change over half the order, and it takes a
-        factor of two over the domain length to become a dispersion. Odd terms above the linear one
-        shift the dispersion averaged over the order as well, but they are small enough in a real
-        solution to ignore.
-        """
-        return [2.0 * polynomial.coef[1] / (polynomial.domain[1] - polynomial.domain[0])
-                for polynomial in self._wavelength_polynomials]
 
     def to_header(self):
         header = fits.Header()

@@ -1,5 +1,6 @@
 from banzai_floyds.background import fit_background, background_degree, BackgroundFitter
 from banzai_floyds.utils.fitting_utils import robust_legendre_fit, fwhm_to_sigma, sigma_to_fwhm
+from banzai_floyds.utils.fitting_utils import ClampedLegendre
 from banzai_floyds.cosmics import CosmicRayDetector
 from banzai_floyds.extract import set_extraction_region
 from banzai_floyds.tests.utils import generate_fake_science_frame

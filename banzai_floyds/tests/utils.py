@@ -1,5 +1,3 @@
-import matplotlib.pyplot as plt
-from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
@@ -121,21 +119,6 @@ def fit_smooth_fringe_spline(data, data_region):
     x, y = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
     return CloughTocher2DInterpolator(np.array([x[data_region], y[data_region]]).T,
                                       data[data_region], fill_value=0.0)
-
-
-def plot_array(data, overlays=None):
-    if len(data) == 2:
-        plt.plot(data[0], data[1])
-    elif len(data.shape) > 1:
-        z_interval = ZScaleInterval().get_limits(data)
-        plt.imshow(data, cmap='gray', vmin=z_interval[0], vmax=z_interval[1])
-        # plt.imshow(data, cmap='gray', vmin=0, vmax=1)
-    else:
-        plt.plot(data)
-    if overlays:
-        for overlay in overlays:
-            plt.plot(overlay[0], overlay[1], color="green")
-    plt.show()
 
 
 def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=False, fringe_offset=0,
