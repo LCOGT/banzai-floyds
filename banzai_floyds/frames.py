@@ -10,8 +10,11 @@ from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to
 from banzai_floyds.utils.profile_utils import SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
 from astropy.table import Table
 from banzai_floyds import dbs
+from typing import Optional
+from banzai.frames import ObservationFrame
 
-# Set the bounds for what we consider a valid fringe
+# Most of the fringes are at the 50% level
+# so we set bounds that are a little bigger to keep the model from going crazy
 MIN_FRINGE_VALUE = 0.1
 MAX_FRINGE_VALUE = 2.5
 
@@ -428,3 +431,19 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     @property
     def calibration_frame_class(self):
         return FLOYDSCalibrationFrame
+
+    @staticmethod
+    def is_empty_coordinate(coordinate):
+        return 'nan' in str(coordinate).lower() or 'n/a' in str(coordinate).lower()
+
+    def open(self, file_info, runtime_context) -> Optional[ObservationFrame]:
+        frame = super(FLOYDSFrameFactory, self).open(file_info, runtime_context)
+        if frame is None:
+            return None
+        # Munge the SATURATE keyword in en12 because it's been wrong for years
+        if frame.instrument.camera == 'en12':
+            for hdu in frame.ccd_hdus:
+                if hdu.saturate is not None and int(hdu.saturate) == 38400:
+                    hdu.saturate = 59000
+                    hdu.max_linearity = 56000
+        return frame

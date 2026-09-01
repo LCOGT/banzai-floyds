@@ -71,7 +71,7 @@ def interpolable_region(valid: np.ndarray) -> np.ndarray:
 
 def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = None,
                    max_distance: float = INPAINT_MAX_DISTANCE, fill_value: float = 1.0,
-                   extrapolate: bool = False) -> tuple:
+                   bracketed_only: bool = True) -> tuple:
     """
     Fill masked pixels of a fringe pattern with a smooth interpolation of the surrounding pattern.
 
@@ -82,8 +82,9 @@ def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = Non
     region: optional 2d bool array limiting where we are willing to fill.
     max_distance: float, only fill pixels this close to valid data, in pixels
     fill_value: float, value given to pixels we do not fill.
-    extrapolate: bool, whether to fill holes that valid data does not bracket.
-    Pixels that aren't bracketed by valid data will be filled by fill_value.
+    bracketed_only: bool, only fill holes that have real data on both sides, along x or along y.
+    Pixels that aren't bracketed by valid data are left at fill_value. Set this to False to
+    extrapolate the pattern smoothly past the edge of its footprint.
 
     Returns
     -------
@@ -93,7 +94,7 @@ def inpaint_fringe(data: np.ndarray, valid: np.ndarray, region: np.ndarray = Non
     filled = np.where(valid, data, fill_value)
     distance = distance_transform_edt(np.logical_not(valid))
     to_fill = np.logical_and(np.logical_not(valid), distance <= max_distance)
-    if not extrapolate:
+    if bracketed_only:
         to_fill = np.logical_and(to_fill, interpolable_region(valid))
     if region is not None:
         to_fill = np.logical_and(to_fill, region)
@@ -124,7 +125,7 @@ def fringe_interpolation_coefficients(data: np.ndarray, valid: np.ndarray,
     # The cubic spline stencil reaches edge_pad pixels, so at the boundary of the pattern it pulls
     # in the flat fill value and biases the outermost rows of the slit. Extending the pattern
     # smoothly past its boundary keeps those rows samplable instead of having to erode them away.
-    fringe, _ = inpaint_fringe(fringe, samplable, max_distance=edge_pad, extrapolate=True)
+    fringe, _ = inpaint_fringe(fringe, samplable, max_distance=edge_pad, bracketed_only=False)
     return spline_filter(fringe, order=3), samplable
 
 
@@ -319,7 +320,7 @@ def prepare_fringe_data(image, blue_cutoff, level=5):
     y_max = int(np.floor(np.min(y2d[red_order2d][-1])))
     to_interpolate = np.logical_and(red_order, image.mask == 0)
     filled, _ = inpaint_fringe(image.data, to_interpolate, fill_value=np.median(image.data[to_interpolate]),
-                               extrapolate=True)
+                               bracketed_only=False)
     coefficients = spline_filter(filled, order=3)
     fringe_x2d, fringe_y2d = np.meshgrid(x_range, np.arange(y_min, y_max + 1))
 
@@ -470,7 +471,7 @@ class FringeExtractor(Stage):
     # but the results look the best with this level of decomposition
     WAVELET_LEVEL = 5
     # Keep the cross-slit details from this level up (16 rows and coarser)
-    # in the continuum to caputure the illumination.
+    # in the continuum to capture the illumination.
     MIN_Y_DETAIL_LEVEL = 4
 
     def do_stage(self, image):

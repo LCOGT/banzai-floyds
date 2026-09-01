@@ -5,6 +5,13 @@ Versions
 ------------------
 
 - Significant hardening to the profile fitting stage.
+- Significant hardening to fringe fitting code
+- Processed lamp flats now carry their own fringe pattern in a FRINGE extension, the way a stacked
+  master does, so a single flat from a science frame's own block can calibrate it directly. Their
+  SCI extension holds the fitted lamp continuum (SCI x FRINGE returns the flat) and the CONTINUUM
+  extension is gone. FringeContinuumFitter is replaced by the FringeExtractor stage.
+- Widened the fringe shift search window to +-8 pixels in x (matching y).
+- Removed matched-filter 2D fit step from locating the order positions due to instabilities
 - Significant updates to the wavelength solution, removing the 2-d match filter approach to
   increase the robustness of the fit.
 - Fix a filenaming bug for the stacked fringe frames

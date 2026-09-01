@@ -73,7 +73,7 @@ def correct_frame(path: str) -> tuple:
         corrector_index = _context.ORDERED_STAGES.index('banzai_floyds.fringe.FringeCorrector')
         stage_names = list(_context.ORDERED_STAGES[:corrector_index + 1])
         if is_lampflat:
-            # Add in the comparer stage which we don't ususally run on lamp flats.
+            # Add in the comparer stage which we don't usually run on lamp flats.
             extra = [name for name in _context.EXTRA_STAGES['LAMPFLAT']
                      if name != 'banzai_floyds.fringe.FringeExtractor']
             stage_names[corrector_index:corrector_index] = extra
