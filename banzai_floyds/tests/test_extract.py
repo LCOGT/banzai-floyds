@@ -5,7 +5,7 @@ from banzai_floyds.extract import Extractor, extract, set_extraction_region, Com
 from banzai_floyds.utils.binning_utils import bin_data
 from collections import namedtuple
 from astropy.table import Table
-from numpy.polynomial.legendre import Legendre
+from banzai_floyds.utils.fitting_utils import sigma_to_fwhm
 
 
 def test_extraction_region():
@@ -39,8 +39,7 @@ def test_extraction():
     fake_frame = generate_fake_science_frame(include_sky=False)
     fake_frame.binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                                       fake_frame.orders)
-    fake_profile_width_funcs = [Legendre(fake_frame.input_profile_sigma,) for _ in fake_frame.input_profile_centers]
-    fake_frame.profile = fake_frame.input_profile_centers, fake_profile_width_funcs, None
+    fake_frame.profile = fake_frame.input_profile_centers, sigma_to_fwhm(fake_frame.input_profile_sigma), 0.0, None
 
     fake_frame.binned_data['background'] = 0.0
     input_brightness = 10000.0
@@ -58,8 +57,7 @@ def test_full_extraction_stage():
     input_context = context.Context({})
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True)
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
-    fake_profile_width_funcs = [Legendre(frame.input_profile_sigma,) for _ in frame.input_profile_centers]
-    frame.profile = frame.input_profile_centers, fake_profile_width_funcs, None
+    frame.profile = frame.input_profile_centers, sigma_to_fwhm(frame.input_profile_sigma), 0.0, None
     frame.binned_data['background'] = frame.input_sky[frame.binned_data['y'].astype(int),
                                                       frame.binned_data['x'].astype(int)]
     stage = Extractor(input_context)
@@ -75,8 +73,7 @@ def test_combined_extraction():
     input_context = context.Context({})
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True)
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
-    fake_profile_width_funcs = [Legendre(frame.input_profile_sigma,) for _ in frame.input_profile_centers]
-    frame.profile = frame.input_profile_centers, fake_profile_width_funcs, None
+    frame.profile = frame.input_profile_centers, sigma_to_fwhm(frame.input_profile_sigma), 0.0, None
     frame.binned_data['background'] = frame.input_sky[frame.binned_data['y'].astype(int),
                                                       frame.binned_data['x'].astype(int)]
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]

@@ -41,46 +41,6 @@ def gauss_hermite(x, center, sigma, amplitude, h3=0.0, h4=0.0):
     return amplitude * np.exp(-0.5 * w ** 2) * (1.0 + h3 * _normalized_hermite(3, w) + h4 * _normalized_hermite(4, w))
 
 
-# Below MIN_BETA a Moffat puts more flux outside a 2.5 sigma extraction window than in it. At
-# MAX_BETA it is a Gaussian to better than 1%, so there is nothing left to measure past it, and a
-# profile fit before the pipeline had a wing term is written as a Moffat at MAX_BETA.
-MIN_BETA = 1.5
-MAX_BETA = 20.0
-
-
-def moffat_alpha(sigma, beta):
-    """
-    The Moffat core width with the same full width at half maximum as a Gaussian of this sigma.
-
-    FWHM = 2 alpha sqrt(2^(1/beta) - 1), so alpha = FWHM / (2 sqrt(2^(1/beta) - 1)).
-
-    Parametrizing by the width rather than by alpha is what makes the fit behave. alpha and beta run
-    along a valley in chi^2 -- the profile tends to a Gaussian as beta grows with alpha ~ sqrt(beta),
-    so the two are almost perfectly correlated and neither is individually measurable when the wings
-    are weak. The full width at half maximum is the combination that stays fixed along that valley,
-    which is why seeing is quoted as a FWHM, and holding it as the parameter takes the valley out of
-    the search.
-    """
-    return sigma_to_fwhm(sigma) / (2.0 * np.sqrt(2.0 ** (1.0 / beta) - 1.0))
-
-
-def moffat(x, center, sigma, amplitude, beta):
-    """
-    Moffat profile (Moffat 1969), written in terms of the width rather than the core radius.
-
-    I(x) = amplitude (1 + ((x - center) / alpha)^2)^-beta,   alpha = alpha(sigma, beta)
-
-    sigma is the Gaussian sigma with the same full width at half maximum, so it means the same thing
-    here as it does for `gauss` and the extraction and background windows keep their meaning whatever
-    beta comes out. beta sets how heavy the wings are: small beta is a long tail, and the profile
-    tends to a Gaussian as beta goes to infinity.
-
-    Unlike a Gauss-Hermite this is positive everywhere by construction, whatever the parameters, so
-    the extraction weights it feeds (Horne 1986) can never go negative.
-    """
-    return amplitude * (1.0 + ((np.asarray(x, dtype=float) - center) / moffat_alpha(sigma, beta)) ** 2) ** -beta
-
-
 # At MAX_GAMMA_RATIO a Voigt leaves a sixth of its flux outside a 2.5 sigma extraction window,
 # against a percent for a Gaussian, and past that the wings are flat enough over the slit that they
 # are no longer separable from the local background. At zero the profile is exactly a Gaussian.
@@ -113,13 +73,13 @@ def voigt(x, center, sigma, amplitude, gamma_ratio):
     here as it does for `gauss` and the extraction and background windows keep their meaning whatever
     the shape comes out to be. gamma_ratio = gamma / sigma_g sets how heavy the wings are: zero is a
     pure Gaussian and the tail grows towards a Lorentzian as it rises. Parametrizing this way rather
-    than by (sigma_g, gamma) takes out the valley in chi^2 those two run along, in the same way and
-    for the same reason as `moffat_alpha`.
+    than by (sigma_g, gamma) takes out the valley in chi^2 those two run along, where the profile
+    tends to a Gaussian as gamma falls with sigma_g rising to hold the width.
 
     Seeing broadening is close to Gaussian while the atmospheric halo scattered by turbulence on
     scales larger than the aperture falls off as a power law (King 1971), which is what the
-    Lorentzian is standing in for. Like a Moffat, and unlike a Gauss-Hermite, this is positive
-    everywhere by construction, so the extraction weights it feeds (Horne 1986) can never go
+    Lorentzian is standing in for. Unlike a Gauss-Hermite, this is positive everywhere by
+    construction, so the extraction weights it feeds (Horne 1986) can never go
     negative.
     """
     gaussian_sigma = voigt_gaussian_sigma(sigma, gamma_ratio)

@@ -111,9 +111,9 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
 
 class Extractor(Stage):
     # Half width of the extraction window in profile sigma. The window is not symmetric in what it
-    # costs: on a beta = 3.7 Moffat, 2.5 sigma holds 95.2% of the flux and 3.0 sigma holds 97.6%, but
-    # the point of the extra half sigma is that it also cuts what a mismeasured width costs. A sigma
-    # 25% too small throws away 6.9% of the flux at 2.5 sigma and 4.4% at 3.0, for 9.5% more sky
+    # costs: on a gamma_ratio = 0.2 Voigt, 2.5 sigma holds 93.8% of the flux and 3.0 sigma holds
+    # 95.5%, but the point of the extra half sigma is that it also cuts what a mismeasured width
+    # costs. A sigma 25% too small throws away 5.4% of the flux at 2.5 sigma and 3.2% at 3.0, for 9.5% more sky
     # noise, and only where the sky dominates. That is the right trade for an unweighted extraction,
     # where every pixel in the window counts the same; Horne 1986 weighting gives the extra wing
     # almost no weight either way.

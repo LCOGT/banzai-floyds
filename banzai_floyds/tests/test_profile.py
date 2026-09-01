@@ -8,8 +8,7 @@ from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import Legendre
-from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, fwhm_to_sigma, gauss, moffat
-from banzai_floyds.utils.fitting_utils import MIN_BETA, MAX_BETA
+from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, fwhm_to_sigma, gauss
 from banzai_floyds.utils.fitting_utils import voigt, MAX_GAMMA_RATIO
 
 
@@ -371,40 +370,19 @@ def test_the_profile_round_trips_through_the_header():
     stage = ProfileFitter(None)
     stage.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
     fake_frame = stage.do_stage(fake_frame)
-    centers, sigmas, betas = fake_frame.profile_fits
-    loaded_centers, loaded_sigmas, loaded_betas, _ = load_profile_fits(fake_frame['PROFILEFITS'])
+    centers, fwhm, gamma_ratio = fake_frame.profile_fits
+    loaded_centers, loaded_fwhm, loaded_gamma_ratio, _ = load_profile_fits(fake_frame['PROFILEFITS'])
 
-    for fitted, loaded in zip(centers + sigmas + betas, loaded_centers + loaded_sigmas + loaded_betas):
+    assert loaded_fwhm == fwhm
+    assert loaded_gamma_ratio == gamma_ratio
+    for fitted, loaded in zip(centers, loaded_centers):
         wavelengths = np.linspace(fitted.domain[0], fitted.domain[1], 1000)
         np.testing.assert_allclose(loaded(wavelengths), fitted(wavelengths))
-    for fitted in centers + sigmas:
+    for fitted in centers:
         # The trace runs out before the end of the order, so this is not comparing two bare
         # polynomials that happen to agree
         assert fitted.measured_range[0] > fitted.domain[0]
         assert fitted.measured_range[1] < fitted.domain[1]
-
-
-def test_the_wing_term_is_a_constant_the_frame_still_carries():
-    np.random.seed(80125)
-    # beta is no longer fit: on 286 real orders a fitted Moffat and a plain Gaussian gave trace
-    # centers agreeing to three decimal places. The profile is still written as a Moffat, because
-    # that is what the extraction weights and the sky model read, so what has to hold is that the
-    # stored wing term is a constant and a Gaussian one.
-    fake_frame = generate_fake_science_frame(include_sky=True)
-    fake_frame.binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
-                                      fake_frame.orders)
-    stage = ProfileFitter(None)
-    stage.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
-    fake_frame = stage.do_stage(fake_frame)
-    _, _, betas = fake_frame.profile_fits
-    for beta in betas:
-        grid = np.linspace(beta.domain[0], beta.domain[1], 101)
-        np.testing.assert_allclose(beta(grid), PROFILE_BETA)
-    # A Moffat at this beta is a Gaussian to better than a percent inside the extraction window
-    y = np.linspace(-3.0 * 2.8, 3.0 * 2.8, 401)
-    profile = moffat(y, 0.0, 2.8, 1.0, PROFILE_BETA)
-    np.testing.assert_allclose(profile / profile.max(),
-                               gauss(y, 0.0, 2.8) / gauss(np.array([0.0]), 0.0, 2.8)[0], atol=0.01)
 
 
 def test_profile_polynomials_are_evaluated_in_wavelength():
@@ -423,14 +401,14 @@ HALF_HEIGHT = 46
 
 def make_slit_stack(components, background=None, read_noise=5.0, spikes=()):
     """
-    A stacked slit profile built from known (amplitude, center, sigma, beta) components.
+    A stacked slit profile built from known (amplitude, center, sigma, gamma_ratio) components.
 
     The errors are Poisson plus read noise, as the real stacks are.
     """
     interp_y = np.arange(-HALF_HEIGHT + 5, HALF_HEIGHT - 4, dtype=float)
     model = np.zeros(len(interp_y))
-    for amplitude, center, sigma, beta in components:
-        model += moffat(interp_y, center, sigma, amplitude, beta)
+    for amplitude, center, sigma, gamma_ratio in components:
+        model += voigt(interp_y, center, sigma, amplitude, gamma_ratio)
     if background is not None:
         model += background(interp_y)
     for position, amplitude in spikes:
@@ -468,7 +446,7 @@ def test_the_running_median_removes_the_slit_illumination_without_the_object():
     # polynomial: an error it makes at one end of the slit stays there instead of being spread under
     # the object by a global fit. What it must not do is eat the object.
     curved = Legendre([4000.0, 1800.0, -2800.0, 1200.0], domain=[-41.0, 41.0])
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, MAX_BETA)], background=curved)
+    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, 0.0)], background=curved)
     filtered = remove_background(flux, flux_error, 2.5)
     # The illumination is gone away from the object
     away = np.abs(interp_y) > 12.0
@@ -484,7 +462,7 @@ def test_the_annulus_line_removes_a_local_slope():
     # object is the part that matters. Two medians and a line take it off with nothing that could be
     # pulled up under the source.
     ramp = Legendre([3000.0, 1500.0], domain=[-41.0, 41.0])
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, MAX_BETA)], background=ramp)
+    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, 2.8, 0.0)], background=ramp)
     filtered = remove_background(flux, flux_error, 2.5)
     line = annulus_background(interp_y, filtered, flux_error, 0.0, 2.8)
     corrected = filtered - line
@@ -502,7 +480,7 @@ def test_peaks_are_found_and_centred_across_a_pixel():
     offsets = np.linspace(-0.5, 0.5, 11)
     errors = []
     for offset in offsets:
-        interp_y, flux, flux_error = make_slit_stack([(20000.0, offset, 2.5, MAX_BETA)])
+        interp_y, flux, flux_error = make_slit_stack([(20000.0, offset, 2.5, 0.0)])
         peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
         assert len(peaks) >= 1
         errors.append(peaks[0]['center'] - offset)
@@ -516,8 +494,8 @@ def test_peaks_at_the_edge_of_the_grid_are_rejected():
     np.random.seed(11881)
     # A template truncated by the end of the grid is not comparable to one that fits inside it, and
     # the mismatch shows up as a peak at each edge.
-    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.5, MAX_BETA),
-                                                  (20000.0, float(HALF_HEIGHT - 6), 2.5, MAX_BETA)])
+    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.5, 0.0),
+                                                  (20000.0, float(HALF_HEIGHT - 6), 2.5, 0.0)])
     peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
     assert len(peaks) >= 1
     for peak in peaks:
@@ -534,9 +512,9 @@ def test_the_centroid_error_tracks_the_signal_to_noise():
     for amplitude in [5000.0, 20000.0, 80000.0]:
         errors = []
         for _ in range(15):
-            interp_y, flux, flux_error = make_slit_stack([(amplitude, 1.3, 2.5, MAX_BETA)])
+            interp_y, flux, flux_error = make_slit_stack([(amplitude, 1.3, 2.5, 0.0)])
             peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error,
-                                       2.5, 5.0)
+                               2.5, 5.0)
             errors.append(2.5 / peaks[0]['snr'])
         reported.append(np.median(errors))
     reported = np.array(reported)
@@ -604,7 +582,7 @@ def test_fit_width_recovers_a_known_width():
     # The common case, on a flat background and on a curved one. The width is what sets the
     # extraction window, so a bias here is a bias in every extracted spectrum.
     for background in [None, Legendre([4000.0, 1800.0, -2800.0, 1200.0], domain=[-41.0, 41.0])]:
-        interp_y, flux, flux_error = make_slit_stack([(30000.0, 1.0, 2.8, MAX_BETA)], background=background)
+        interp_y, flux, flux_error = make_slit_stack([(30000.0, 1.0, 2.8, 0.0)], background=background)
         width = fit_width(interp_y, flux, flux_error, 1.0, 2.5)
         assert width is not None
         np.testing.assert_allclose(width, 2.8, rtol=0.1)
@@ -615,7 +593,7 @@ def test_fit_width_reaches_a_source_broader_than_the_guess():
     # Why the fit iterates at all. The window is a multiple of the width we currently believe, so a
     # source much broader than the seeing guess starts with a window inside its own core. On injected
     # sources a true sigma of 4.0 px came back 9% low with no iteration and 1% low with two.
-    interp_y, flux, flux_error = make_slit_stack([(120000.0, 0.0, 6.0, MAX_BETA)])
+    interp_y, flux, flux_error = make_slit_stack([(120000.0, 0.0, 6.0, 0.0)])
     width = fit_width(interp_y, flux, flux_error, 0.0, 2.5)
     assert width is not None
     np.testing.assert_allclose(width, 6.0, rtol=0.15)
@@ -628,8 +606,8 @@ def test_an_extended_host_does_not_widen_the_point_source_much():
     # noise. The width that comes out has to be closer to the point source's than to a compromise
     # between the two, which is what a single Gaussian over the whole slit gives.
     truth = 2.8
-    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, truth, MAX_BETA),
-                                                  (25000.0, 2.0, 11.0, MAX_BETA)])
+    interp_y, flux, flux_error = make_slit_stack([(30000.0, 0.0, truth, 0.0),
+                                                  (25000.0, 2.0, 11.0, 0.0)])
     width = fit_width(interp_y, flux, flux_error, 0.0, 2.5)
     assert width is not None
     np.testing.assert_allclose(width, truth, rtol=0.3)
@@ -639,7 +617,7 @@ def test_a_cosmic_ray_does_not_set_the_width():
     np.random.seed(881)
     # An unresolved spike is brighter than anything else in the slit. It must not collapse the width
     # of the chunk it lands in -- the window is floored, so a fit cannot chase a single pixel.
-    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.8, MAX_BETA)], spikes=[(3.0, 3e5)])
+    interp_y, flux, flux_error = make_slit_stack([(20000.0, 0.0, 2.8, 0.0)], spikes=[(3.0, 3e5)])
     width = fit_width(interp_y, flux, flux_error, 0.0, 2.5)
     assert width is None or width > 1.0
 
@@ -744,8 +722,8 @@ def test_locate_object_ignores_peaks_outside_its_search_window():
     # What keeps an individual trace measurement from jumping to a second object or a cosmic ray
     # elsewhere in the slit: each chunk only looks near where the running prediction says the object
     # is.
-    interp_y, flux, flux_error = make_slit_stack([(9000.0, -9.0, 2.5, MAX_BETA),
-                                                  (90000.0, 14.0, 2.5, MAX_BETA)])
+    interp_y, flux, flux_error = make_slit_stack([(9000.0, -9.0, 2.5, 0.0),
+                                                  (90000.0, 14.0, 2.5, 0.0)])
     peaks = find_peaks(interp_y, remove_background(flux, flux_error, 2.5), flux_error, 2.5, 5.0)
     assert len(peaks) >= 2
     near = [peak for peak in peaks if abs(peak['center'] + 9.0) <= 6.0]
@@ -755,39 +733,39 @@ def test_locate_object_ignores_peaks_outside_its_search_window():
 
 
 def test_the_profile_is_positive_whatever_the_wings_do():
-    # The reason for preferring a Moffat to a Gauss-Hermite. Over 14827 real chunks an h4 term drove
+    # The reason for preferring a Voigt to a Gauss-Hermite. Over 14827 real chunks an h4 term drove
     # the profile negative inside the extraction window on 14% of them, and the optimal extraction
-    # divides by a sum of weights squared. No combination of parameters can do that here.
+    # divides by a sum of weights squared. No combination of parameters can do that here. A narrow
+    # Gaussian underflows to zero at the far end of the slit, which the normalization already allows
+    # for, so what is checked is the sign.
     y = np.linspace(-46.0, 46.0, 2001)
-    for beta in [MIN_BETA, 2.0, 4.0, MAX_BETA]:
+    for gamma_ratio in [0.0, 0.2, 0.5, MAX_GAMMA_RATIO]:
         for sigma in [0.5, 2.8, 20.0]:
-            assert np.all(moffat(y, 0.0, sigma, 1.0, beta) > 0.0)
+            assert np.all(voigt(y, 0.0, sigma, 1.0, gamma_ratio) >= 0.0)
 
 
 def test_the_width_means_the_same_thing_whatever_the_wings_do():
     # sigma is the Gaussian sigma with the same full width at half maximum, which is what lets the
-    # extraction and background windows keep their meaning as beta changes. If this drifts, every
-    # window in the pipeline quietly means something different.
+    # extraction and background windows keep their meaning as the shape changes. If this drifts,
+    # every window in the pipeline quietly means something different.
     y = np.linspace(-46.0, 46.0, 200001)
-    for beta in [MIN_BETA, 2.0, 4.0, 10.0, MAX_BETA]:
-        profile = moffat(y, 0.0, 2.8, 1.0, beta)
+    for gamma_ratio in [0.0, 0.2, 0.5, 0.8, MAX_GAMMA_RATIO]:
+        profile = voigt(y, 0.0, 2.8, 1.0, gamma_ratio)
         above_half = y[profile >= 0.5 * profile.max()]
         np.testing.assert_allclose(np.ptp(above_half), sigma_to_fwhm(2.8), rtol=1e-3)
 
 
 def test_the_extraction_weights_are_positive_and_normalized():
     np.random.seed(80125)
-    # A Moffat cannot go negative, so what has to be checked here is the normalization: the integral
-    # of the model depends on beta, so without normalizing per column a beta that varies with
-    # wavelength would put a wavelength dependent scale straight into the extracted flux.
+    # A Voigt cannot go negative, so what has to be checked here is the normalization: the integral
+    # of the model depends on the width, which the seeing law varies with wavelength, so without
+    # normalizing per column that would put a wavelength dependent scale straight into the flux.
     fake_frame = generate_fake_science_frame(include_sky=True)
     domains = [center.domain for center in fake_frame.input_profile_centers]
-    centers = [ClampedLegendre(Legendre([0.0], domain=domain)) for domain in domains]
-    sigmas = [ClampedLegendre(Legendre([3.0], domain=domain)) for domain in domains]
-    for beta_value in [MIN_BETA, 4.0, MAX_BETA]:
-        betas = [ClampedLegendre(Legendre([beta_value], domain=domain)) for domain in domains]
-        profile = profile_fits_to_data(fake_frame.data.shape, centers, sigmas, betas, fake_frame.orders,
-                                       fake_frame.wavelengths.data)
+    centers = [Legendre([0.0], domain=domain) for domain in domains]
+    for gamma_ratio in [0.0, 0.5, MAX_GAMMA_RATIO]:
+        profile = profile_fits_to_data(fake_frame.data.shape, centers, sigma_to_fwhm(3.0), gamma_ratio,
+                                       fake_frame.orders, fake_frame.wavelengths.data)
         assert np.all(profile >= 0.0)
         for order_id in fake_frame.orders.order_ids:
             in_order = fake_frame.orders.data == order_id

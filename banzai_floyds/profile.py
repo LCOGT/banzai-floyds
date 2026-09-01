@@ -1,5 +1,6 @@
 import numpy as np
 
+from typing import Iterator
 from scipy.ndimage import median_filter
 from scipy.optimize import least_squares
 
@@ -267,6 +268,43 @@ def remove_smooth_background(flux: np.ndarray, fwhm: float, median_kernel_fwhm: 
     return flux - median_filter(flux, size=kernel_size, mode='nearest')
 
 
+def chunks_from_detection(order_data: Table, detection_wavelength: float,
+                          chunk_size: int) -> Iterator[list[tuple[float, float]]]:
+    """
+    The wavelength bounds of each chunk of an order, walking outward from the detection.
+
+    Parameters
+    ----------
+    order_data : astropy.table.Table
+        The binned data for a single order.
+    detection_wavelength : float
+        The wavelength the object was detected at, where the walk starts.
+    chunk_size : int
+        The number of wavelength bins in each chunk.
+
+    Yields
+    ------
+    chunks : list of (float, float)
+        The low and high wavelength of every chunk in one direction, ordered outward from the
+        detection wavelength.
+
+    Notes
+    -----
+    The chunks come out one direction at a time rather than as a single flat list because the object
+    is best measured where it was detected. Anything carrying a running guess from one chunk to the
+    next has to restart it at the detection wavelength when it turns around, instead of carrying the
+    far blue end of the order into the red.
+    """
+    # A bin center of zero flags a pixel that fell outside the wavelength bins
+    wavelength_bins = np.unique(order_data['order_wavelength_bin'])
+    wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
+    start = int(np.argmin(np.abs(wavelength_bins - detection_wavelength)))
+
+    for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
+        yield [(float(wavelength_bins[min(low, high)]), float(wavelength_bins[max(low, high)]))
+               for low, high in zip(edges[:-1], edges[1:])]
+
+
 def trace_object(point_source: dict, binned_data: Table, orders, fwhm: float, polynomial_order: int,
                  chunk_size: int, snr_threshold: float, max_center_error: float = 4.0,
                  clip_sigma: float = 4.0, max_chunk_shift: float = 1.0,
@@ -322,18 +360,12 @@ def trace_object(point_source: dict, binned_data: Table, orders, fwhm: float, po
 
     for order_id, order_height in zip(orders.order_ids, orders.order_heights):
         order_data = binned_data[binned_data['order'] == order_id]
-        # A bin center of zero flags a pixel that fell outside the wavelength bins
-        wavelength_bins = np.unique(order_data['order_wavelength_bin'])
-        wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
-        start = int(np.argmin(np.abs(wavelength_bins - point_source['detection_wavelength'])))
-
         order_wavelengths = []
         order_centers = []
         order_errors = []
-        for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
+        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
             center_guess = point_source['center']
-            for low, high in zip(edges[:-1], edges[1:]):
-                chunk_low, chunk_high = wavelength_bins[min(low, high)], wavelength_bins[max(low, high)]
+            for chunk_low, chunk_high in chunks:
                 stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
                     order_data, int(order_height), chunk_low, chunk_high, fwhm
                 )
@@ -504,14 +536,8 @@ def fit_profile_fwhm(binned_data: Table, orders, trace_polynomials: list, point_
         if trace is None:
             continue
         order_data = binned_data[binned_data['order'] == order_id]
-        # A bin center of zero flags a pixel that fell outside the wavelength bins
-        wavelength_bins = np.unique(order_data['order_wavelength_bin'])
-        wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
-        start = int(np.argmin(np.abs(wavelength_bins - point_source['detection_wavelength'])))
-
-        for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
-            for low, high in zip(edges[:-1], edges[1:]):
-                chunk_low, chunk_high = wavelength_bins[min(low, high)], wavelength_bins[max(low, high)]
+        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
+            for chunk_low, chunk_high in chunks:
                 wavelength = 0.5 * (chunk_low + chunk_high)
                 center = float(trace(wavelength))
                 stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
@@ -663,14 +689,8 @@ def find_profile_shape(binned_data: Table, orders, trace_polynomials: list, poin
         if trace is None:
             continue
         order_data = binned_data[binned_data['order'] == order_id]
-        # A bin center of zero flags a pixel that fell outside the wavelength bins
-        wavelength_bins = np.unique(order_data['order_wavelength_bin'])
-        wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
-        start = int(np.argmin(np.abs(wavelength_bins - point_source['detection_wavelength'])))
-
-        for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
-            for low, high in zip(edges[:-1], edges[1:]):
-                chunk_low, chunk_high = wavelength_bins[min(low, high)], wavelength_bins[max(low, high)]
+        for chunks in chunks_from_detection(order_data, point_source['detection_wavelength'], chunk_size):
+            for chunk_low, chunk_high in chunks:
                 wavelength = 0.5 * (chunk_low + chunk_high)
                 fwhm = profile_fwhm * seeing_scaling(wavelength, seeing_reference_wavelength, seeing_exponent)
                 center = float(trace(wavelength))

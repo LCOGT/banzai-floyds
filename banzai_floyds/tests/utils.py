@@ -3,6 +3,7 @@ from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
+from banzai_floyds.utils.profile_utils import profile_sigmas, SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.utils.telluric_utils import estimate_telluric
 from scipy.interpolate import CloughTocher2DInterpolator
@@ -248,6 +249,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         weight = smooth_order_weights(order_models[i].coef, (x2d, y2d), orders.order_heights[i],
                                       order_models[i].domain, k=EDGE_SHARPNESS)
         trace_center = profile_centers[i](wavelengths.data)
+        # The width the frame is built with follows the same seeing power law the pipeline assumes
+        profile_widths = profile_sigmas(wavelengths.data[in_order], profile_fwhm,
+                                        SEEING_REFERENCE_WAVELENGTH, SEEING_EXPONENT)
         if trace_wavelength_range is None:
             trace_weight = weight
         else:
@@ -258,14 +262,14 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
             if flat_spectrum:
                 data[in_order] += trace_weight[in_order] * flux_normalization * gauss(
                     slit_coordinates[in_order], trace_center[in_order],
-                    profile_sigma)
+                    profile_widths)
                 if second_trace_offset is not None:
                     data[in_order] += trace_weight[in_order] * flux_normalization * second_trace_fraction * gauss(
                         slit_coordinates[in_order], trace_center[in_order] + second_trace_offset,
-                        profile_sigma)
+                        profile_widths)
             else:
                 profile = gauss(slit_coordinates[in_order], trace_center[in_order],
-                                profile_sigma)
+                                profile_widths)
                 input_spectrum = flux_normalization
                 input_spectrum *= continuum_polynomial(wavelengths.data[in_order])
                 input_spectrum *= profile
