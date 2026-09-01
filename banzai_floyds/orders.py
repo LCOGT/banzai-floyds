@@ -508,10 +508,8 @@ class OrderSolver(Stage):
                       meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': order_heights[0]}))
         )
         image.is_master = True
-        # The order solution describes the instrument, not the target the sky flat was pointed at,
-        # so it carries no proprietary period. Without this it inherits the public date of the raw
-        # frame, and get_cal_record's public fallback can't hand the solution to frames from another
-        # proposal until that period expires.
+        # Skyflats are automatically public. Some engineering data we collected
+        # previously still were "proprietary" so we explicitly set the public date.
         image.public_date = image.dateobs
 
         return image
