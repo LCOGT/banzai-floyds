@@ -4,7 +4,7 @@ from numpy.polynomial.legendre import Legendre
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai.stages import Stage
 from banzai.logs import get_logger
-from banzai_floyds.utils.fitting_utils import moffat, legendre_design, robust_linear_fit
+from banzai_floyds.utils.fitting_utils import voigt, legendre_design, robust_linear_fit
 from banzai_floyds.utils.fitting_utils import resolvable_background_degree, ClampedLegendre
 
 logger = get_logger()
@@ -42,7 +42,7 @@ def fit_background(data, background_order=3, minimum_fit_pixels=MINIMUM_FIT_PIXE
     ----------
     data : Table
         Binned data, grouped by wavelength bin, with the profile shape already in
-        `profile_sigma` and `profile_beta`.
+        `profile_sigma` and `profile_gamma_ratio`.
     background_order : int
         Requested degree of the Legendre across the slit. The degree actually used is reduced per
         bin by `background_degree` when the object is wide.
@@ -108,10 +108,11 @@ def fit_background(data, background_order=3, minimum_fit_pixels=MINIMUM_FIT_PIXE
         interior = data_to_fit['in_order_interior']
         domain = [np.min(data_to_fit['y_profile'][interior]), np.max(data_to_fit['y_profile'][interior])]
         sigma = float(np.median(data_to_fit['profile_sigma'][to_fit]))
-        beta = float(np.median(data_to_fit['profile_beta'][to_fit]))
+        gamma_ratio = float(np.median(data_to_fit['profile_gamma_ratio'][to_fit]))
         degree = background_degree(int(to_fit.sum()), sigma, background_order)
         # The object's column first, then the background's. Only the background is kept.
-        design = np.column_stack([moffat(y, 0.0, sigma, 1.0, beta), legendre_design(y, degree, domain)])
+        design = np.column_stack([voigt(y, 0.0, sigma, 1.0, gamma_ratio),
+                                  legendre_design(y, degree, domain)])
         coefficients, _ = robust_linear_fit(design, data_to_fit[data_column][to_fit],
                                             data_to_fit[uncertainty_column][to_fit])
         # Past the interior the polynomial continues along its tangent rather than following its own
@@ -167,7 +168,7 @@ class BackgroundFitter(Stage):
     BACKGROUND_ORDER = 3
 
     def do_stage(self, image):
-        # Without a profile the binned data has no profile_sigma or profile_beta column, and reading
+        # Without a profile the binned data has no profile_sigma or profile_gamma_ratio column, and reading
         # one raises. banzai catches that by dropping the frame from the reduction entirely, so a
         # frame with no object in the slit used to produce no product at all rather than an
         # unextracted one. There is no object to fit a sky around here, so hand the frame back.

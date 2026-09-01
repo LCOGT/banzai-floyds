@@ -6,9 +6,8 @@ import numpy as np
 import os
 from astropy.io import fits
 from astropy.coordinates import Angle
-from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
-from banzai_floyds.utils.fitting_utils import MAX_BETA
-from numpy.polynomial.legendre import Legendre
+from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data, profile_sigmas
+from banzai_floyds.utils.profile_utils import SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
 from astropy.table import Table
 from banzai_floyds import dbs
 
@@ -17,7 +16,6 @@ MIN_FRINGE_VALUE = 0.1
 MAX_FRINGE_VALUE = 2.5
 
 # Mask bits on the master fringe frame.
-FRINGE_INTERPOLATED = 16
 FRINGE_NO_PATTERN = 32
 
 
@@ -138,57 +136,40 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @profile.setter
     def profile(self, value):
-        # The wing term is optional: without it the profile is a pure Gaussian, which is a Moffat at
-        # MAX_BETA to better than 1%.
-        if len(value) == 4:
-            centers, sigmas, betas, fitted_points = value
-        else:
-            centers, sigmas, fitted_points = value
-            betas = [Legendre([MAX_BETA], domain=sigma.domain) for sigma in sigmas]
-        self._profile_fits = centers, sigmas, betas
+        centers, fwhm, gamma_ratio, fitted_points = value
+        self._profile_fits = centers, fwhm, gamma_ratio
         if fitted_points is None:
             fitted_points = Table({'wavelength': [], 'center': [], 'order': []})
         header = fits.Header()
-        for order, center, sigma, beta in zip([1, 2], centers, sigmas, betas):
-            for i, coef in enumerate(sigma.coef):
-                header[f'O{order}SIG{i:02}'] = coef, f'P_{i:02} coefficient for width for order {order}'
+        header['PROFFWHM'] = fwhm, f'FWHM of the profile in pixels at {SEEING_REFERENCE_WAVELENGTH:.0f} Angstroms'
+        header['PROFGAM'] = gamma_ratio, 'Ratio of the Lorentzian to the Gaussian width of the profile'
+        for order, center in zip([1, 2], centers):
             for i, coef in enumerate(center.coef):
                 header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
-            for i, coef in enumerate(beta.coef):
-                header[f'O{order}BET{i:02}'] = coef, f'P_{i:02} coefficient for Moffat beta for order {order}'
 
             header[f'O{order}CTRO'] = center.degree(), f'Polynomial Order for the center in order {order}'
-            header[f'O{order}SIGO'] = sigma.degree(), f'Polynomial Order for the width in order {order}'
-            header[f'O{order}BETO'] = beta.degree(), f'Polynomial Order for Moffat beta in order {order}'
 
-            domain_str = '{0} domain value for {1} fit of the profile for order {2}'
-            header[f'O{order}SIGDM0'] = sigma.domain[0], domain_str.format('Min', 'sigma', order)
-            header[f'O{order}SIGDM1'] = sigma.domain[1], domain_str.format('Max', 'sigma', order)
-            header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', 'center', order)
-            header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', 'center', order)
-            header[f'O{order}BETDM0'] = beta.domain[0], domain_str.format('Min', 'beta', order)
-            header[f'O{order}BETDM1'] = beta.domain[1], domain_str.format('Max', 'beta', order)
+            domain_str = '{0} domain value for the center fit of the profile for order {1}'
+            header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', order)
+            header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', order)
 
         self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
 
-        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, sigmas, betas,
+        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, fwhm, gamma_ratio,
                                                      self.orders, self.wavelengths.data),
                                 name='PROFILE', meta=fits.Header({}))
         self.add_or_update(profile_hdu)
         if self.binned_data is not None:
             profile_centers = np.zeros(len(self.binned_data))
-            profile_sigma = np.zeros(len(self.binned_data))
-            profile_beta = np.full(len(self.binned_data), MAX_BETA)
             for order in [1, 2]:
                 in_order = self.binned_data['order'] == order
                 profile_centers[in_order] = centers[order - 1](self.binned_data['wavelength'][in_order])
-                profile_sigma[in_order] = sigmas[order - 1](self.binned_data['wavelength'][in_order])
-                profile_beta[in_order] = betas[order - 1](self.binned_data['wavelength'][in_order])
 
             self.binned_data['y_profile'] = self.binned_data['y_order'] - profile_centers
-            self.binned_data['profile_sigma'] = profile_sigma
+            self.binned_data['profile_sigma'] = profile_sigmas(self.binned_data['wavelength'], fwhm,
+                                                               SEEING_REFERENCE_WAVELENGTH, SEEING_EXPONENT)
             # The background stage fits the object alongside the sky, so it needs the wings too
-            self.binned_data['profile_beta'] = profile_beta
+            self.binned_data['profile_gamma_ratio'] = gamma_ratio
             x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
             self.binned_data['weights'] = self['PROFILE'].data[y, x]
 

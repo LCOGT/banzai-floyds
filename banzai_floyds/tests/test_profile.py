@@ -1,6 +1,7 @@
 from banzai_floyds.profile import stack_slit_profile, find_peaks, detect_point_sources
 from banzai_floyds.profile import choose_source_to_extract, matched_filter_snr, seeing_scaling
-from banzai_floyds.profile import ProfileFitter
+from banzai_floyds.profile import remove_coarse_local_background, remove_smooth_background
+from banzai_floyds.profile import ProfileFitter, fit_shape_params, has_nearby_source
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
@@ -9,6 +10,7 @@ import pytest
 from numpy.polynomial.legendre import Legendre
 from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, fwhm_to_sigma, gauss, moffat
 from banzai_floyds.utils.fitting_utils import MIN_BETA, MAX_BETA
+from banzai_floyds.utils.fitting_utils import voigt, MAX_GAMMA_RATIO
 
 
 OBJECT_FWHM = 10.0
@@ -793,3 +795,92 @@ def test_the_extraction_weights_are_positive_and_normalized():
             totals = np.array([profile[in_order & (np.arange(profile.shape[1])[None, :] == column)].sum()
                                for column in columns])
             np.testing.assert_allclose(totals, 1.0, atol=1e-10)
+
+
+def make_voigt_stack(components, sky=0.0, slope=0.0, read_noise=5.0):
+    """A stacked slit profile built from known (amplitude, center, sigma, gamma_ratio) components."""
+    interp_y = np.arange(-HALF_HEIGHT + 5, HALF_HEIGHT - 4, dtype=float)
+    model = sky + slope * interp_y
+    for amplitude, center, sigma, gamma_ratio in components:
+        model = model + voigt(interp_y, center, sigma, amplitude, gamma_ratio)
+    flux_error = np.sqrt(np.clip(model, 0.0, None) + read_noise ** 2)
+    flux = model + np.random.normal(0.0, 1.0, len(interp_y)) * flux_error
+    return interp_y, flux, flux_error
+
+
+VOIGT_SIGMA = 2.8
+VOIGT_FWHM = sigma_to_fwhm(VOIGT_SIGMA)
+
+
+@pytest.mark.parametrize('gamma_ratio', [0.0, 0.2, 0.5, 0.95])
+def test_the_shape_is_recovered_over_a_sky_background(gamma_ratio):
+    np.random.seed(30181)
+    # The background is fit with the profile because every estimate we could subtract first is built
+    # from the same few sigma the wings live in. Over a pedestal with a gradient across the slit the
+    # shape still comes back at what it was given, including one sitting just under the bound.
+    interp_y, flux, flux_error = make_voigt_stack([(30000.0, 0.0, VOIGT_SIGMA, gamma_ratio)],
+                                                  sky=2000.0, slope=30.0)
+    fitted = fit_shape_params(interp_y, flux, flux_error, 0.0, VOIGT_FWHM)
+    np.testing.assert_allclose(fitted, gamma_ratio, atol=0.05)
+    # least_squares stops a rounding error short of the bound, so pegging is a tolerance, not equality
+    assert fitted < 0.99 * MAX_GAMMA_RATIO
+
+
+def test_filtering_the_background_out_first_erases_the_wings():
+    np.random.seed(30182)
+    # The negative result the joint fit exists to avoid. A running median only a couple of FWHM wide
+    # follows the wings down and takes them with it, so a profile put through it reads as a pure
+    # Gaussian whatever its shape really was. Subtracting a straight line first is harmless, since
+    # it is degenerate with the line the fit puts back.
+    for gamma_ratio in [0.2, 0.5]:
+        interp_y, flux, flux_error = make_voigt_stack([(30000.0, 0.0, VOIGT_SIGMA, gamma_ratio)], sky=2000.0)
+        filtered = remove_smooth_background(flux, VOIGT_FWHM)
+        assert fit_shape_params(interp_y, filtered, flux_error, 0.0, VOIGT_FWHM) < 0.05
+        subtracted = remove_coarse_local_background(interp_y, flux, 0.0, VOIGT_FWHM)
+        np.testing.assert_allclose(fit_shape_params(interp_y, subtracted, flux_error, 0.0, VOIGT_FWHM),
+                                   gamma_ratio, atol=0.05)
+
+
+def test_a_host_pegs_the_shape_parameter():
+    np.random.seed(30183)
+    # No Voigt has wings heavy enough to absorb a host four times the width of the point source, so
+    # the fit runs into the bound and the chunk is dropped rather than averaged in.
+    for host_amplitude in [9000.0, 3000.0]:
+        interp_y, flux, flux_error = make_voigt_stack([(30000.0, 0.0, VOIGT_SIGMA, 0.2),
+                                                       (host_amplitude, 0.0, 4 * VOIGT_SIGMA, 0.0)])
+        assert fit_shape_params(interp_y, flux, flux_error, 0.0, VOIGT_FWHM) > 0.99 * MAX_GAMMA_RATIO
+
+
+def test_the_wing_gate_is_far_stricter_than_the_detection_threshold():
+    np.random.seed(30184)
+    # The gate asks whether five percent of the peak is a five sigma signal, because that is the
+    # level the wings sit at. A chunk can be a detection many times over and still be nowhere near
+    # bright enough to say anything about its shape.
+    for amplitude, measurable in [(30000.0, True), (300.0, False)]:
+        interp_y, flux, flux_error = make_voigt_stack([(amplitude, 0.0, VOIGT_SIGMA, 0.2)], sky=2000.0)
+        assert matched_filter_snr(interp_y, flux, flux_error, 0.0, VOIGT_FWHM) > 4.0
+        subtracted = remove_coarse_local_background(interp_y, flux, 0.0, VOIGT_FWHM)
+        peak = np.interp(0.0, interp_y, subtracted)
+        noise = np.interp(0.0, interp_y, flux_error)
+        assert (0.05 * peak > 5.0 * noise) == measurable
+
+
+def test_a_cosmic_ray_in_the_wings_does_not_set_the_shape():
+    np.random.seed(30185)
+    # Why the fit is robust. A spike a few sigma out looks exactly like a heavy tail, and it lands
+    # where the profile has almost no counts to outvote it: on chi^2 a spike of a quarter the peak
+    # takes a shape of 0.2 to 0.43. The Huber weights bound that bias but do not remove it, at 0.206
+    # however bright the spike is, and the clip that follows them takes it to 0.201.
+    for position, amplitude in [(4 * VOIGT_SIGMA, 8000.0), (-3 * VOIGT_SIGMA, 4000.0), (4 * VOIGT_SIGMA, 1e6)]:
+        interp_y, flux, flux_error = make_voigt_stack([(30000.0, 0.0, VOIGT_SIGMA, 0.2)], sky=2000.0)
+        flux[np.argmin(np.abs(interp_y - position))] += amplitude
+        np.testing.assert_allclose(fit_shape_params(interp_y, flux, flux_error, 0.0, VOIGT_FWHM), 0.2, atol=0.01)
+
+
+def test_a_compact_neighbor_is_caught_by_the_peak_list():
+    # A companion close enough to put flux in the wings is a source in its own right, so it is
+    # already in the detection list and does not need a statistic of its own to find.
+    sources = [{'center': 0.0}, {'center': 4 * VOIGT_SIGMA}]
+    assert has_nearby_source(sources[0], sources, VOIGT_FWHM)
+    # The object never counts as its own neighbor, and one well outside the wings does not either
+    assert not has_nearby_source(sources[0], [sources[0], {'center': 20 * VOIGT_SIGMA}], VOIGT_FWHM)

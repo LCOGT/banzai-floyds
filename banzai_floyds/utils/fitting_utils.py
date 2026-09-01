@@ -1,7 +1,8 @@
 import numpy as np
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from numpy.polynomial.legendre import Legendre
-from scipy.special import eval_hermite, factorial
+from scipy.optimize import least_squares
+from scipy.special import eval_hermite, factorial, wofz
 
 # Scale factor that makes the median absolute deviation an unbiased estimator of the standard
 # deviation of a normal distribution, 1 / Phi^-1(3/4).
@@ -78,6 +79,54 @@ def moffat(x, center, sigma, amplitude, beta):
     the extraction weights it feeds (Horne 1986) can never go negative.
     """
     return amplitude * (1.0 + ((np.asarray(x, dtype=float) - center) / moffat_alpha(sigma, beta)) ** 2) ** -beta
+
+
+# At MAX_GAMMA_RATIO a Voigt leaves a sixth of its flux outside a 2.5 sigma extraction window,
+# against a percent for a Gaussian, and past that the wings are flat enough over the slit that they
+# are no longer separable from the local background. At zero the profile is exactly a Gaussian.
+MAX_GAMMA_RATIO = 1.0
+
+
+def voigt_gaussian_sigma(sigma, gamma_ratio):
+    """
+    The Gaussian component sigma of a Voigt profile whose full width at half maximum matches a
+    Gaussian of this sigma.
+
+    The Voigt width is the Olivero & Longbothum (1977) approximation to the convolution,
+    f_V = 0.5346 f_L + sqrt(0.2166 f_L^2 + f_G^2), which is good to 0.02%, with f_L = 2 gamma and
+    f_G = 2 sqrt(2 ln 2) sigma_g. Holding gamma / sigma_g fixed makes the bracket a constant, so the
+    width simply scales out.
+    """
+    width_ratio = 2.0 * 0.5346 * gamma_ratio + np.sqrt(4.0 * 0.2166 * gamma_ratio ** 2.0 + 8.0 * np.log(2.0))
+    return sigma_to_fwhm(sigma) / width_ratio
+
+
+def voigt(x, center, sigma, amplitude, gamma_ratio):
+    """
+    Voigt profile, a Gaussian convolved with a Lorentzian, written in terms of the width and a
+    dimensionless shape parameter.
+
+    V(x) = amplitude Re[w(z)] / Re[w(z0)],  z = ((x - center) + i gamma) / (sigma_g sqrt(2)),
+    z0 = i gamma / (sigma_g sqrt(2)), where w is the Faddeeva function.
+
+    sigma is the Gaussian sigma with the same full width at half maximum, so it means the same thing
+    here as it does for `gauss` and the extraction and background windows keep their meaning whatever
+    the shape comes out to be. gamma_ratio = gamma / sigma_g sets how heavy the wings are: zero is a
+    pure Gaussian and the tail grows towards a Lorentzian as it rises. Parametrizing this way rather
+    than by (sigma_g, gamma) takes out the valley in chi^2 those two run along, in the same way and
+    for the same reason as `moffat_alpha`.
+
+    Seeing broadening is close to Gaussian while the atmospheric halo scattered by turbulence on
+    scales larger than the aperture falls off as a power law (King 1971), which is what the
+    Lorentzian is standing in for. Like a Moffat, and unlike a Gauss-Hermite, this is positive
+    everywhere by construction, so the extraction weights it feeds (Horne 1986) can never go
+    negative.
+    """
+    gaussian_sigma = voigt_gaussian_sigma(sigma, gamma_ratio)
+    gamma = gamma_ratio * gaussian_sigma
+    z = ((np.asarray(x, dtype=float) - center) + 1j * gamma) / (gaussian_sigma * np.sqrt(2.0))
+    peak = np.real(wofz(1j * gamma / (gaussian_sigma * np.sqrt(2.0))))
+    return amplitude * np.real(wofz(z)) / peak
 
 
 def fwhm_to_sigma(fwhm):
@@ -187,6 +236,57 @@ def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray
     clipped_weights = np.zeros(len(y))
     clipped_weights[good] = 1.0 / uncertainty[good]
     return solve(clipped_weights), good
+
+
+def robust_least_squares(residuals: Callable[[np.ndarray], np.ndarray], initial_guess: Sequence[float],
+                         bounds: tuple, huber_scale: float = 4.0, clip_sigma: float = 4.0,
+                         maxiters: int = 5) -> tuple:
+    """
+    Nonlinear least squares with the outliers rejected, the counterpart of `robust_linear_fit`.
+
+    Same two stages, for a model that cannot be written as a design matrix: the Huber M-estimate
+    first (here from `scipy.optimize.least_squares`'s own loss rather than by reweighting), then a
+    clip on the residuals to it, refitting until the set of rejected points stops changing.
+
+    The Huber stage alone bounds an outlier's pull but does not remove it, because its weight falls
+    as k / |r| rather than to zero. On an injected profile a cosmic ray in the wings biased the
+    shape by the same amount whether it held eight thousand counts or a million; the clip is what
+    takes that bias away.
+
+    Parameters
+    ----------
+    residuals : callable
+        Takes the parameter vector and returns the residuals in units of their uncertainty, for
+        every point. The masking of rejected points is done here.
+    initial_guess : sequence
+        Starting parameter vector.
+    bounds : tuple
+        (lower, upper) sequences, as `scipy.optimize.least_squares` takes them.
+    huber_scale : float
+        Residual, in sigma, beyond which the Huber loss starts growing linearly.
+    clip_sigma : float
+        Points further than this many robust standard deviations from the Huber model are rejected.
+    maxiters : int
+        Maximum number of clip and refit iterations.
+
+    Returns
+    -------
+    (fit, used), the `OptimizeResult` and a flag for the points that survived the clip
+    """
+    used = np.ones(len(residuals(np.asarray(initial_guess, dtype=float))), dtype=bool)
+    for _ in range(maxiters):
+        fit = least_squares(lambda parameters: used * residuals(parameters), initial_guess,
+                            bounds=bounds, loss='huber', f_scale=huber_scale)
+        deviations = np.abs(residuals(fit.x))
+        # Never clip tighter than the formal uncertainties, for the reason given in robust_linear_fit
+        robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)
+        good = deviations < clip_sigma * robust_sigma
+        if good.sum() <= len(fit.x):
+            return fit, np.ones(len(used), dtype=bool)
+        if np.all(good == used):
+            break
+        used = good
+    return fit, used
 
 
 def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, degree: int,

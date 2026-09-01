@@ -1,32 +1,23 @@
 import numpy as np
 
-from numpy.polynomial.legendre import Legendre
 from scipy.ndimage import median_filter
-from scipy.optimize import root
+from scipy.optimize import least_squares
 
 from astropy.table import Table
 from banzai.stages import Stage
 from banzai.logs import get_logger
 from banzai.utils.stats import robust_standard_deviation, sigma_clipped_mean
-from banzai_floyds.utils.fitting_utils import (fwhm_to_sigma, gauss, robust_legendre_fit)
+from banzai_floyds.utils.fitting_utils import (fwhm_to_sigma, gauss, robust_least_squares,
+                                               robust_legendre_fit, voigt, MAX_GAMMA_RATIO)
 from banzai_floyds.matched_filter import matched_filter_signal, matched_filter_normalization
 from banzai_floyds.wavelengths import identify_peaks, refine_peak_centers
+from banzai_floyds.dbs import add_profile_shape, get_recent_profile_shape
+from banzai_floyds.utils.profile_utils import seeing_scaling, SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel
 
 
 logger = get_logger()
-
-
-def seeing_scaling(wavelength: np.ndarray, reference_wavelength: float, exponent: float = -1/5) -> np.ndarray:
-    """
-    How much wider the seeing disk is at this wavelength than at the reference wavelength.
-
-    sigma(lambda) / sigma(lambda_ref) = (lambda / reference_wavelength)^(-1/5), Kolmogorov turbulence
-    (Fried 1966). The reference wavelength is only a choice of origin: the amplitude that multiplies
-    this is what gets fit, so moving it rescales the amplitude and changes nothing.
-    """
-    return (np.asarray(wavelength, dtype=float) / reference_wavelength) ** exponent
 
 
 def stack_slit_profile(binned_data: Table, order_height: int, wavelow: float, wavehigh: float,
@@ -295,8 +286,10 @@ def trace_object(point_source: dict, binned_data: Table, orders, fwhm: float, po
         The order of the polynomial to fit to the trace.
     chunk_size : int
         The width of each chunk to stack, in pixels along the dispersion direction.
-    snr_threshold : float
-        The minimum signal-to-noise ratio required per chunk.
+    wing_fraction : float
+        The fraction of the peak flux a chunk has to measure to be worth fitting.
+    wing_snr : float
+        The signal-to-noise ratio that fraction of the peak has to reach.
     max_center_error : float
         Trace points with a centroid uncertainty larger than this (in pixels) are not fit.
     clip_sigma : float
@@ -551,76 +544,154 @@ def fit_profile_fwhm(binned_data: Table, orders, trace_polynomials: list, point_
     return float(sigma_clipped_mean(fwhms, clip_sigma))
 
 
-def find_profile_shape(binned_data, orders, dispersions, point_source, initial_fwhm, chunk_size=25):
-    """Estimate the Voigt parameters (profile shape) of the profile.
+def has_nearby_source(point_source: dict, point_sources: list[dict], fwhm: float,
+                      n_sigma: float = 5.0) -> bool:
+    """Test whether another detected source sits close enough to put flux in the wings of this one."""
+    sigma = fwhm_to_sigma(fwhm)
+    separations = [abs(source['center'] - point_source['center'])
+                   for source in point_sources if source is not point_source]
+    return np.any(np.array(separations) < n_sigma * sigma)
+
+
+def fit_shape_params(stacked_y: np.ndarray, stacked_flux: np.ndarray, stacked_flux_error: np.ndarray,
+                     center: float, fwhm: float, huber_scale: float = 4.0,
+                     clip_sigma: float = 4.0) -> float:
+    """Fit the Voigt shape parameter of a background subtracted stack at a fixed width.
 
     Parameters
     ----------
-    binned_data : pandas.DataFrame
-        The binned spectral data.
-    orders : object
-        The orders object containing order IDs.
-    dispersions : list
-        The dispersions for each order.
-    point_source : dict
-        The point source information, including detection wavelength and center.
-    initial_fwhm : float
-        The initial full width at half maximum (FWHM) estimate.
-    chunk_size : int, optional
-        The size of the chunks to use for stacking the slit profile (default is 25).
+    stacked_y : array-like
+        The y-coordinates of the stacked slit profile.
+    stacked_flux, stacked_flux_error : array-like
+        The background subtracted flux of the stacked slit profile and its uncertainty.
+    center : float
+        The center of the object in the slit.
+    fwhm : float
+        The full width at half maximum of the object at this wavelength.
+    huber_scale : float
+        Residual, in standard deviations, beyond which a pixel stops pulling on the fit.
+    clip_sigma : float
+        Pixels further than this many robust standard deviations from the model are rejected.
+
+    Returns
+    -------
+    float
+        gamma_ratio, the ratio of the Lorentzian to the Gaussian width, or nan if the fit failed.
 
     Notes
     -----
-    We only try to estimate the shape paramters of the profile if the object is isolated. We check
-    this by testing if the median of the flux in the local background (3-5 sigma on both sides of the trace)
-    is consistent with zero. If the object is isolated, we fit a single set of Voigt parameters for the whole
-    slit, assuming all wavelength variation is captured by our seeing law. If the object is not isolated,
-    we adopt the shape parameter from the most recent observation taken in the same slit.
+    The width is held at the value measured by the half maximum crossings rather than fit alongside
+    the shape.
     """
+    sigma = fwhm_to_sigma(fwhm)
+    level = np.median(stacked_flux)
+    peak = np.interp(center, stacked_y, stacked_flux) - level
+    if peak <= 0.0:
+        return np.nan
+
+    def residuals(params):
+        amplitude, fit_center, gamma_ratio, background, slope = params
+        model = voigt(stacked_y, fit_center, sigma, amplitude, gamma_ratio) + background + slope * stacked_y
+        return (stacked_flux - model) / stacked_flux_error
+
+    best_fit, _ = robust_least_squares(residuals, [peak, center, 0.1 * MAX_GAMMA_RATIO, level, 0.0],
+                                       ([0.0, center - sigma, 0.0, -np.inf, -np.inf],
+                                        [np.inf, center + sigma, MAX_GAMMA_RATIO, np.inf, np.inf]),
+                                       huber_scale=huber_scale, clip_sigma=clip_sigma)
+    if not best_fit.success:
+        return np.nan
+    return float(best_fit.x[2])
+
+
+def find_profile_shape(binned_data: Table, orders, trace_polynomials: list, point_source: dict,
+                       point_sources: list[dict], profile_fwhm: float, seeing_exponent: float,
+                       seeing_reference_wavelength: float, chunk_size: int = 25, wing_fraction: float = 0.05,
+                       wing_snr: float = 5.0, clip_sigma: float = 3.0, min_chunks: int = 5,
+                       min_usable_fraction: float = 0.5) -> float:
+    """Estimate the Voigt shape parameter of the profile.
+
+    Parameters
+    ----------
+    binned_data : astropy.table.Table
+        The wavelength binned data in the orders.
+    orders : Orders object
+    trace_polynomials : list
+        The center of the object as a function of wavelength for each order, None where the object
+        was never traced.
+    point_source : dict
+        The point source information, including detection wavelength and center.
+    point_sources : list
+        Every source detected in the slit, which the object being extracted has to be clear of.
+    profile_fwhm : float
+        The full width at half maximum of the object at the reference wavelength.
+    seeing_exponent : float
+        The power law index of the wavelength dependence of the seeing.
+    seeing_reference_wavelength : float
+        The wavelength the fitted width is quoted at.
+    chunk_size : int
+        The width of each chunk to stack, in pixels along the dispersion direction.
+    wing_fraction : float
+        The fraction of the peak flux a chunk has to measure to be worth fitting.
+    wing_snr : float
+        The signal-to-noise ratio that fraction of the peak has to reach.
+    clip_sigma : float
+        Rejection threshold, in robust standard deviations, for combining the chunks.
+    min_chunks : int
+        The fewest chunks that can produce a shape parameter for the frame.
+    min_usable_fraction : float
+        The fraction of the chunks bright enough to fit that have to produce a usable shape.
+
+    Returns
+    -------
+    float
+        gamma_ratio, the ratio of the Lorentzian to the Gaussian width, or nan if the object was
+        never isolated enough to measure it.
+
+    Notes
+    -----
+    The shape is only measurable on a bright, uncrowded object, so there are two gates. A chunk is
+    fit only if `wing_fraction` of its peak flux is itself a `wing_snr`
+    detection, which is far less flux than the peak (5%) and if there is
+    point source with several sigma of the object is present.
+    """
+    if has_nearby_source(point_source, point_sources, profile_fwhm):
+        return np.nan
+
     measured_shape_params = []
-    for order_id in orders.order_ids:
-        order_data = binned_data[binned_data['order_id'] == order_id]
-        order_data.groupby('order_wavelength_bin')
-        starting_bin = np.argmin(np.abs(order_data['order_wavelength_bin'] - point_source['detection_wavelength']))
-        left_chunks = np.arange(
-            order_data['order_wavelength_bin'][starting_bin],
-            np.min(order_data[order_data['order_wavelength_bin'] > 0.0]['order_wavelength_bin']),
-            -chunk_size * dispersions[order_id - 1]
-        )
-        right_chunks = np.arange(
-            order_data['order_wavelength_bin'][starting_bin],
-            np.max(order_data['order_wavelength_bin'] - 1),
-            chunk_size * dispersions[order_id - 1]
-        )
-        for chunk in np.concatenate([left_chunks, right_chunks]):
-            fwhm = initial_fwhm
-            sigma = fwhm_to_sigma(fwhm)
-            stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(chunk)
-            remove_coarse_local_background(stacked_flux)
+    fitted_chunks = 0
+    for order_id, order_height, trace in zip(orders.order_ids, orders.order_heights, trace_polynomials):
+        if trace is None:
+            continue
+        order_data = binned_data[binned_data['order'] == order_id]
+        # A bin center of zero flags a pixel that fell outside the wavelength bins
+        wavelength_bins = np.unique(order_data['order_wavelength_bin'])
+        wavelength_bins = wavelength_bins[wavelength_bins > 0.0]
+        start = int(np.argmin(np.abs(wavelength_bins - point_source['detection_wavelength'])))
 
-            left_region = np.logical_and(stacked_y >= point_source['center'] - 5 * sigma,
-                                         stacked_y <= point_source['center'] - 3 * sigma)
-            right_region = np.logical_and(stacked_y >= point_source['center'] + 3 * sigma,
-                                          stacked_y <= point_source['center'] + 5 * sigma)
-            left_background = sigma_clipped_mean(stacked_flux[left_region])
-            right_background = sigma_clipped_mean(stacked_flux[right_region])
-            isolated = np.abs(left_background) < 3 * robust_standard_deviation(stacked_flux[left_region])
-            isolated &= np.abs(right_background) < 3 * robust_standard_deviation(stacked_flux[right_region])
+        for edges in [np.arange(start, -1, -chunk_size), np.arange(start, len(wavelength_bins), chunk_size)]:
+            for low, high in zip(edges[:-1], edges[1:]):
+                chunk_low, chunk_high = wavelength_bins[min(low, high)], wavelength_bins[max(low, high)]
+                wavelength = 0.5 * (chunk_low + chunk_high)
+                fwhm = profile_fwhm * seeing_scaling(wavelength, seeing_reference_wavelength, seeing_exponent)
+                center = float(trace(wavelength))
+                stacked_y, stacked_flux, stacked_flux_error = stack_slit_profile(
+                    order_data, int(order_height), chunk_low, chunk_high, fwhm
+                )
+                background_subtracted = remove_coarse_local_background(stacked_y, stacked_flux, center, fwhm)
+                if background_subtracted is None:
+                    continue
+                peak = np.interp(center, stacked_y, background_subtracted)
+                noise = np.interp(center, stacked_y, stacked_flux_error)
+                if wing_fraction * peak < wing_snr * noise:
+                    continue
+                fitted_chunks += 1
+                shape_params = fit_shape_params(stacked_y, stacked_flux, stacked_flux_error, center, fwhm)
+                if np.isfinite(shape_params) and shape_params < 0.99 * MAX_GAMMA_RATIO:
+                    measured_shape_params.append(shape_params)
 
-            if not isolated:
-                continue
-            else:
-                # Object is isolated, fit shape parameters from the current observation
-                shape_params = fit_shape_params(stacked_y, stacked_flux, stacked_flux_error)
-                measured_shape_params.append(shape_params)
-    if len(measured_shape_params) == 0:
-        shape_params = load_profile_shape(image, runtime_context)
-    else:
-        shape_params = robust_standard_deviation(measured_shape_params)
-        add_profile_shape(db_address, image.instrument.id, image.filename, image.slit_width,
-                          image.dateobs, shape_params)
-
-    return shape_params
+    if len(measured_shape_params) < max(min_chunks, min_usable_fraction * fitted_chunks):
+        return np.nan
+    return float(sigma_clipped_mean(np.array(measured_shape_params), clip_sigma))
 
 
 class ProfileFitter(Stage):
@@ -638,13 +709,12 @@ class ProfileFitter(Stage):
     CHUNK_SNR = 4.0
     # How far (in sigma) the trace is allowed to move between adjacent chunks
     MAX_CHUNK_SHIFT = 1.0
-    # Kolmogorov turbulence, Fried 1966
-    SEEING_EXPONENT = -1.0 / 5.0
-    SEEING_REFERENCE_WAVELENGTH = 5000.0
 
     def do_stage(self, image):
         logger.info('Fitting profile centers and widths', image=image)
-        point_sources = detect_point_sources(image, initial_fwhm=self.INITIAL_FWHM, min_snr=self.DETECTION_SNR)
+        order_height = int(np.min(image.orders.order_heights))
+        point_sources = detect_point_sources(image.binned_data, order_height, initial_fwhm=self.INITIAL_FWHM,
+                                             min_snr=self.DETECTION_SNR)
         point_source = choose_source_to_extract(point_sources)
         profile_center, fitted_points = trace_object(
             point_source, image.binned_data,
@@ -655,16 +725,33 @@ class ProfileFitter(Stage):
         )
         profile_fwhm = fit_profile_fwhm(
             image.binned_data, image.orders, profile_center, point_source,
-            self.SEEING_EXPONENT, self.SEEING_REFERENCE_WAVELENGTH, self.STEP_SIZE,
+            SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH, self.STEP_SIZE,
             self.INITIAL_FWHM, snr_threshold=self.CHUNK_SNR
         )
-        profile_shape = find_profile_shape()
+        profile_shape = find_profile_shape(
+            image.binned_data, image.orders, profile_center, point_source, point_sources, profile_fwhm,
+            SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH, self.STEP_SIZE
+        )
+        if np.isfinite(profile_shape):
+            add_profile_shape(self.runtime_context.db_address, image.instrument.id, image.filename,
+                              image.slit_width, image.dateobs, profile_shape)
+        else:
+            recent_shapes = get_recent_profile_shape(
+                image.dateobs, image.slit_width, image.instrument,
+                self.runtime_context.db_address
+            )
+            if len(recent_shapes) == 0:
+                logger.warning('No recent profile shape to fall back on; adopting a Gaussian profile',
+                               image=image)
+                profile_shape = 0.0
+            else:
+                profile_shape = float(np.median([shape.gamma_ratio for shape in recent_shapes]))
 
         image.meta['L1PROFDG'] = (
             self.CENTER_POLYNOMIAL_ORDER, 'Degree of the trace center polynomial for order'
         )
         image.meta['L1PROFSN'] = (
-            point_source['detection_snr'], 'Matched filter s/n of the object detected'
+            point_source['snr'], 'Matched filter s/n of the object detected'
         )
         image.meta['L1PNPEAK'] = (
             len(point_sources), 'Number of sources detected in the slit in order'

@@ -7,7 +7,7 @@ from banzai.utils import import_utils
 from banzai.utils.file_utils import make_calibration_filename_function
 from banzai.utils.stats import absolute_deviation, robust_standard_deviation
 from banzai_floyds.utils.order_utils import get_order_2d_region
-from banzai_floyds.frames import MIN_FRINGE_VALUE, FRINGE_INTERPOLATED, FRINGE_NO_PATTERN
+from banzai_floyds.frames import MIN_FRINGE_VALUE, FRINGE_NO_PATTERN
 from banzai_floyds.frames import NoUsableFringePattern, valid_fringe_pixels
 from datetime import datetime
 from scipy.ndimage import map_coordinates, spline_filter, binary_erosion, distance_transform_edt
@@ -508,10 +508,9 @@ def stack_fringe_patterns(images, cutoff: float) -> tuple:
     super_fringe: 2d array of the averaged pattern, zero wherever no flat contributed or the hole
         was too wide to interpolate across
         Downstream users should set `super_fringe > MIN_FRINGE_VALUE` to only correct real fringe pixels
-    fringe_mask: 2d uint8 array recording where the pattern came from.
-            Zero means a flat pixel was used to make it.
-            FRINGE_INTERPOLATED that we filled it in across a hole
-            FRINGE_NO_PATTERN is no flat field coverage
+    fringe_mask: 2d uint8 array recording where the pattern is unusable.
+            Zero means the pattern is good there, whether it was measured from the flats or filled
+            in across a hole. FRINGE_NO_PATTERN is a hole we could not fill.
     fringe_offsets: list of dicts of the offset applied to each flat, for the FRINGE_OFFSETS table
     """
     reference_fringe = images[0].fringe
@@ -564,7 +563,6 @@ def stack_fringe_patterns(images, cutoff: float) -> tuple:
     super_fringe[np.logical_not(np.logical_or(covered, interpolated))] = 0.0
 
     fringe_mask = np.zeros(super_fringe.shape, dtype=np.uint8)
-    fringe_mask[interpolated] |= FRINGE_INTERPOLATED
     fringe_mask[super_fringe == 0.0] |= FRINGE_NO_PATTERN
     return super_fringe, fringe_mask, fringe_offsets
 

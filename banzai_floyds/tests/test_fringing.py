@@ -7,7 +7,7 @@ from banzai_floyds.fringe import FringeMaker, FringeCorrector, FringeLoader
 from banzai_floyds.fringe import fringe_interpolation_coefficients, fringe_fit_region, find_fringe_offset
 from banzai_floyds.fringe import inpaint_fringe, interpolable_region, FringeExtractor, FRINGE_EDGE_PAD
 from banzai_floyds.frames import MIN_FRINGE_VALUE, MAX_FRINGE_VALUE, NoUsableFringePattern
-from banzai_floyds.frames import FRINGE_INTERPOLATED, FRINGE_NO_PATTERN
+from banzai_floyds.frames import FRINGE_NO_PATTERN
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
 from banzai_floyds.fringe import prepare_fringe_data, make_fringe_continuum_model
@@ -214,9 +214,8 @@ def test_super_fringe_interpolates_pixels_masked_in_every_flat():
     at_columns = np.logical_and(in_order, np.isin(x2d, bad_columns))
     # The master has a real pattern at the bad columns rather than a hole below the 0.1 threshold
     assert np.all(master.data[at_columns] > 0.1)
-    # The bad columns are flagged as filled rather than measured
-    assert np.all(master.mask[at_columns] & FRINGE_INTERPOLATED != 0)
-    assert not np.any(master.mask[at_columns] & FRINGE_NO_PATTERN)
+    # Filling the hole leaves a pattern we can correct with, so the pixels are not flagged
+    assert not np.any(master.mask[at_columns])
 
     at_x_ends = np.logical_and(in_order, np.logical_or(x2d - np.min(x2d[in_order]) < FRINGE_EDGE_PAD,
                                                        np.max(x2d[in_order]) - x2d < FRINGE_EDGE_PAD))
@@ -225,13 +224,12 @@ def test_super_fringe_interpolates_pixels_masked_in_every_flat():
     # Everything else away from the bad columns is measured rather than modeled
     away_from_columns = np.logical_and(in_order, np.abs(x2d - np.mean(bad_columns)) > 20)
     assert not np.any(master.mask[away_from_columns])
-    hole = np.logical_and(master.mask & FRINGE_INTERPOLATED != 0, in_order)
-    hole = np.logical_and(hole, np.abs(x2d - np.mean(bad_columns)) < 20)
+    # The flats are shifted onto the reference grid by a few pixels, so the filled region is wider
+    # than the bad columns themselves
+    near_columns = np.logical_and(in_order, np.abs(x2d - np.mean(bad_columns)) < 20)
     edge_steps, pattern_steps = [], []
-    for row in np.unique(y2d[hole]):
-        columns = np.sort(x2d[row][hole[row]])
-        edge_steps += [np.abs(master.data[row, columns[0]] - master.data[row, columns[0] - 1]),
-                       np.abs(master.data[row, columns[-1]] - master.data[row, columns[-1] + 1])]
+    for row in np.unique(y2d[near_columns]):
+        edge_steps.append(np.max(np.abs(np.diff(master.data[row][near_columns[row]]))))
         away_from_columns = np.logical_and(in_order[row], np.abs(x2d[row] - np.mean(bad_columns)) > 20)
         pattern_steps.append(np.max(np.abs(np.diff(master.data[row][away_from_columns]))))
     # The seam left by filling the hole should not stand out from the ripple the pattern already
