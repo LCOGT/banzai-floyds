@@ -19,19 +19,21 @@ from banzai_floyds.utils.fitting_utils import voigt, MAX_GAMMA_RATIO
 
 
 OBJECT_FWHM = 10.0
+DETECTION_AT_5600 = {1: {'detection_wavelength': 5600.0}, 2: {'detection_wavelength': 5600.0}}
 
 
 def detect_in_fake_frame(frame, initial_fwhm=OBJECT_FWHM, **kwargs):
     """Bin a fake frame the way the stage does and run the detection over it."""
     binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
-    return detect_point_sources(binned_data, int(frame.orders.order_heights[0]),
+    return detect_point_sources(binned_data, frame.orders, exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
                                 initial_fwhm=initial_fwhm, **kwargs)
 
 
 def stack_fake_frame(frame, initial_fwhm=OBJECT_FWHM, **kwargs):
     binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
     return binned_data, stack_slit_profile(binned_data, int(frame.orders.order_heights[0]),
-                                           5500.0, 5700.0, initial_fwhm, **kwargs)
+                                           5500.0, 5700.0, initial_fwhm,
+                                           exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, **kwargs)
 
 
 def input_center(frame, wavelength=5600.0):
@@ -69,7 +71,8 @@ def test_stack_slit_profile_ignores_masked_pixels():
     masked['data'][to_mask] += 1.0e6
     masked['mask'][to_mask] = 1
     _, masked_flux, masked_flux_error = stack_slit_profile(masked, int(frame.orders.order_heights[0]),
-                                                           5500.0, 5700.0, OBJECT_FWHM)
+                                                           5500.0, 5700.0, OBJECT_FWHM,
+                                                           exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN)
 
     np.testing.assert_allclose(masked_flux, stacked_flux, rtol=0.05)
 
@@ -79,12 +82,13 @@ def test_detect_point_sources_finds_the_object():
     frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0)
     sources = detect_in_fake_frame(frame, min_snr=10.0)
 
-    assert len(sources) == 1
-    source, = sources
-    assert source['center'] == pytest.approx(input_center(frame), abs=0.5)
-    assert source['snr'] > 100.0
-    assert source['detection_wavelength'] == 5600.0
-    assert source['max_flux'] > 0.0
+    assert sorted(sources) == [1, 2]
+    for order_sources in sources.values():
+        source, = order_sources
+        assert source['center'] == pytest.approx(input_center(frame), abs=0.5)
+        assert source['snr'] > 100.0
+        assert source['detection_wavelength'] == 5600.0
+        assert source['max_flux'] > 0.0
 
 
 def test_the_detection_signal_to_noise_grows_with_the_source():
@@ -92,9 +96,9 @@ def test_the_detection_signal_to_noise_grows_with_the_source():
     for flux_normalization in [50.0, 1000.0, 10000.0]:
         np.random.seed(20802345)
         frame = generate_fake_science_frame(include_sky=True, flux_normalization=flux_normalization)
-        source, = detect_in_fake_frame(frame, min_snr=10.0)
-        snrs.append(source['snr'])
-    assert np.all(np.diff(snrs) > 0.0)
+        sources = detect_in_fake_frame(frame, min_snr=10.0)
+        snrs.append([order_sources[0]['snr'] for order_sources in sources.values()])
+    assert np.all(np.diff(snrs, axis=0) > 0.0)
 
 
 def test_a_source_too_faint_for_the_threshold_is_not_invented():
@@ -103,7 +107,7 @@ def test_a_source_too_faint_for_the_threshold_is_not_invented():
     # frame is already s/n ~10, so a source placed right at the threshold tests the noise rather
     # than the detector.
     frame = generate_fake_science_frame(include_sky=True, flux_normalization=3.0)
-    assert detect_in_fake_frame(frame, min_snr=10.0) == []
+    assert detect_in_fake_frame(frame, min_snr=10.0) == {1: [], 2: []}
 
 
 def test_blank_sky_has_no_sources():
@@ -111,7 +115,7 @@ def test_blank_sky_has_no_sources():
     # point if the running median leaves it standing
     np.random.seed(20802345)
     frame = generate_fake_science_frame(include_sky=True, include_trace=False)
-    assert detect_in_fake_frame(frame, min_snr=10.0) == []
+    assert detect_in_fake_frame(frame, min_snr=10.0) == {1: [], 2: []}
 
 
 def test_two_objects_are_both_found_brightest_first():
@@ -120,11 +124,12 @@ def test_two_objects_are_both_found_brightest_first():
                                         second_trace_offset=30.0, second_trace_fraction=0.4)
     sources = detect_in_fake_frame(frame, min_snr=10.0)
 
-    assert len(sources) == 2
-    assert sources[0]['snr'] > sources[1]['snr']
-    centers = sorted(source['center'] for source in sources)
-    assert centers[0] == pytest.approx(input_center(frame), abs=1.0)
-    assert centers[1] == pytest.approx(input_center(frame) + 30.0, abs=1.0)
+    for order_sources in sources.values():
+        assert len(order_sources) == 2
+        assert order_sources[0]['snr'] > order_sources[1]['snr']
+        centers = sorted(source['center'] for source in order_sources)
+        assert centers[0] == pytest.approx(input_center(frame), abs=1.0)
+        assert centers[1] == pytest.approx(input_center(frame) + 30.0, abs=1.0)
 
 
 def test_a_cosmic_ray_is_not_a_source():
@@ -133,7 +138,7 @@ def test_a_cosmic_ray_is_not_a_source():
     order_center = frame.orders.center(np.arange(frame.data.shape[1]))[0]
     # A couple of pixels in one column, far brighter than any real object in the frame
     frame.data[int(order_center[1000]) + 25, 1000:1002] += 5.0e4
-    assert detect_in_fake_frame(frame, min_snr=10.0) == []
+    assert detect_in_fake_frame(frame, min_snr=10.0) == {1: [], 2: []}
 
 
 def test_a_source_against_the_end_of_the_slit_is_rejected():
@@ -143,24 +148,41 @@ def test_a_source_against_the_end_of_the_slit_is_rejected():
     sources = detect_in_fake_frame(frame, min_snr=10.0)
 
     # The running median has only one side of the slit to work with that close to the end
-    assert len(sources) == 1
-    assert sources[0]['center'] == pytest.approx(input_center(frame), abs=0.5)
+    for order_sources in sources.values():
+        assert len(order_sources) == 1
+        assert order_sources[0]['center'] == pytest.approx(input_center(frame), abs=0.5)
 
 
-def trace_fake_frame(fake_frame, point_source=None, snr_threshold=ProfileFitter.CHUNK_SNR, **kwargs):
+def test_each_order_keeps_its_own_center():
+    np.random.seed(20802345)
+    # The orders image the slit at slightly different scales, so the same object sits a couple of
+    # pixels apart in them. A stack of both orders would average that offset away.
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
+                                        order_center_offset=3.0)
+    sources = detect_in_fake_frame(frame, min_snr=10.0)
+
+    centers = {}
+    for order_id, center in zip(frame.orders.order_ids, frame.input_profile_centers):
+        centers[order_id], = [source['center'] for source in sources[order_id]]
+        assert centers[order_id] == pytest.approx(float(center(5600.0)), abs=0.5)
+    assert centers[2] - centers[1] == pytest.approx(3.0, abs=0.5)
+
+
+def trace_fake_frame(fake_frame, point_sources=None, snr_threshold=ProfileFitter.CHUNK_SNR, **kwargs):
     """Bin a fake frame, detect the sources in it, and trace whichever one we were pointed at."""
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders)
     fwhm = sigma_to_fwhm(fake_frame.input_profile_sigma)
-    order_height = int(np.min(fake_frame.orders.order_heights))
-    point_sources = detect_point_sources(binned_data, order_height, initial_fwhm=fwhm,
-                                         min_snr=ProfileFitter.DETECTION_SNR)
-    if point_source is None:
-        point_source = choose_source_to_extract(point_sources)
-    trace_polynomials, trace_points = trace_object(point_source, binned_data, fake_frame.orders, fwhm,
+    sources_by_order = detect_point_sources(binned_data, fake_frame.orders,
+                                            exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
+                                            initial_fwhm=fwhm, min_snr=ProfileFitter.DETECTION_SNR)
+    if point_sources is None:
+        point_sources = choose_source_to_extract(sources_by_order)
+    trace_polynomials, trace_points = trace_object(point_sources, binned_data, fake_frame.orders, fwhm,
                                                    ProfileFitter.CENTER_POLYNOMIAL_ORDER,
-                                                   ProfileFitter.STEP_SIZE, snr_threshold, **kwargs)
-    return binned_data, point_sources, trace_polynomials, trace_points
+                                                   ProfileFitter.STEP_SIZE, snr_threshold,
+                                                   exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, **kwargs)
+    return binned_data, sources_by_order, trace_polynomials, trace_points
 
 
 def assert_trace_stays_in_the_slit(traces, order_heights):
@@ -176,6 +198,18 @@ def test_tracing():
     np.random.seed(20802345)
     # An object at a known place in the slit comes back out of the trace fit
     fake_frame = generate_fake_science_frame(flux_normalization=10000.0)
+    _, _, traces, _ = trace_fake_frame(fake_frame)
+    for trace, input_center in zip(traces, fake_frame.input_profile_centers):
+        assert trace is not None
+        wavelengths = np.linspace(trace.domain[0], trace.domain[1], 1000)
+        np.testing.assert_allclose(trace(wavelengths), input_center(wavelengths), atol=0.5)
+
+
+def test_tracing_follows_each_order_from_its_own_detection():
+    np.random.seed(20802345)
+    # Each order is traced from where the object was detected in that order, not from a center the
+    # two orders were averaged into.
+    fake_frame = generate_fake_science_frame(flux_normalization=10000.0, order_center_offset=3.0)
     _, _, traces, _ = trace_fake_frame(fake_frame)
     for trace, input_center in zip(traces, fake_frame.input_profile_centers):
         assert trace is not None
@@ -244,10 +278,11 @@ def test_the_trace_stays_on_the_source_it_was_given():
     # than jumping 25 pixels to the brighter one.
     fake_frame = generate_fake_science_frame(flux_normalization=10000.0, second_trace_offset=-25.0,
                                              second_trace_fraction=0.3)
-    _, point_sources, _, _ = trace_fake_frame(fake_frame)
-    assert len(point_sources) == 2
-    fainter = min(point_sources, key=lambda source: source['snr'])
-    _, _, traces, _ = trace_fake_frame(fake_frame, point_source=fainter)
+    _, sources_by_order, _, _ = trace_fake_frame(fake_frame)
+    fainter = {order_id: min(sources, key=lambda source: source['snr'])
+               for order_id, sources in sources_by_order.items()}
+    assert all(len(sources) == 2 for sources in sources_by_order.values())
+    _, _, traces, _ = trace_fake_frame(fake_frame, point_sources=fainter)
     assert_trace_stays_in_the_slit(traces, fake_frame.orders.order_heights)
     for trace, input_center in zip(traces, fake_frame.input_profile_centers):
         wavelengths = np.linspace(trace.domain[0], trace.domain[1], 1000)
@@ -460,9 +495,10 @@ def fwhm_from_fake_frame(fake_frame, initial_fwhm=None):
     binned_data, _, traces, _ = trace_fake_frame(fake_frame)
     if initial_fwhm is None:
         initial_fwhm = sigma_to_fwhm(fake_frame.input_profile_sigma)
-    return fit_profile_fwhm(binned_data, fake_frame.orders, traces, {'detection_wavelength': 5600.0},
-                            SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH, ProfileFitter.STEP_SIZE,
-                            initial_fwhm, snr_threshold=ProfileFitter.CHUNK_SNR)
+    return fit_profile_fwhm(binned_data, fake_frame.orders, traces, DETECTION_AT_5600,
+                            SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH,
+                            exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, chunk_size=ProfileFitter.STEP_SIZE,
+                            initial_fwhm=initial_fwhm, snr_threshold=ProfileFitter.CHUNK_SNR)
 
 
 def test_fit_profile_fwhm_recovers_the_input_width():
@@ -490,13 +526,14 @@ def test_fit_profile_fwhm_survives_having_nothing_to_measure():
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders)
     width = fit_profile_fwhm(binned_data, fake_frame.orders, [None, None],
-                             {'detection_wavelength': 5600.0}, SEEING_EXPONENT,
-                             SEEING_REFERENCE_WAVELENGTH, ProfileFitter.STEP_SIZE, OBJECT_FWHM)
+                             DETECTION_AT_5600, SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH,
+                             exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
+                             chunk_size=ProfileFitter.STEP_SIZE, initial_fwhm=OBJECT_FWHM)
     assert not np.isfinite(width)
 
 
 def test_nothing_detected_gives_nothing_to_extract():
-    assert choose_source_to_extract([]) is None
+    assert choose_source_to_extract({1: [], 2: []}) == {}
 
 
 def test_the_acquisition_prior_prefers_the_source_the_observer_asked_for():
@@ -504,7 +541,7 @@ def test_the_acquisition_prior_prefers_the_source_the_observer_asked_for():
     # sources the central one is the target. Over 231 single-source orders it landed within 6 px of
     # center 80% of the time.
     peaks = [{'center': 2.0, 'snr': 100.0}, {'center': 25.0, 'snr': 100.0}]
-    assert choose_source_to_extract(peaks)['center'] == 2.0
+    assert choose_source_to_extract({1: peaks})[1]['center'] == 2.0
 
 
 def test_a_decisively_brighter_source_beats_a_central_one():
@@ -512,40 +549,40 @@ def test_a_decisively_brighter_source_beats_a_central_one():
     # peak disagreed. The bright source sat 27 px off center and was the real target, so a factor of
     # two in signal-to-noise has to outweigh the acquisition prior.
     peaks = [{'center': -27.0, 'snr': 191.0}, {'center': -10.0, 'snr': 94.0}]
-    assert choose_source_to_extract(peaks)['center'] == -27.0
+    assert choose_source_to_extract({1: peaks})[1]['center'] == -27.0
 
 
 def test_a_grid_edge_artifact_loses_to_the_star():
     # Every flux standard -- one star, by construction -- showed a "second source" out at 33 to 35
     # px. It is far enough down in signal-to-noise that brightness rejects it.
     peaks = [{'center': 5.0, 'snr': 6376.0}, {'center': -34.0, 'snr': 1531.0}]
-    assert choose_source_to_extract(peaks)['center'] == 5.0
+    assert choose_source_to_extract({1: peaks})[1]['center'] == 5.0
 
 
 def test_a_lone_source_is_extracted_wherever_it_sits():
     # Position only ever breaks a tie, so a single detection is the target even far off center.
     peaks = [{'center': -30.0, 'snr': 12.0}]
-    assert choose_source_to_extract(peaks)['center'] == -30.0
+    assert choose_source_to_extract({1: peaks})[1]['center'] == -30.0
 
 
 def test_the_tie_break_turns_on_at_the_signal_to_noise_ratio():
     # Either side of snr_ratio the two peaks are the same pair, so only the threshold decides
     # whether brightness or position wins.
     peaks = [{'center': -25.0, 'snr': 100.0}, {'center': 2.0, 'snr': 61.0}]
-    assert choose_source_to_extract(peaks, snr_ratio=0.6)['center'] == 2.0
-    assert choose_source_to_extract(peaks, snr_ratio=0.62)['center'] == -25.0
+    assert choose_source_to_extract({1: peaks}, snr_ratio=0.6)[1]['center'] == 2.0
+    assert choose_source_to_extract({1: peaks}, snr_ratio=0.62)[1]['center'] == -25.0
 
 
 def test_the_chosen_source_carries_its_detection_information():
     # The trace, width and shape fits all read these off whichever peak comes back.
     peaks = [{'center': 2.0, 'snr': 100.0, 'detection_wavelength': 5600.0, 'max_flux': 250.0},
              {'center': 25.0, 'snr': 40.0, 'detection_wavelength': 5600.0, 'max_flux': 90.0}]
-    assert choose_source_to_extract(peaks) is peaks[0]
+    assert choose_source_to_extract({1: peaks})[1] is peaks[0]
 
 
 def test_choosing_does_not_reorder_the_caller_s_list():
     peaks = [{'center': 25.0, 'snr': 50.0}, {'center': 2.0, 'snr': 100.0}]
-    choose_source_to_extract(peaks)
+    choose_source_to_extract({1: peaks})
     assert peaks[0]['center'] == 25.0
 
 
@@ -676,9 +713,10 @@ def test_a_compact_neighbor_is_caught_by_the_peak_list():
     # A companion close enough to put flux in the wings is a source in its own right, so it is
     # already in the detection list and does not need a statistic of its own to find.
     sources = [{'center': 0.0}, {'center': 4 * VOIGT_SIGMA}]
-    assert has_nearby_source(sources[0], sources, VOIGT_FWHM)
+    assert has_nearby_source({1: sources[0]}, {1: sources}, VOIGT_FWHM)
     # The object never counts as its own neighbor, and one well outside the wings does not either
-    assert not has_nearby_source(sources[0], [sources[0], {'center': 20 * VOIGT_SIGMA}], VOIGT_FWHM)
+    assert not has_nearby_source({1: sources[0]}, {1: [sources[0], {'center': 20 * VOIGT_SIGMA}]},
+                                 VOIGT_FWHM)
 
 
 def profile_context():

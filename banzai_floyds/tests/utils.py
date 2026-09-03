@@ -125,7 +125,8 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                 fringe_offset_x=0, include_trace=True, background=0.0,
                                 include_super_fringe=False, flux_normalization=10000.0,
                                 second_trace_offset=None, second_trace_fraction=0.4,
-                                trace_wavelength_range=None, profile_fwhm=10.0):
+                                trace_wavelength_range=None, profile_fwhm=10.0,
+                                order_center_offset=0.0):
     """
     Generate a fake science frame to run tests on.
 
@@ -158,6 +159,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     profile_fwhm: float
         FWHM of the object profile in pixels. Wide values are what push a background window off the
         end of a 93 pixel order.
+    order_center_offset: float
+        Shift the object this many pixels in the second order relative to the first, the way the two
+        orders imaging the slit at different scales does on real frames.
 
     Returns
     -------
@@ -193,10 +197,10 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                  domain=(0, 1541))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     # The object sits at one place in the slit and the slow drift with wavelength is differential
-    # atmospheric refraction, neither of which cares which order the light lands in, so both orders
-    # see the same center at the same wavelength.
+    # atmospheric refraction, but the orders image the slit at slightly different scales, so the
+    # same object lands a pixel or two apart in the two orders.
     trace = Legendre((5, 10, 4), domain=(3200.0, 10200.0))
-    profile_centers = [trace, trace]
+    profile_centers = [trace, trace + order_center_offset]
 
     # Work out the wavelength solution for larger than the typical order size so that we
     # can shift the fringe pattern up and down
