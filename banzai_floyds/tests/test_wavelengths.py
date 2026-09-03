@@ -102,7 +102,6 @@ def test_lsf_round_trips_through_header():
     reconstructed = WavelengthSolution.from_fits(solution.to_header(), orders,
                                                  lsf_header=solution.lsf_to_header())
     assert reconstructed.lsf_params == lsf_params
-    np.testing.assert_allclose(reconstructed.lsf_sigma, [2.83, 2.13])
     np.testing.assert_allclose(reconstructed.fwhm, [sigma_to_fwhm(2.83), sigma_to_fwhm(2.13)])
     # The LSF table samples the unit-amplitude (amplitude = 1) Gauss-Hermite shape for each order.
     lsf_table = solution.lsf_to_table()

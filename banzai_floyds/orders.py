@@ -508,6 +508,9 @@ class OrderSolver(Stage):
                       meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': order_heights[0]}))
         )
         image.is_master = True
+        # Skyflats are automatically public. Some engineering data we collected
+        # previously still were "proprietary" so we explicitly set the public date.
+        image.public_date = image.dateobs
 
         return image
 

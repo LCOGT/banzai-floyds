@@ -24,6 +24,7 @@ dependencies = [
     "ipython",
     "pywavelets",
     "scikit-image",
+    "scikit-learn",
     "alembic"
 ]
 

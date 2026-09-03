@@ -130,6 +130,20 @@ class LSFParams(Base):
     good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
 
 
+class ProfileShape(Base):
+    __tablename__ = 'profileshape'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), index=True)
+    filename = Column(String(100), unique=True)
+    # A wider slit lets in more of the seeing halo, so how heavy the wings are depends on it the
+    # same way the LSF does.
+    slit_width = Column(Float)
+    dateobs = Column(DateTime)
+    gamma_ratio = Column(Float)
+    good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
+    good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
+
+
 def create_db(db_address):
     # Create an engine for the database
     engine = create_engine(db_address)
@@ -187,6 +201,31 @@ def add_lsf_params(db_address, instrument_id, filename, order_id, slit_width, da
     with get_session(db_address) as db_session:
         add_or_update_record(db_session, LSFParams, {'filename': filename, 'order_id': order_id},
                              record_attributes)
+        db_session.commit()
+
+
+def get_recent_profile_shape(dateobs, slit_width, instrument, db_address, limit=10):
+    """Return up to `limit` profile shape records for this instrument and slit width, closest in time first."""
+    with get_session(db_address) as db_session:
+        shape_query = db_session.query(ProfileShape).filter(ProfileShape.instrument_id == instrument.id)
+        shape_query = shape_query.filter(ProfileShape.slit_width == slit_width)
+        shape_query = shape_query.filter(ProfileShape.good_after <= dateobs)
+        shape_query = shape_query.filter(ProfileShape.good_until >= dateobs)
+        shape_query = shape_query.order_by(get_order_func(db_session, dateobs, ProfileShape))
+        profile_shapes = shape_query.limit(limit).all()
+    return profile_shapes
+
+
+def add_profile_shape(db_address, instrument_id, filename, slit_width, dateobs, gamma_ratio,
+                      good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
+    """Store (or update) the fitted Voigt shape parameter of the object in one science frame."""
+    if isinstance(dateobs, str):
+        dateobs = parse_date_obs(dateobs)
+    record_attributes = {'instrument_id': instrument_id, 'filename': filename, 'slit_width': slit_width,
+                         'dateobs': dateobs, 'gamma_ratio': gamma_ratio,
+                         'good_after': parse_date_obs(good_after), 'good_until': parse_date_obs(good_until)}
+    with get_session(db_address) as db_session:
+        add_or_update_record(db_session, ProfileShape, {'filename': filename}, record_attributes)
         db_session.commit()
 
 
