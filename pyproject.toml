@@ -25,7 +25,8 @@ dependencies = [
     "pywavelets",
     "scikit-image",
     "scikit-learn",
-    "alembic"
+    "alembic",
+    "astroquery"
 ]
 
 [project.optional-dependencies]

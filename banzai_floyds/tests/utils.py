@@ -1,11 +1,12 @@
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
-from banzai_floyds.utils.profile_utils import profile_sigmas, SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
+from banzai_floyds.utils.profile_utils import profile_sigmas
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.utils.telluric_utils import estimate_telluric
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.utils.flux_utils import airmass_extinction
+from banzai_floyds.utils.gaia_utils import GAIA_COLUMNS
 
 import numpy as np
 from astropy.io import fits
@@ -126,7 +127,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                 include_super_fringe=False, flux_normalization=10000.0,
                                 second_trace_offset=None, second_trace_fraction=0.4,
                                 trace_wavelength_range=None, profile_fwhm=10.0,
-                                order_center_offset=0.0):
+                                order_center_offset=0.0, host_fraction=0.0, host_width_ratio=4.0):
     """
     Generate a fake science frame to run tests on.
 
@@ -162,6 +163,10 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     order_center_offset: float
         Shift the object this many pixels in the second order relative to the first, the way the two
         orders imaging the slit at different scales does on real frames.
+    host_fraction: float
+        Brightness of a galaxy centered under the object relative to it, with a flat spectrum
+    host_width_ratio: float
+        Width of that galaxy relative to the object
 
     Returns
     -------
@@ -237,8 +242,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                       order_models[i].domain, k=EDGE_SHARPNESS)
         trace_center = profile_centers[i](wavelengths.data)
         # The width the frame is built with follows the same seeing power law the pipeline assumes
-        profile_widths = profile_sigmas(wavelengths.data[in_order], profile_fwhm,
-                                        SEEING_REFERENCE_WAVELENGTH, SEEING_EXPONENT)
+        profile_widths = profile_sigmas(wavelengths.data[in_order], Legendre([profile_fwhm]))
         if trace_wavelength_range is None:
             trace_weight = weight
         else:
@@ -254,6 +258,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                     data[in_order] += trace_weight[in_order] * flux_normalization * second_trace_fraction * gauss(
                         slit_coordinates[in_order], trace_center[in_order] + second_trace_offset,
                         profile_widths)
+                if host_fraction > 0.0:
+                    data[in_order] += trace_weight[in_order] * flux_normalization * host_fraction * gauss(
+                        slit_coordinates[in_order], trace_center[in_order], host_width_ratio * profile_widths)
             else:
                 profile = gauss(slit_coordinates[in_order], trace_center[in_order],
                                 profile_widths)
@@ -275,8 +282,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                 line_spread = gauss(sky_wavelengths, line['wavelength'],
                                     fwhm_to_sigma(line_fwhms_angstroms[i]))
                 sky_spectrum += line['line_strength'] * line_spread * sky_normalization
-            # Make a slow illumination gradient to make sure things work even if the sky is not flat
-            illumination = 100 * gauss(slit_coordinates[in_order], 0.0, 48)
+            # The real slit is flat to a few percent across its interior, with the roll-off confined to
+            # the outer rows that the stacks and the background fit both drop
+            illumination = 0.83 * (1.0 - 0.03 * (slit_coordinates[in_order] / (order_height / 2.0)) ** 2)
             input_sky[in_order] = weight[in_order] * np.interp(wavelengths.data[in_order],
                                                                sky_wavelengths,
                                                                sky_spectrum) * illumination
@@ -415,3 +423,23 @@ class TestCalibrationFrame(FLOYDSCalibrationFrame):
     def write(self, context):
         # Short circuit the write method so we don't actually write anything during testing
         return
+
+
+def fake_gaia_source(ra: float, dec: float, east: float = 0.0, north: float = 0.0, gmag: float = 12.0,
+                     parallax: float = 10.0, parallax_error: float = 0.05, pm_ra: float = 0.0,
+                     pm_dec: float = 0.0, qso: int = 0, galaxy: int = 0) -> dict:
+    """One Gaia DR3 row this many arcseconds east and north of (ra, dec) at the catalog epoch.
+
+    By default it is a nearby star: bright, with a parallax measured at 200 sigma.
+    """
+    source_dec = dec + north / 3600.0
+    return {'RA_ICRS': ra + east / 3600.0 / np.cos(np.radians(source_dec)), 'DE_ICRS': source_dec,
+            'pmRA': pm_ra, 'pmDE': pm_dec, 'Plx': parallax, 'e_Plx': parallax_error, 'Gmag': gmag,
+            'QSO': qso, 'Gal': galaxy}
+
+
+def fake_gaia_field(*sources: dict) -> Table:
+    """The table a Gaia query around a target returns, empty if no sources are given."""
+    if len(sources) == 0:
+        return Table(names=GAIA_COLUMNS)
+    return Table(rows=list(sources), names=GAIA_COLUMNS)

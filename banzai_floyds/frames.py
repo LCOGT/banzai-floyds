@@ -7,7 +7,7 @@ import os
 from astropy.io import fits
 from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data, profile_sigmas
-from banzai_floyds.utils.profile_utils import SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
+from banzai_floyds.utils.profile_utils import profile_fits_to_header
 from astropy.table import Table
 from banzai_floyds import dbs
 from typing import Optional
@@ -139,42 +139,38 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @profile.setter
     def profile(self, value):
-        centers, fwhm, gamma_ratio, fitted_points = value
-        self._profile_fits = centers, fwhm, gamma_ratio
+        """Store the fitted profile: one (center, FWHM, gamma_ratio) Legendre in wavelength per order.
+
+        The polynomials go into the PROFILEFITS header alongside the chunk measurements they were fit
+        through, the evaluated profile goes into the PROFILE extension as the extraction weights, and
+        the binned data gets the per pixel columns the background and extraction stages read.
+        """
+        centers, fwhms, gamma_ratios, fitted_points = value
+        self._profile_fits = centers, fwhms, gamma_ratios
         if fitted_points is None:
             fitted_points = Table({'wavelength': [], 'center': [], 'order': []})
-        header = fits.Header()
-        header['PROFFWHM'] = fwhm, f'FWHM of the profile in pixels at {SEEING_REFERENCE_WAVELENGTH:.0f} Angstroms'
-        header['PROFGAM'] = gamma_ratio, 'Ratio of the Lorentzian to the Gaussian width of the profile'
-        for order, center in zip([1, 2], centers):
-            for i, coef in enumerate(center.coef):
-                header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
-
-            header[f'O{order}CTRO'] = center.degree(), f'Polynomial Order for the center in order {order}'
-
-            domain_str = '{0} domain value for the center fit of the profile for order {1}'
-            header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', order)
-            header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', order)
-
+        header = profile_fits_to_header(centers, fwhms, gamma_ratios)
         self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
 
-        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, fwhm, gamma_ratio,
+        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, fwhms, gamma_ratios,
                                                      self.orders, self.wavelengths.data),
                                 name='PROFILE', meta=fits.Header({}))
         self.add_or_update(profile_hdu)
-        if self.binned_data is not None:
-            profile_centers = np.zeros(len(self.binned_data))
-            for order in [1, 2]:
-                in_order = self.binned_data['order'] == order
-                profile_centers[in_order] = centers[order - 1](self.binned_data['wavelength'][in_order])
-
-            self.binned_data['y_profile'] = self.binned_data['y_order'] - profile_centers
-            self.binned_data['profile_sigma'] = profile_sigmas(self.binned_data['wavelength'], fwhm,
-                                                               SEEING_REFERENCE_WAVELENGTH, SEEING_EXPONENT)
-            # The background stage fits the object alongside the sky, so it needs the wings too
-            self.binned_data['profile_gamma_ratio'] = gamma_ratio
-            x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
-            self.binned_data['weights'] = self['PROFILE'].data[y, x]
+        if self.binned_data is None:
+            return
+        self.binned_data['y_profile'] = 0.0
+        self.binned_data['profile_sigma'] = 0.0
+        # The background stage fits the object alongside the sky, so it needs the wings too
+        self.binned_data['profile_gamma_ratio'] = 0.0
+        for order in [1, 2]:
+            in_order = self.binned_data['order'] == order
+            wavelengths = self.binned_data['wavelength'][in_order]
+            center = centers[order - 1](wavelengths)
+            self.binned_data['y_profile'][in_order] = self.binned_data['y_order'][in_order] - center
+            self.binned_data['profile_sigma'][in_order] = profile_sigmas(wavelengths, fwhms[order - 1])
+            self.binned_data['profile_gamma_ratio'][in_order] = gamma_ratios[order - 1](wavelengths)
+        x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
+        self.binned_data['weights'] = self['PROFILE'].data[y, x]
 
     @property
     def profile_fits(self):
@@ -203,6 +199,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @property
     def background(self):
+        if self['BACKGROUND'] is None:
+            return None
         return self['BACKGROUND'].data
 
     @background.setter
@@ -298,6 +296,15 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     @property
     def slit_width(self):
         return self.meta['APERWID']
+
+    @property
+    def slit_position_angle(self) -> float | None:
+        # The rotator is set to the parallactic angle at acquisition, so this is where the slit
+        # actually sat on the sky
+        try:
+            return float(self.meta.get('ROTSKYPA'))
+        except (ValueError, TypeError):
+            return None
 
     @property
     def ra(self):

@@ -19,12 +19,11 @@ from reduction_utils import reduce_to_stage, frame_metadata, clear_cosmic_ray_fl
 from report_utils import Report, raw_frame_paths, write_reports
 from banzai_floyds.matched_filter import matched_filter_signal, matched_filter_normalization
 from banzai_floyds.profile import detect_point_sources, choose_source_to_extract, ProfileFitter
-from banzai_floyds.profile import stack_slit_profile
+from banzai_floyds.profile import stack_slit_profile, OrderChunk
 from banzai_floyds.profile import measure_chunk_fwhms, measure_chunk_shape_params
 from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, voigt
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, parameter_variances
-from banzai_floyds.utils.profile_utils import profile_sigmas, seeing_scaling
-from banzai_floyds.utils.profile_utils import SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
+from banzai_floyds.utils.profile_utils import profile_sigmas
 
 OUTPUT_PDF = 'profile_cross_sections.pdf'
 OUTPUT_CSV = 'profile_cross_sections.csv'
@@ -74,27 +73,30 @@ def profile_measurement_points(image, centers: list) -> dict:
     point_sources = choose_source_to_extract(sources_by_order)
     if len(point_sources) == 0:
         return {}
-    _, fwhm, shape = image.profile_fits
+    _, fwhms, _ = image.profile_fits
     points = {}
     for order_id in image.orders.order_ids:
         traces = [center if index == order_id - 1 else None for index, center in enumerate(centers)]
-        fwhm_wavelengths, fwhms = measure_chunk_fwhms(image.binned_data, image.orders, traces, point_sources,
-                                                      exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
-                                                      chunk_size=ProfileFitter.STEP_SIZE,
-                                                      initial_fwhm=ProfileFitter.INITIAL_FWHM,
-                                                      snr_threshold=ProfileFitter.CHUNK_SNR)
-        gamma_wavelengths, gammas, _ = measure_chunk_shape_params(
-            image.binned_data, image.orders, traces, point_sources, fwhm, SEEING_EXPONENT,
-            SEEING_REFERENCE_WAVELENGTH, exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
-            chunk_size=ProfileFitter.STEP_SIZE
+        fwhm_points = measure_chunk_fwhms(
+            image.binned_data, image.orders, traces, point_sources,
+            exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, chunk_size=ProfileFitter.STEP_SIZE,
+            initial_fwhm=ProfileFitter.INITIAL_FWHM, snr_threshold=ProfileFitter.WIDTH_SNR,
+            half_max_sigma=ProfileFitter.HALF_MAX_SIGMA
         )
-        points[order_id] = {'sigma_wavelength': fwhm_wavelengths, 'sigma': fwhm_to_sigma(fwhms),
-                            'gamma_wavelength': gamma_wavelengths, 'gamma': gammas}
+        gamma_points, _ = measure_chunk_shape_params(
+            image.binned_data, image.orders, traces, point_sources, fwhms,
+            exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, chunk_size=ProfileFitter.STEP_SIZE,
+            wing_sigma=ProfileFitter.SHAPE_SIGMA, wing_snr=ProfileFitter.SHAPE_SNR
+        )
+        points[order_id] = {'sigma_wavelength': np.asarray(fwhm_points['wavelength']),
+                            'sigma': fwhm_to_sigma(np.asarray(fwhm_points['fwhm'])),
+                            'gamma_wavelength': np.asarray(gamma_points['wavelength']),
+                            'gamma': np.asarray(gamma_points['gamma_ratio'])}
     return points
 
 
 def stack_cross_section(order_data: Table, order_height: int, wavelow: float, wavehigh: float,
-                        fwhm: float, trace_center: float) -> tuple | None:
+                        trace_center: float) -> tuple | None:
     """Stack the background subtracted cross section over a range of wavelength bins.
 
     Parameters
@@ -105,8 +107,6 @@ def stack_cross_section(order_data: Table, order_height: int, wavelow: float, wa
         Height of the order in pixels.
     wavelow, wavehigh : float
         The wavelength bins to stack.
-    fwhm : float
-        Profile FWHM at this wavelength, which sets the correlation length of the stacker.
     trace_center : float
         The fitted trace, in y_order, at this wavelength.
 
@@ -118,13 +118,13 @@ def stack_cross_section(order_data: Table, order_height: int, wavelow: float, wa
     Notes
     -----
     The stacking is the pipeline's own stack_slit_profile so that what is characterized here is the
-    estimator the profile stage fits, down to the Gaussian process resampling, the masking, and the
-    slit edges it drops. It returns the slit in y_order and the pipeline carries the trace center
-    alongside it; the grid is shifted here instead so the models below can hold the trace at zero.
-    Bins the stacker could not fill come back with infinite errors.
+    estimator the profile stage fits, down to the shift and add onto the common grid, the masking,
+    and the slit edges it drops. It returns the slit in y_order and the pipeline carries the trace
+    center alongside it; the grid is shifted here instead so the models below can hold the trace at
+    zero. Bins the stacker could not fill come back with infinite errors.
     """
-    grid, flux, flux_error = stack_slit_profile(order_data, order_height, wavelow, wavehigh, fwhm,
-                                                exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
+    chunk = OrderChunk(order_height, order_data, wavelow, wavehigh)
+    grid, flux, flux_error = stack_slit_profile(chunk, exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
                                                 data_keyword='background_subtracted')
     stacked = np.isfinite(flux_error)
     if stacked.sum() < MIN_STACK_POINTS:
@@ -276,7 +276,7 @@ def cross_section_record(image) -> dict:
     The record holds the stacks, the model curves, and the profile polynomials sampled for plotting,
     so the reduction parallelizes and the plotting happens in the parent.
     """
-    centers, fwhm, shape = image.profile_fits
+    centers, fwhms, shapes = image.profile_fits
     points = image['PROFILEFITS'].data
     profile_points = profile_measurement_points(image, centers)
     record = {'orders': {}}
@@ -290,17 +290,13 @@ def cross_section_record(image) -> dict:
         chunks = []
         for chunk_id, (chunk_low, chunk_high) in enumerate(wavelength_chunks(order_data, N_CHUNKS)):
             wavelength = 0.5 * (chunk_low + chunk_high)
-            chunk_fwhm = float(fwhm * seeing_scaling(wavelength, SEEING_REFERENCE_WAVELENGTH,
-                                                     SEEING_EXPONENT))
             trace_center = float(centers[order_id - 1](wavelength))
-            stack = stack_cross_section(order_data, order_height, chunk_low, chunk_high, chunk_fwhm,
-                                        trace_center)
+            stack = stack_cross_section(order_data, order_height, chunk_low, chunk_high, trace_center)
             if stack is None:
                 continue
             grid, flux, flux_error = stack
-            sigma_pipeline = float(profile_sigmas(wavelength, fwhm, SEEING_REFERENCE_WAVELENGTH,
-                                                  SEEING_EXPONENT))
-            shape_pipeline = float(shape)
+            sigma_pipeline = float(profile_sigmas(wavelength, fwhms[order_id - 1]))
+            shape_pipeline = float(shapes[order_id - 1](wavelength))
             measurements, curves = measure_cross_section(grid, flux, flux_error, sigma_pipeline,
                                                          shape_pipeline, order_height)
             measurements.update({'chunk': chunk_id, 'wavelength': wavelength})
@@ -312,9 +308,8 @@ def cross_section_record(image) -> dict:
             'chunks': chunks,
             'model_wavelengths': model_wavelengths,
             'model_center': centers[order_id - 1](model_wavelengths),
-            'model_sigma': profile_sigmas(model_wavelengths, fwhm, SEEING_REFERENCE_WAVELENGTH,
-                                          SEEING_EXPONENT),
-            'model_shape': np.full_like(model_wavelengths, shape),
+            'model_sigma': profile_sigmas(model_wavelengths, fwhms[order_id - 1]),
+            'model_shape': shapes[order_id - 1](model_wavelengths),
             'points': {column: np.asarray(points[column][in_points])
                        for column in ['wavelength', 'center', 'center_error', 'used']},
             'profile_points': profile_points.get(order_id, {}),

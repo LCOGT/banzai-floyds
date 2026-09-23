@@ -22,7 +22,7 @@ from report_utils import Report, raw_frame_paths, write_reports
 from banzai_floyds.background import ORDER_EDGE_MARGIN
 from banzai_floyds.extract import Extractor
 from banzai_floyds.profile import ProfileFitter, remove_smooth_background
-from banzai_floyds.utils.profile_utils import profile_sigmas, SEEING_EXPONENT, SEEING_REFERENCE_WAVELENGTH
+from banzai_floyds.utils.profile_utils import profile_sigmas
 
 OUTPUT_PDF = 'trace_overlay_results.pdf'
 OUTPUT_CSV = 'trace_overlay_results.csv'
@@ -57,18 +57,8 @@ def trace_in_pixels(image, wavelength_2d: np.ndarray, order_id: int, columns: np
     -------
     (order_center, center, sigma): the y of the center of the order, of the trace, and the fitted
     profile width, each in pixels at every column.
-
-    Notes
-    -----
-    The pipeline never computes a trace center per column. It assigns every pixel a profile
-    coordinate y_profile = y_order - center(wavelength) at that pixel's own wavelength, and the
-    extraction window is a cut on that coordinate. Because the wavelength changes along the slit,
-    center(wavelength) read off at any single row is not where y_profile vanishes, so the trace this
-    page draws is taken as the zero crossing of the pipeline's own expression down each column.
-    Interpolating that crossing costs nothing and keeps the overlay from being a second, slightly
-    different definition of the trace.
     """
-    centers, fwhm, _ = image.profile_fits
+    centers, fwhms, _ = image.profile_fits
     order_center = image.orders.center(columns.astype(float))[order_id - 1]
     half_height = order_height // 2
     rows = np.clip(np.round(order_center)[np.newaxis, :]
@@ -101,8 +91,7 @@ def trace_in_pixels(image, wavelength_2d: np.ndarray, order_id: int, columns: np
     center_row = np.clip(np.round(order_center).astype(int), 0, wavelength_2d.shape[0] - 1)
     center[np.logical_not(found)] = 0.0
     trace_wavelength[np.logical_not(found)] = wavelength_2d[center_row, columns][np.logical_not(found)]
-    return order_center, order_center + center, profile_sigmas(trace_wavelength, fwhm,
-                                                               SEEING_REFERENCE_WAVELENGTH, SEEING_EXPONENT)
+    return order_center, order_center + center, profile_sigmas(trace_wavelength, fwhms[order_id - 1])
 
 
 def straighten_order(data: np.ndarray, order_center: np.ndarray, columns: np.ndarray,

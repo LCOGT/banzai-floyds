@@ -1,6 +1,5 @@
 from banzai_floyds.background import fit_background, background_degree, BackgroundFitter
 from banzai_floyds.utils.fitting_utils import robust_legendre_fit, fwhm_to_sigma, sigma_to_fwhm
-from banzai_floyds.utils.fitting_utils import ClampedLegendre
 from banzai_floyds.cosmics import CosmicRayDetector
 from banzai_floyds.extract import set_extraction_region
 from banzai_floyds.tests.utils import generate_fake_science_frame
@@ -14,9 +13,12 @@ from numpy.polynomial.legendre import Legendre
 ORDER_EDGE_MARGIN = 2
 
 
-def set_up_profile(frame):
-    """Give a fake frame the profile the background stage needs, from the values it was built with."""
-    frame.profile = frame.input_profile_centers, sigma_to_fwhm(frame.input_profile_sigma), 0.0, None
+def set_up_profile(frame, gamma_ratio=0.0):
+    """Give a fake frame the profile the later stages need, from the values it was built with."""
+    domains = [center.domain for center in frame.input_profile_centers]
+    fwhms = [Legendre([sigma_to_fwhm(frame.input_profile_sigma)], domain=domain) for domain in domains]
+    gamma_ratios = [Legendre([gamma_ratio], domain=domain) for domain in domains]
+    frame.profile = frame.input_profile_centers, fwhms, gamma_ratios, None
 
 
 def sky_residuals(frame):

@@ -1,6 +1,6 @@
 import numpy as np
 from collections.abc import Callable, Sequence
-from numpy.polynomial.legendre import Legendre
+from numpy.polynomial.legendre import Legendre, legder, legval, leggauss
 from scipy.optimize import least_squares
 from scipy.special import eval_hermite, factorial, wofz
 
@@ -41,9 +41,7 @@ def gauss_hermite(x, center, sigma, amplitude, h3=0.0, h4=0.0):
     return amplitude * np.exp(-0.5 * w ** 2) * (1.0 + h3 * _normalized_hermite(3, w) + h4 * _normalized_hermite(4, w))
 
 
-# At MAX_GAMMA_RATIO a Voigt leaves a sixth of its flux outside a 2.5 sigma extraction window,
-# against a percent for a Gaussian, and past that the wings are flat enough over the slit that they
-# are no longer separable from the local background. At zero the profile is exactly a Gaussian.
+# Cap the wings to core ratio for the psf shape. Beyond this, we are likely being dominated by an extended background
 MAX_GAMMA_RATIO = 1.0
 
 
@@ -196,7 +194,7 @@ def legendre_design(x: np.ndarray, degree: int, domain: Sequence[float]) -> np.n
 
 def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray,
                       huber_scale: float = 6.0, clip_sigma: float = 4.0,
-                      maxiters: int = 5) -> tuple[np.ndarray, np.ndarray]:
+                      maxiters: int = 5, penalty: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
     """
     Weighted linear least squares with the outliers rejected, e.g. a cosmic ray.
 
@@ -222,6 +220,10 @@ def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray
         Points further than this many robust standard deviations from the Huber model are rejected.
     maxiters : int
         Maximum number of reweighting iterations.
+    penalty : array, shape (n_penalty, n_terms), optional
+        Extra rows of the linear system whose target value is zero, which is how a prior on the
+        coefficients enters an ordinary least squares solve (Tikhonov). They carry unit weight and
+        are never reweighted or clipped: a prior is not a measurement and cannot be an outlier.
 
     Returns
     -------
@@ -230,9 +232,13 @@ def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray
     design = np.asarray(design, dtype=float)
     y = np.asarray(y, dtype=float)
     uncertainty = np.asarray(uncertainty, dtype=float)
+    penalty = np.zeros((0, design.shape[1])) if penalty is None else np.asarray(penalty, dtype=float)
+    penalty_targets = np.zeros(len(penalty))
 
     def solve(weights):
-        return np.linalg.lstsq(design * weights[:, np.newaxis], y * weights, rcond=None)[0]
+        matrix = np.vstack([design * weights[:, np.newaxis], penalty])
+        values = np.concatenate([y * weights, penalty_targets])
+        return np.linalg.lstsq(matrix, values, rcond=None)[0]
 
     weights = 1.0 / uncertainty
     coefficients = solve(weights)
@@ -252,7 +258,9 @@ def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray
     # background region is noisy, and a low draw would start rejecting perfectly good pixels.
     robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)
     good = deviations < clip_sigma * robust_sigma
-    if good.sum() <= design.shape[1]:
+    # Without a prior the fit needs more points than terms to be defined at all; with one it does not
+    fewest_points = 1 if len(penalty) else design.shape[1] + 1
+    if good.sum() < fewest_points:
         return coefficients, np.ones(len(y), dtype=bool)
     # A zero weight drops a row from the normal equations, which is what rejecting it means
     clipped_weights = np.zeros(len(y))
@@ -340,12 +348,128 @@ def robust_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, d
 
     Returns
     -------
-    Legendre object with the best fit, and the boolean array of points used if return_used
+    Legendre object with the best fit, and the boolean array of points used if return_used. The
+    model carries `effective_dof`, which with nothing held back is all of its coefficients.
     """
-    coefficients, used = robust_linear_fit(legendre_design(np.asarray(x, dtype=float), degree, domain),
-                                           y, uncertainty, huber_scale=huber_scale,
-                                           clip_sigma=clip_sigma, maxiters=maxiters)
-    model = Legendre(coefficients, domain=domain)
+    x = np.clip(np.asarray(x, dtype=float), domain[0], domain[1])
+    coefficients, used = robust_linear_fit(legendre_design(x, degree, domain), y, uncertainty,
+                                           huber_scale=huber_scale, clip_sigma=clip_sigma,
+                                           maxiters=maxiters)
+    model = Legendre(coefficients, domain=list(domain))
+    model.effective_dof = float(degree + 1)
+    if return_used:
+        return model, used
+    return model
+
+
+def extrapolatable_degree(measured_range: Sequence[float], domain: Sequence[float]) -> float:
+    """Highest degree whose own structure is wider than the stretch it has to carry across.
+
+    A degree d Legendre over a domain D has features D / d wide, and past the last point that
+    constrained it the fit is only trustworthy while that scale stays long compared with how far it
+    is being asked to reach. Requiring D / d to exceed the unmeasured stretch is what that says.
+
+    Callers clip this to the range of degrees they are willing to use; what it encodes is only how
+    much of the order the object was actually seen across.
+    """
+    gap = (domain[1] - domain[0]) - (measured_range[1] - measured_range[0])
+    if gap <= 0.0:
+        return np.inf
+    return (domain[1] - domain[0]) / gap
+
+
+def derivative_penalty_matrix(degree: int, derivative_order: int) -> np.ndarray:
+    """Integral of the squared `derivative_order`th derivative over a Legendre basis of this degree.
+
+    Omega_ij = integral P_i^(k) P_j^(k) dx, in the scaled coordinate the coefficients live in. The
+    integrand is a polynomial, so Gauss-Legendre quadrature on enough nodes is exact rather than
+    approximate.
+    """
+    nodes, weights = leggauss(degree + 3)
+    basis = np.eye(degree + 1)
+    derivatives = np.stack([legval(nodes, legder(basis[i], derivative_order)) for i in range(degree + 1)],
+                           axis=1)
+    return derivatives.T @ (weights[:, np.newaxis] * derivatives)
+
+
+def penalized_legendre_fit(x: np.ndarray, y: np.ndarray, uncertainty: np.ndarray, domain: Sequence[float],
+                           max_degree: int, derivative_order: int = 2,
+                           huber_scale: float = 6.0, clip_sigma: float = 4.0,
+                           return_used: bool = False) -> Legendre:
+    """Fit a Legendre polynomial over the whole domain, held back by a roughness penalty.
+
+    Parameters
+    ----------
+    x, y : array
+        Independent and dependent variables.
+    uncertainty : array
+        1-sigma uncertainties on `y`. These have to be real: they set how hard each point pulls, and
+        they are what lets the smoothing parameter be chosen rather than tuned.
+    domain : sequence of two floats
+        The full range the model has to be defined over, not the range that was measured.
+    max_degree : int
+        Highest degree to use. An order the measurements only cover part of is fit with less, by
+        `extrapolatable_degree`.
+    derivative_order : int
+        Which derivative the penalty acts on. Two penalizes curvature and leaves the model linear
+        where nothing was measured; one penalizes slope and leaves it flat there.
+    huber_scale, clip_sigma : float
+        Passed to `robust_linear_fit`.
+    return_used : bool
+        Also return a boolean array flagging the points that survived the clip.
+
+    Returns
+    -------
+    Legendre with the best fit, and the boolean array of points used if return_used.
+
+    Notes
+    -----
+    This minimizes chi^2 + lambda * integral (d^k f / dx^k)^2 dx over the coefficients, the roughness
+    penalty of a smoothing spline (Reinsch 1967) carried on a polynomial basis rather than on knots.
+
+    The point of fitting this way is what happens where there is no data. This should minimize wild
+    swings at the edges of the domain where there may not be data.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    uncertainty = np.asarray(uncertainty, dtype=float)
+    degree = int(np.clip(extrapolatable_degree((x.min(), x.max()), domain), 1, max_degree))
+    penalty_matrix = derivative_penalty_matrix(degree, derivative_order)
+    # A polynomial too low in degree to have the derivative the penalty acts on has nothing to give
+    # up, and is already the shape the penalty would have smoothed it down to
+    if np.trace(penalty_matrix) == 0.0:
+        return robust_legendre_fit(x, y, uncertainty, degree, domain, huber_scale=huber_scale,
+                                   clip_sigma=clip_sigma, return_used=return_used)
+    eigenvalues, eigenvectors = np.linalg.eigh(penalty_matrix)
+    penalty_root = eigenvectors @ np.diag(np.sqrt(np.clip(eigenvalues, 0.0, None))) @ eigenvectors.T
+
+    design = legendre_design(np.clip(x, domain[0], domain[1]), degree, domain)
+    weighted_design = design / uncertainty[:, np.newaxis]
+    normal_matrix = weighted_design.T @ weighted_design
+    scale = np.trace(normal_matrix) / np.trace(penalty_matrix)
+
+    def degrees_of_freedom(smoothing):
+        """Trace of the hat matrix: how many parameters the data paid for, not how many exist."""
+        return float(np.trace(np.linalg.solve(normal_matrix + smoothing * penalty_matrix, normal_matrix)))
+
+    def cross_validation_score(smoothing):
+        coefficients = np.linalg.lstsq(np.vstack([weighted_design, np.sqrt(smoothing) * penalty_root]),
+                                       np.concatenate([y / uncertainty, np.zeros(degree + 1)]),
+                                       rcond=None)[0]
+        chi_squared = np.sum(((y - design @ coefficients) / uncertainty) ** 2.0)
+        remaining = len(x) - degrees_of_freedom(smoothing)
+        if remaining <= 0.0:
+            return np.inf
+        return float(len(x) * chi_squared / remaining ** 2.0)
+
+    smoothings = scale * 10.0 ** np.linspace(-8.0, 8.0, 81)
+    smoothing = float(smoothings[np.argmin([cross_validation_score(value) for value in smoothings])])
+
+    coefficients, used = robust_linear_fit(design, y, uncertainty, huber_scale=huber_scale,
+                                           clip_sigma=clip_sigma,
+                                           penalty=np.sqrt(smoothing) * penalty_root)
+    model = Legendre(coefficients, domain=list(domain))
+    model.effective_dof = degrees_of_freedom(smoothing)
     if return_used:
         return model, used
     return model
