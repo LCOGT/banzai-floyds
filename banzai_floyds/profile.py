@@ -383,7 +383,7 @@ def chunks_from_detection(binned_data: Table, orders, point_sources: dict[int, d
 
 def measure_trace_points(point_sources: dict[int, dict], binned_data: Table, orders, fwhm: float,
                          chunk_size: int, snr_threshold: float, *, exclude_edge: int,
-                         max_chunk_shift: float = 1.0) -> Table:
+                         max_chunk_shift: float = 1.0, error_floor: float = 0.05) -> Table:
     """Measure the center of the object in every chunk it is detected in, walking outward from the detection.
 
     Parameters
@@ -403,12 +403,16 @@ def measure_trace_points(point_sources: dict[int, dict], binned_data: Table, ord
         The number of pixels of the slit to drop at each edge of the order when stacking.
     max_chunk_shift : float
         How far, in sigma, a chunk's center is allowed to move from the previous chunk's.
+    error_floor : float
+        The smallest centroid error, in pixels, any chunk is allowed to claim.
 
     Returns
     -------
     astropy.table.Table
         One row per chunk that was measured, with the order, wavelength, center and centroid error.
-        The centroid error is the Cramer-Rao bound of a matched filter, sigma over the signal-to-noise.
+        The centroid error is the Cramer-Rao bound of a matched filter, sigma over the signal-to-noise,
+        floored at `error_floor`.
+
     """
     sigma = fwhm_to_sigma(fwhm)
     trace_points = {'order': [], 'wavelength': [], 'center': [], 'center_error': []}
@@ -427,7 +431,7 @@ def measure_trace_points(point_sources: dict[int, dict], binned_data: Table, ord
             trace_points['order'].append(order_id)
             trace_points['wavelength'].append(chunk.wavelength)
             trace_points['center'].append(float(center))
-            trace_points['center_error'].append(sigma / snr)
+            trace_points['center_error'].append(float(np.hypot(sigma / snr, error_floor)))
             center_guess = center
     return Table(trace_points)
 
@@ -435,7 +439,7 @@ def measure_trace_points(point_sources: dict[int, dict], binned_data: Table, ord
 def trace_object(point_sources: dict[int, dict], binned_data: Table, orders, fwhm: float,
                  chunk_size: int, snr_threshold: float, wavelength_domains, *, exclude_edge: int,
                  max_center_error: float = 4.0, clip_sigma: float = 4.0, max_chunk_shift: float = 1.0,
-                 min_trace_points: int = 7, degree: int = 5) -> tuple:
+                 error_floor: float = 0.05, min_trace_points: int = 7, degree: int = 5) -> tuple:
     """Stepping along an object, fit a smooth curve to the center of the trace.
 
     Parameters
@@ -461,6 +465,8 @@ def trace_object(point_sources: dict[int, dict], binned_data: Table, orders, fwh
         Rejection threshold, in robust standard deviations, for the trace fit.
     max_chunk_shift : float
         How far, in sigma, a chunk's center is allowed to move from the previous chunk's.
+    error_floor : float
+        The smallest centroid error, in pixels, any chunk is allowed to claim.
     min_trace_points : int
         Minimum trace points required to fit a trace
     degree : int
@@ -485,7 +491,8 @@ def trace_object(point_sources: dict[int, dict], binned_data: Table, orders, fwh
     affect the center.
     """
     trace_points = measure_trace_points(point_sources, binned_data, orders, fwhm, chunk_size, snr_threshold,
-                                        exclude_edge=exclude_edge, max_chunk_shift=max_chunk_shift)
+                                        exclude_edge=exclude_edge, max_chunk_shift=max_chunk_shift,
+                                        error_floor=error_floor)
     trace_points['used'] = np.zeros(len(trace_points), dtype=bool)
     traces = []
     for order_id, domain in zip(orders.order_ids, wavelength_domains):
@@ -1174,6 +1181,9 @@ class ProfileFitter(Stage):
     # Maximum centroid error (in pixels) for a trace point to be included in the polynomial fit
     # (Choose something larger than the curvature of the order but small enough to reject outliers)
     MAX_CENTER_ERROR = 4.0
+    # Smallest centroid error (in pixels) a chunk can claim, so an unflagged cosmic ray in one
+    # cannot outweigh the rest of the order
+    CENTER_ERROR_FLOOR = 0.05
     # Outlier rejection threshold (in robust standard deviations) for trace points
     N_SIGMA_CLIP = 4.0
     # Matched filter s/n to detect the object in a stack of a few hundred columns
@@ -1223,7 +1233,7 @@ class ProfileFitter(Stage):
             point_sources, image.binned_data, image.orders, self.INITIAL_FWHM,
             self.STEP_SIZE, self.CHUNK_SNR, wavelength_domains, exclude_edge=self.SLIT_EDGE_MARGIN,
             max_center_error=self.MAX_CENTER_ERROR, clip_sigma=self.N_SIGMA_CLIP,
-            max_chunk_shift=self.MAX_CHUNK_SHIFT,
+            max_chunk_shift=self.MAX_CHUNK_SHIFT, error_floor=self.CENTER_ERROR_FLOOR,
             degree=self.runtime_context.PROFILE_TRACE_POLYNOMIAL_DEGREE
         )
         if any(trace is None for trace in profile_center):

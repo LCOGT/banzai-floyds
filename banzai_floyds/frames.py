@@ -7,6 +7,7 @@ import os
 from astropy.io import fits
 from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data, profile_sigmas
+from banzai_floyds.utils.profile_utils import profile_gamma_ratios
 from banzai_floyds.utils.profile_utils import profile_fits_to_header
 from astropy.table import Table
 from banzai_floyds import dbs
@@ -167,8 +168,11 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             wavelengths = self.binned_data['wavelength'][in_order]
             center = centers[order - 1](wavelengths)
             self.binned_data['y_profile'][in_order] = self.binned_data['y_order'][in_order] - center
-            self.binned_data['profile_sigma'][in_order] = profile_sigmas(wavelengths, fwhms[order - 1])
-            self.binned_data['profile_gamma_ratio'][in_order] = gamma_ratios[order - 1](wavelengths)
+            max_sigma = self.orders.order_heights[order - 1] / 2.0
+            self.binned_data['profile_sigma'][in_order] = profile_sigmas(wavelengths, fwhms[order - 1],
+                                                                         max_sigma=max_sigma)
+            self.binned_data['profile_gamma_ratio'][in_order] = profile_gamma_ratios(wavelengths,
+                                                                                     gamma_ratios[order - 1])
         x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
         self.binned_data['weights'] = self['PROFILE'].data[y, x]
 

@@ -33,6 +33,25 @@ def profile_sigmas(wavelengths, fwhm, max_sigma=None):
     return np.clip(sigmas, 0.5, max_sigma)
 
 
+def profile_gamma_ratios(wavelengths, gamma_ratio):
+    """The ratio of the Lorentzian to the Gaussian width of the profile at each wavelength, for one order.
+
+    Parameters
+    ----------
+    wavelengths : array
+        Where to evaluate the shape.
+    gamma_ratio : Legendre
+        The fitted ratio of this order as a function of wavelength.
+
+    Notes
+    -----
+    The wings are fit as a line through the chunk measurements, so nothing confines it to the range
+    those measurements covered. A negative ratio is not a Voigt profile at all: it takes the wings
+    below zero, so it is clipped back to the pure Gaussian.
+    """
+    return np.clip(gamma_ratio(wavelengths), 0.0, MAX_GAMMA_RATIO)
+
+
 def profile_fits_to_data(data_shape, profile_centers, fwhms, gamma_ratios, orders, wavelengths_data):
     """
     Evaluate the fitted profile over the whole frame to make the extraction weights.
@@ -46,7 +65,7 @@ def profile_fits_to_data(data_shape, profile_centers, fwhms, gamma_ratios, order
         wavelengths = wavelengths_data[in_order]
         widths = profile_sigmas(wavelengths, fwhm, max_sigma=order_height / 2.0)
         profile_data[in_order] = voigt(y2d[in_order] - order_center[in_order], profile_center(wavelengths),
-                                       widths, 1.0, np.clip(gamma_ratio(wavelengths), 0.0, MAX_GAMMA_RATIO))
+                                       widths, 1.0, profile_gamma_ratios(wavelengths, gamma_ratio))
     return normalize_profile(profile_data, orders, x2d)
 
 
