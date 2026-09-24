@@ -133,10 +133,10 @@ def correct_frame(path: str) -> tuple:
         return path, None, str(e)
 
 
-def add_stats_panel(ax, lines: list):
+def add_stats_panel(ax, lines: list, fontsize: float = 9):
     ax.axis('off')
     ax.text(0.0, 0.9, '\n'.join(lines), transform=ax.transAxes, va='top',
-            family='monospace', fontsize=9)
+            family='monospace', fontsize=fontsize)
 
 
 def plot_frame(fig, record: dict):

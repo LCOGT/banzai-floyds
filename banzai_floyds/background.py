@@ -1,172 +1,205 @@
 import numpy as np
 from astropy.table import Table, vstack
+from numpy.polynomial.legendre import Legendre
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai.stages import Stage
-from banzai_floyds.utils.fitting_utils import robust_legendre_fit
+from banzai.logs import get_logger
+from banzai_floyds.utils.fitting_utils import voigt, legendre_design, robust_linear_fit
+from banzai_floyds.utils.fitting_utils import resolvable_background_degree, ClampedLegendre
+
+logger = get_logger()
+
+# Fewest unmasked pixels in a wavelength bin to fit a background
+MINIMUM_FIT_PIXELS = 10
+ORDER_EDGE_MARGIN = 5
 
 
-def brackets_the_trace(y_profile: np.ndarray, minimum_pixels: int) -> bool:
-    """Does this bin's background region straddle the trace with enough pixels to fit on each side?
-
-    A line of constant wavelength is tilted by ~8 degrees: at the edges,
-    the bin covers a fraction of the slit and its background region can sit entirely on one side of the trace.
-    So we excise those bins from the background fit to avoid the fit running away.
+def background_degree(n_points: int, sigma: float, requested_degree: int) -> int:
     """
-    return np.sum(y_profile < 0) >= minimum_pixels and np.sum(y_profile > 0) >= minimum_pixels
+    Degree of the Legendre across the slit, reduced when the object is wide enough that a polynomial
+    of the requested degree could follow it.
+    """
+    return int(np.clip(resolvable_background_degree(n_points, sigma), 0, requested_degree))
 
 
-def fit_background(data, background_order=3, minimum_background_pixels=5):
-    # I tried a wide variety of bsplines and two fits here without success.
-    # The scipy bplines either had significant issues with the number of points we are fitting in the whole 2d frame or
-    # could not capture the variation near sky line edges (the key reason to use 2d fits from Kelson 2003).
-    # I also tried using 2d polynomials, but to get the order high enough to capture the variation in the skyline edges,
-    # I was introducing significant ringing in the fits (to the point of oscillating between positive and
-    # negative values in the data).
-    # This is now doing something closer to what IRAF did, interpolating the background regions onto the wavelength
-    # bin centers, fitting a 1d polynomial, and interpolating back on the original wavelengths to subtract per pixel.
-    # In this way, it is only the background model that is interpolated and not the pixel values themselves.
+def interpolate_to_bin_centers(data: Table) -> None:
+    """Resample the flux and uncertainty of every pixel onto the center wavelength of its bin.
+    """
     data['data_bin_center'] = 0.0
     data['uncertainty_bin_center'] = 0.0
     for order in [1, 2]:
         in_order = data['order'] == order
         to_fit = np.logical_and(in_order, data['mask'] == 0)
-        data_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][to_fit],
-                                                                 data['y_profile'][to_fit]]).T,
-                                                       data['data'][to_fit].ravel(), fill_value=0)
-        uncertainty_interpolator = CloughTocher2DInterpolator(np.array([data['wavelength'][to_fit],
-                                                                       data['y_profile'][to_fit]]).T,
-                                                              data['uncertainty'][to_fit].ravel(), fill_value=0)
+        points = np.array([data['wavelength'][to_fit], data['y_profile'][to_fit]]).T
+        bin_points = (data['order_wavelength_bin'][in_order], data['y_profile'][in_order])
+        for column in ['data', 'uncertainty']:
+            interpolator = CloughTocher2DInterpolator(points, data[column][to_fit].ravel(), fill_value=0)
+            data[column + '_bin_center'][in_order] = interpolator(*bin_points)
 
-        data['data_bin_center'][in_order] = data_interpolator(data['order_wavelength_bin'][in_order],
-                                                              data['y_profile'][in_order])
-        data['uncertainty_bin_center'][in_order] = uncertainty_interpolator(data['order_wavelength_bin'][in_order],
-                                                                            data['y_profile'][in_order])
 
-    # Assume no wavelength dependence for the wavelength_bin = 0 and first and last bin in the order
-    # which have funny edge effects
+def mark_order_interior(data: Table) -> None:
+    """Flag the rows of each order that are ORDER_EDGE_MARGIN pixels clear of its edges.
+    """
+    data['in_order_interior'] = False
+    for order in [1, 2]:
+        in_order = data['order'] == order
+        if not np.any(in_order):
+            continue
+        half_height = np.max(np.abs(data['y_order'][in_order]))
+        data['in_order_interior'][in_order] = np.abs(data['y_order'][in_order]) <= half_height - ORDER_EDGE_MARGIN
+
+
+def fit_bin_background(data_to_fit: Table, background_order: int,
+                       minimum_fit_pixels: int) -> tuple[ClampedLegendre, int] | None:
+    """Fit the sky across the slit in one wavelength bin, with the object in the model.
+
+    Parameters
+    ----------
+    data_to_fit : Table
+        The pixels of one wavelength bin.
+    background_order : int
+        Requested degree of the Legendre across the slit.
+    minimum_fit_pixels : int
+        Fewest unmasked pixels the bin needs before it is fit.
+
+    Returns
+    -------
+    (polynomial, degree) or None
+        The background across the slit as a function of `y_profile` and the degree that was used, or
+        None if the bin has too few pixels to fit.
+    """
+    # A bin at the edge of an order falls outside the interpolation surface and keeps its raw values
+    if np.all(data_to_fit['data_bin_center'] == 0):
+        data_column, uncertainty_column = 'data', 'uncertainty'
+    else:
+        data_column, uncertainty_column = 'data_bin_center', 'uncertainty_bin_center'
+    to_fit = np.logical_and(data_to_fit['mask'] == 0, data_to_fit[uncertainty_column] > 0)
+    to_fit = np.logical_and(to_fit, data_to_fit[data_column] != 0)
+    to_fit = np.logical_and(to_fit, data_to_fit['in_order_interior'])
+    if to_fit.sum() < minimum_fit_pixels:
+        return None
+
+    y = data_to_fit['y_profile'][to_fit]
+    # The domain is the interior of the slit rather than the pixels that survived the mask, so
+    # that the polynomial means the same thing in every wavelength bin
+    interior = data_to_fit['y_profile'][data_to_fit['in_order_interior']]
+    domain = [np.min(interior), np.max(interior)]
+    sigma = float(np.median(data_to_fit['profile_sigma'][to_fit]))
+    gamma_ratio = float(np.median(data_to_fit['profile_gamma_ratio'][to_fit]))
+    degree = background_degree(int(to_fit.sum()), sigma, background_order)
+    # The object's column first, then the background's. Only the background is kept.
+    design = np.column_stack([voigt(y, 0.0, sigma, 1.0, gamma_ratio), legendre_design(y, degree, domain)])
+    coefficients, _ = robust_linear_fit(design, data_to_fit[data_column][to_fit],
+                                        data_to_fit[uncertainty_column][to_fit])
+    # Past the interior the polynomial continues along its tangent rather than following its own
+    # curvature into the roll-off it was never fit over
+    return ClampedLegendre(Legendre(coefficients[1:], domain=domain)), degree
+
+
+def extrapolate_to_unfitted_bins(data: Table, bin_polynomials: dict[int, list]) -> None:
+    """Give every pixel without a fit of its own the nearest fitted bin's polynomial.
+    """
+    for order in [1, 2]:
+        unfitted = np.logical_and(data['order'] == order, np.logical_not(data['background_fitted']))
+        if not np.any(unfitted) or not bin_polynomials[order]:
+            continue
+        bin_centers = np.array([bin_center for bin_center, _ in bin_polynomials[order]])
+        bluest = bin_polynomials[order][np.argmin(bin_centers)][1]
+        reddest = bin_polynomials[order][np.argmax(bin_centers)][1]
+        y_profile = data['y_profile'][unfitted]
+        data['background_bin_center'][unfitted] = np.where(data['wavelength'][unfitted] < bin_centers.min(),
+                                                           bluest(y_profile), reddest(y_profile))
+
+
+def interpolate_background_to_pixels(data: Table) -> Table:
+    """Map the background fit at each bin center back onto every pixel's own wavelength.
+    """
+    results = []
+    for order in [1, 2]:
+        in_order = data['order'] == order
+        fitted = np.logical_and(in_order, data['background_fitted'])
+        to_interpolate = np.logical_and(fitted, data['mask'] == 0)
+        points = np.array([data['order_wavelength_bin'][to_interpolate], data['y_profile'][to_interpolate]]).T
+        interpolator = CloughTocher2DInterpolator(points, data['background_bin_center'][to_interpolate],
+                                                  fill_value=0)
+        background = interpolator(data['wavelength'][in_order], data['y_profile'][in_order])
+        outside = np.logical_or(data['wavelength'][in_order] > np.max(data['order_wavelength_bin'][fitted]),
+                                data['wavelength'][in_order] < np.min(data['order_wavelength_bin'][fitted]))
+        background[outside] = data['background_bin_center'][in_order][outside]
+        results.append(Table({'x': data['x'][in_order], 'y': data['y'][in_order], 'background': background}))
+    return vstack(results)
+
+
+def fit_background(data: Table, background_order: int = 3,
+                   minimum_fit_pixels: int = MINIMUM_FIT_PIXELS) -> tuple[Table, dict[int, list[int]]]:
+    """
+    Fit the sky in each wavelength bin, with the object in the model.
+
+    Parameters
+    ----------
+    data : Table
+        Binned data, grouped by wavelength bin, with the profile shape already in
+        `profile_sigma` and `profile_gamma_ratio`.
+    background_order : int
+        Requested degree of the Legendre across the slit. The degree actually used is reduced per
+        bin by `background_degree` when the object is wide.
+    minimum_fit_pixels : int
+        Fewest unmasked pixels a bin needs before it is fit rather than taking a neighbor's model.
+
+    Returns
+    -------
+    background : Table
+        The x, y, and background value at each pixel.
+    degrees_used : dict[int, list[int]]
+        The polynomial degree used in every fitted bin, keyed by order.
+    """
+    interpolate_to_bin_centers(data)
+    mark_order_interior(data)
     data['background_bin_center'] = 0.0
     data['background_fitted'] = False
-    order_polynomials = {order: [] for order in [1, 2]}
+
+    bin_polynomials = {1: [], 2: []}
+    degrees_used = {1: [], 2: []}
     group_edges = data.groups.indices
     for group_number, data_to_fit in enumerate(data.groups):
         if data_to_fit['order_wavelength_bin'][0] == 0:
             continue
-        # Catch the case where we are an edge and fall outside the qhull interpolation surface
-        if np.all(data_to_fit['data_bin_center'] == 0):
-            data_column = 'data'
-            uncertainty_column = 'uncertainty'
-        else:
-            data_column = 'data_bin_center'
-            uncertainty_column = 'uncertainty_bin_center'
-        in_background = data_to_fit['in_background']
-        in_background = np.logical_and(in_background, data_to_fit[data_column] != 0)
-        in_background = np.logical_and(in_background, data_to_fit['mask'] == 0)
-        y_background = data_to_fit['y_profile'][in_background]
-        if not brackets_the_trace(y_background, minimum_background_pixels):
+        fit = fit_bin_background(data_to_fit, background_order, minimum_fit_pixels)
+        if fit is None:
             continue
-        polynomial = robust_legendre_fit(
-            y_background, data_to_fit[data_column][in_background],
-            data_to_fit[uncertainty_column][in_background], background_order,
-            domain=[np.min(data_to_fit['y_profile']), np.max(data_to_fit['y_profile'])])
-
-        order_polynomials[data_to_fit['order'][0]].append((data_to_fit['order_wavelength_bin'][0], polynomial))
+        polynomial, degree = fit
+        order = data_to_fit['order'][0]
+        bin_polynomials[order].append((data_to_fit['order_wavelength_bin'][0], polynomial))
+        degrees_used[order].append(degree)
         rows = slice(group_edges[group_number], group_edges[group_number + 1])
         data['background_bin_center'][rows] = polynomial(data_to_fit['y_profile'])
         data['background_fitted'][rows] = True
 
-    # The bins we skipped above, and the couple of columns at each end of an order whose wavelengths
-    # fall outside the range the bins cover, never get a fit of their own.
-    # Extrapolate the nearest bin's polynomial to those pixels to keep the background close to smooth
-    # to keep from introducing sharp edges that are mistaken for cosmic rays. In the end, these pixels
-    # don't ever get used for science.
-    for order in [1, 2]:
-        outside_bins = np.logical_and(data['order'] == order, np.logical_not(data['background_fitted']))
-        if not np.any(outside_bins) or not order_polynomials[order]:
-            continue
-        bin_centers = np.array([bin_center for bin_center, _ in order_polynomials[order]])
-        bluest = order_polynomials[order][np.argmin(bin_centers)][1]
-        reddest = order_polynomials[order][np.argmax(bin_centers)][1]
-        y_profile = data['y_profile'][outside_bins]
-        data['background_bin_center'][outside_bins] = np.where(data['wavelength'][outside_bins] < bin_centers.min(),
-                                                               bluest(y_profile), reddest(y_profile))
-
-    results = Table({'x': [], 'y': [], 'background': []})
-    for order in [1, 2]:
-        in_order = data['order'] == order
-        in_bin = np.logical_and(in_order, data['background_fitted'])
-        to_fit = np.logical_and(in_bin, data['mask'] == 0)
-        background_interpolator = CloughTocher2DInterpolator(np.array([data['order_wavelength_bin'][to_fit],
-                                                                       data['y_profile'][to_fit]]).T,
-                                                             data['background_bin_center'][to_fit], fill_value=0)
-        background = background_interpolator(data['wavelength'][in_order], data['y_profile'][in_order])
-        # Deal with the funniness at the wavelength bin edges. Anything beyond the outermost bin
-        # centers, including the pixels that fall outside the bins entirely, takes the polynomial
-        # directly rather than the interpolated surface, which has no support out there.
-        outside = np.logical_or(data['wavelength'][in_order] > np.max(data['order_wavelength_bin'][in_bin]),
-                                data['wavelength'][in_order] < np.min(data['order_wavelength_bin'][in_bin]))
-        background[outside] = data['background_bin_center'][in_order][outside]
-        order_results = Table({'x': data['x'][in_order], 'y': data['y'][in_order], 'background': background})
-        results = vstack([results, order_results])
-    # Clean up our intermediate columns
+    extrapolate_to_unfitted_bins(data, bin_polynomials)
+    results = interpolate_background_to_pixels(data)
     data.remove_columns(['data_bin_center', 'uncertainty_bin_center', 'background_bin_center',
-                         'background_fitted'])
-    return results
-
-
-def set_background_region(image):
-    """ Convert the background region in n-sigma to a pixel-by-pixel mask
-
-    Notes
-    -----
-    We no longer allow the background region to go to the edge of the order because weird things happen
-    there. We also require at least 5 pixels on each side of the trace to be in the background region.
-    """
-    image.binned_data['in_background'] = False
-    for order_id in [2, 1]:
-        in_order = image.binned_data['order'] == order_id
-        this_background = np.zeros(in_order.sum(), dtype=bool)
-        data = image.binned_data[in_order]
-        order_height = image.orders.order_heights[order_id - 1]
-        profile_center = data['y_order'] - data['y_profile']
-        # We choose a 2 pixel buffer at the edge of the order as a no fly zone
-        # Note the minimum function here. This is different than min because it works elementwise
-        lower_background_region = image.background_windows[order_id - 1][0]
-        # Note the 3 here is because the comparison operator is >= and not just >
-        lower_lim = data['y_order'] >= np.maximum(profile_center + lower_background_region[0] * data['profile_sigma'],
-                                                  -(order_height // 2) + 3)
-        # We require a minimum of 5 pixels in the background region on each side of the trace (+2 for the edge buffer)
-        upper_lim = data['y_order'] <= np.maximum(profile_center + lower_background_region[1] * data['profile_sigma'],
-                                                  -(order_height // 2) + 7)
-        in_lower_region = np.logical_and(lower_lim, upper_lim)
-        upper_background_region = image.background_windows[order_id - 1][1]
-        upper_lim = data['y_order'] <= np.minimum(profile_center + upper_background_region[1] * data['profile_sigma'],
-                                                  order_height // 2 - 3)
-        lower_lim = data['y_order'] >= np.minimum(profile_center + upper_background_region[0] * data['profile_sigma'],
-                                                  order_height // 2 - 7)
-        in_upper_region = np.logical_and(upper_lim, lower_lim)
-
-        in_background_reg = np.logical_or(in_upper_region, in_lower_region)
-        this_background = np.logical_or(this_background, in_background_reg)
-        image.binned_data['in_background'][in_order] = this_background
-    for order in [1, 2]:
-        for reg_num, region in enumerate(image.background_windows[order - 1]):
-            image.meta[f'BKWO{order}{reg_num}0'] = (
-                region[0], f'Background region {reg_num} for order:{order} minimum in profile sigma'
-            )
-            image.meta[f'BKWO{order}{reg_num}1'] = (
-                region[1], f'Background region {reg_num} for order:{order} maximum in profile sigma'
-            )
+                         'background_fitted', 'in_order_interior'])
+    return results, degrees_used
 
 
 class BackgroundFitter(Stage):
-    DEFAULT_BACKGROUND_WINDOW = (4, 12.5)
+    BACKGROUND_ORDER = 3
 
     def do_stage(self, image):
-        if not image.background_windows:
-            background_window = [[-self.DEFAULT_BACKGROUND_WINDOW[1], -self.DEFAULT_BACKGROUND_WINDOW[0]],
-                                 [self.DEFAULT_BACKGROUND_WINDOW[0], self.DEFAULT_BACKGROUND_WINDOW[1]]]
-            image.background_windows = [background_window, background_window]
-        set_background_region(image)
-        background = fit_background(image.binned_data)
+        if image.profile_fits is None:
+            logger.info('No object was detected, so skipping background fit',
+                        image=image)
+            return image
+        background, degrees_used = fit_background(image.binned_data, background_order=self.BACKGROUND_ORDER)
         image.background = background
+        for order, degrees in degrees_used.items():
+            n_bins = len(degrees)
+            typical_degree = int(np.median(degrees)) if n_bins else -1
+            image.meta[f'L1BKDG{order}'] = (typical_degree,
+                                            f'Typical degree of the sky polynomial across the slit, order {order}')
+            image.meta[f'L1BKNB{order}'] = (n_bins,
+                                            f'Number of wavelength bins with their own sky fit in order {order}')
+            if n_bins and typical_degree < self.BACKGROUND_ORDER:
+                logger.warning(f'The object in order {order} is wide enough that the sky polynomial had to be '
+                               f'reduced to degree {typical_degree}.', image=image)
         return image

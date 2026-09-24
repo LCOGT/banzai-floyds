@@ -41,6 +41,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 # frames stay in lockstep with the arc and lamp-flat runs.
 from process_arcs import RAW_DIR, download_frames
 from process_lamp_flats import make_context
+from reduction_utils import reduce_to_stage
 
 OUTPUT_PDF = 'extraction_results.pdf'
 ORDER_NAMES = {1: 'red', 2: 'blue'}
@@ -62,31 +63,10 @@ def extract_frame(path: str) -> tuple:
     plotting code needs so the heavy reduction parallelizes cleanly; error is a message if the
     frame could not be extracted (not a science frame, a stage rejected it, ...).
     """
-    from banzai.utils import import_utils
-
     try:
-        frame_factory = import_utils.import_attribute(_context.FRAME_FACTORY)()
-        image = frame_factory.open({'path': path, 'filename': os.path.basename(path), 'RLEVEL': 0}, _context)
-        if image is None:
-            return path, None, 'frame factory could not open the file'
-        if image.obstype not in ('SPECTRUM', 'STANDARD'):
-            return path, None, f'obstype {image.obstype} is not a science target or standard'
-
-        extractor_index = _context.ORDERED_STAGES.index('banzai_floyds.extract.Extractor')
-        note = ''
-        for stage_name in _context.ORDERED_STAGES[:extractor_index + 1]:
-            # If the FringeLoader found no master, the frame was left untouched with
-            # image.fringe unset, so the corrector would crash: skip it and flag the page.
-            if stage_name == 'banzai_floyds.fringe.FringeCorrector' and image.fringe is None:
-                continue
-            stage = import_utils.import_attribute(stage_name)(_context)
-            images = stage.run([image])
-            if not images:
-                if stage_name == 'banzai_floyds.fringe.FringeLoader':
-                    note = 'NOT fringe corrected: no fringe master in the calibration db'
-                    continue
-                return path, None, f'{stage_name} rejected the frame'
-            image = images[0]
+        image, note, error = reduce_to_stage(path, _context, 'banzai_floyds.extract.Extractor')
+        if error is not None:
+            return path, None, error
 
         header = image.meta
         extracted = image.extracted
