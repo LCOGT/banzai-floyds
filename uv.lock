@@ -192,6 +192,19 @@ wheels = [
 ]
 
 [[package]]
+name = "auto-stretch"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/7a/7a44e43ef7e76cc186ae8cc7792978eeac31e272386c7bc617c231999a20/auto_stretch-1.1.0.tar.gz", hash = "sha256:c8c91dbb1c32914d64f9ec065df5abe274f9b5f707f4497deba8fcb05acc4ab9", size = 1060848, upload-time = "2026-07-03T16:08:12.828Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/16/af03a65d260bd3d8634d8e3bb6423cbae5b9c52f4b9709611d2592177da4/auto_stretch-1.1.0-py3-none-any.whl", hash = "sha256:5029de2771f5de667a6663c4f21ac7d1fc8c6d23e4293789892955651dbca4e4", size = 5308, upload-time = "2026-07-03T16:08:11.686Z" },
+]
+
+[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -255,7 +268,7 @@ requires-dist = [
     { name = "coverage", marker = "extra == 'test'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "ipython" },
-    { name = "lco-banzai", git = "https://github.com/lcogt/banzai.git?rev=1.37.1" },
+    { name = "lco-banzai", git = "https://github.com/lcogt/banzai.git?rev=1.38.2" },
     { name = "matplotlib" },
     { name = "mock", marker = "extra == 'test'" },
     { name = "nbsphinx", marker = "extra == 'docs'" },
@@ -1931,12 +1944,13 @@ wheels = [
 
 [[package]]
 name = "lco-banzai"
-version = "1.37.1"
-source = { git = "https://github.com/lcogt/banzai.git?rev=1.37.1#79a5490b3eecb3997b5c2f47c321b505db0f8630" }
+version = "1.38.2"
+source = { git = "https://github.com/lcogt/banzai.git?rev=1.38.2#f8d09127694177526d000bf15565776ff8ef0d8a" }
 dependencies = [
     { name = "alembic" },
     { name = "apscheduler" },
     { name = "astropy" },
+    { name = "auto-stretch" },
     { name = "bottleneck" },
     { name = "celery", extra = ["redis"] },
     { name = "cosmic-conn", extra = ["cpu"] },
@@ -1952,6 +1966,7 @@ dependencies = [
     { name = "ocs-ingester" },
     { name = "opensearch-py" },
     { name = "photutils" },
+    { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "python-dateutil" },
