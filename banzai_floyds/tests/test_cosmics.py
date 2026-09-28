@@ -46,3 +46,18 @@ def test_cosmic_ray_recovery_and_false_discovery_rate():
 
     assert completeness >= MIN_COMPLETENESS
     assert false_discovery_rate <= MAX_FALSE_DISCOVERY_RATE
+
+
+def test_cosmic_ray_detection_without_background():
+    """A frame with no object gets no background fit, and the detector has to run on it anyway."""
+    np.random.seed(923746)
+    frame = generate_fake_science_frame(include_sky=True, flat_spectrum=True, include_trace=False)
+    stamps = load_cosmic_ray_stamps()
+    rng = np.random.default_rng(93519437)
+    inject_cosmic_ray_stamps(frame, stamps, N_INJECTIONS, rng, frame.meta['RDNOISE'])
+    assert frame.background is None
+
+    CosmicRayDetector(context.Context({})).do_stage(frame)
+
+    # Without the sky model the detector still flags the bright cores of the injected events
+    assert ((frame.mask & 8) > 0).sum() > 0

@@ -86,7 +86,8 @@ class CosmicRayDetector(Stage):
 
     def do_stage(self, image):
         # This stage runs after gain normalization so everything is in electrons.
-        # BackgroundFitter runs immediately before us, so image.background is the fitted sky.
+        # BackgroundFitter runs immediately before us, so image.background is the fitted sky, or None
+        # when no object was detected to fit it around.
         cr_mask = detect_cosmic_rays(image, self.SIGCLIP, self.SIGFRAC, self.OBJLIM,
                                      self.ORDER_EDGE_BUFFER, background=image.background)
         image.mask[cr_mask] |= 8

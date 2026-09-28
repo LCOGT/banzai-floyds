@@ -72,6 +72,9 @@ def test_order_solver_stage(mock_location, mock_get_order_height):
         # than 15% of the width of the order
         assert (input_region != (image.orders.data == (i + 1))).sum() < 150
 
+    # The order solution has no proprietary period, so that frames from any proposal can use it
+    assert image.public_date == image.dateobs
+
 
 def test_order_tracing():
     np.random.seed(12983437)

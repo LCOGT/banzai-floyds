@@ -6,7 +6,9 @@ import numpy as np
 import os
 from astropy.io import fits
 from astropy.coordinates import Angle
-from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data
+from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data, profile_sigmas
+from banzai_floyds.utils.profile_utils import profile_gamma_ratios
+from banzai_floyds.utils.profile_utils import profile_fits_to_header
 from astropy.table import Table
 from banzai_floyds import dbs
 from typing import Optional
@@ -18,7 +20,6 @@ MIN_FRINGE_VALUE = 0.1
 MAX_FRINGE_VALUE = 2.5
 
 # Mask bits on the master fringe frame.
-FRINGE_INTERPOLATED = 16
 FRINGE_NO_PATTERN = 32
 
 
@@ -96,25 +97,37 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
         # TODO: Save telluric and sensitivity corrections that were applied
 
-        filename_2d = filename_1d.replace('-1d.fits', '-2d.fits')
-
-        fits_1d[0].header['L1ID2D'] = filename_2d
+        fits_1d[0].header['L1ID2D'] = filename_1d.replace('-1d.fits', '-2d.fits')
         output_product_1d = DataProduct.from_fits(fits_1d, filename_1d, self.get_output_directory(runtime_context))
+        output_product_2d = self.get_2d_spectrum_product(runtime_context, filename_1d=filename_1d)
+        return output_product_1d, output_product_2d
 
+    def get_2d_spectrum_product(self, runtime_context, filename_1d=None):
+        """The 2D spectrum, named the same whether or not it has a 1D spectrum alongside it.
+
+        filename_1d is None when there is no 1D spectrum to cross reference.
+        """
         # TODO consider saving the background coeffs or the profile coeffs?
+        filename_2d = self.get_output_filename(runtime_context).replace('.fits', '-2d.fits')
+        self.meta.pop('EXTNAME', None)
         frame_2d = LCOObservationFrame([hdu for hdu in self._hdus
                                         if hdu.name not in ['SPECTRUM', 'EXTRACTED', 'SENSITIVITY', 'TELLURIC']],
                                        os.path.join(self.get_output_directory(runtime_context), filename_2d))
-        frame_2d.meta['L1ID1D'] = filename_1d
+        if filename_1d is not None:
+            frame_2d.meta['L1ID1D'] = filename_1d
         fits_2d = frame_2d.to_fits(runtime_context)
-        output_product_2d = DataProduct.from_fits(fits_2d, filename_2d, self.get_output_directory(runtime_context))
-        return output_product_1d, output_product_2d
+        return DataProduct.from_fits(fits_2d, filename_2d, self.get_output_directory(runtime_context))
 
     def get_output_data_products(self, runtime_context):
-        if self.obstype == 'SPECTRUM' or self.obstype == 'STANDARD':
-            return self.get_1d_and_2d_spectra_products(runtime_context)
-        else:
+        if self.obstype != 'SPECTRUM' and self.obstype != 'STANDARD':
             return super().get_output_data_products(runtime_context)
+        # With no object detected in either order the trace falls back to the middle of the order, so
+        # an extraction is a sum of noise at an arbitrary position in the slit. The 2D frame is still
+        # wavelength calibrated and sky subtracted and worth keeping, but a 1D spectrum that looks
+        # like any other while containing no object is worse than no 1D spectrum at all.
+        if not self.meta.get('L1OBJDET', True):
+            return [self.get_2d_spectrum_product(runtime_context)]
+        return self.get_1d_and_2d_spectra_products(runtime_context)
 
     def save_processing_metadata(self, context):
         super().save_processing_metadata(context)
@@ -127,43 +140,41 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @profile.setter
     def profile(self, value):
-        centers, sigmas, fitted_points = value
-        self._profile_fits = centers, sigmas
+        """Store the fitted profile: one (center, FWHM, gamma_ratio) Legendre in wavelength per order.
+
+        The polynomials go into the PROFILEFITS header alongside the chunk measurements they were fit
+        through, the evaluated profile goes into the PROFILE extension as the extraction weights, and
+        the binned data gets the per pixel columns the background and extraction stages read.
+        """
+        centers, fwhms, gamma_ratios, fitted_points = value
+        self._profile_fits = centers, fwhms, gamma_ratios
         if fitted_points is None:
             fitted_points = Table({'wavelength': [], 'center': [], 'order': []})
-        header = fits.Header()
-        for order, center, sigma in zip([1, 2], centers, sigmas):
-            for i, coef in enumerate(sigma.coef):
-                header[f'O{order}SIG{i:02}'] = coef, f'P_{i:02} coefficient for width for order {order}'
-            for i, coef in enumerate(center.coef):
-                header[f'O{order}CTR{i:02}'] = coef, f'P_{i:02} coefficient for center for order {order}'
-
-            header[f'O{order}CTRO'] = center.degree(), f'Polynomial Order for the center in order {order}'
-            header[f'O{order}SIGO'] = sigma.degree(), f'Polynomial Order for the width in order {order}'
-
-            domain_str = '{0} domain value for {1} fit of the profile for order {2}'
-            header[f'O{order}SIGDM0'] = sigma.domain[0], domain_str.format('Min', 'sigma', order)
-            header[f'O{order}SIGDM1'] = sigma.domain[1], domain_str.format('Max', 'sigma', order)
-            header[f'O{order}CTRDM0'] = center.domain[0], domain_str.format('Min', 'center', order)
-            header[f'O{order}CTRDM1'] = center.domain[1], domain_str.format('Max', 'center', order)
+        header = profile_fits_to_header(centers, fwhms, gamma_ratios)
         self.add_or_update(DataTable(fitted_points, name='PROFILEFITS', meta=header))
 
-        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, sigmas,
+        profile_hdu = ArrayData(profile_fits_to_data(self.data.shape, centers, fwhms, gamma_ratios,
                                                      self.orders, self.wavelengths.data),
                                 name='PROFILE', meta=fits.Header({}))
         self.add_or_update(profile_hdu)
-        if self.binned_data is not None:
-            profile_centers = np.zeros(len(self.binned_data))
-            profile_sigma = np.zeros(len(self.binned_data))
-            for order in [1, 2]:
-                in_order = self.binned_data['order'] == order
-                profile_centers[in_order] = centers[order - 1](self.binned_data['wavelength'][in_order])
-                profile_sigma[in_order] = sigmas[order - 1](self.binned_data['wavelength'][in_order])
-
-            self.binned_data['y_profile'] = self.binned_data['y_order'] - profile_centers
-            self.binned_data['profile_sigma'] = profile_sigma
-            x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
-            self.binned_data['weights'] = self['PROFILE'].data[y, x]
+        if self.binned_data is None:
+            return
+        self.binned_data['y_profile'] = 0.0
+        self.binned_data['profile_sigma'] = 0.0
+        # The background stage fits the object alongside the sky, so it needs the wings too
+        self.binned_data['profile_gamma_ratio'] = 0.0
+        for order in [1, 2]:
+            in_order = self.binned_data['order'] == order
+            wavelengths = self.binned_data['wavelength'][in_order]
+            center = centers[order - 1](wavelengths)
+            self.binned_data['y_profile'][in_order] = self.binned_data['y_order'][in_order] - center
+            max_sigma = self.orders.order_heights[order - 1] / 2.0
+            self.binned_data['profile_sigma'][in_order] = profile_sigmas(wavelengths, fwhms[order - 1],
+                                                                         max_sigma=max_sigma)
+            self.binned_data['profile_gamma_ratio'][in_order] = profile_gamma_ratios(wavelengths,
+                                                                                     gamma_ratios[order - 1])
+        x, y = self.binned_data['x'].astype(int), self.binned_data['y'].astype(int)
+        self.binned_data['weights'] = self['PROFILE'].data[y, x]
 
     @property
     def profile_fits(self):
@@ -192,6 +203,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @property
     def background(self):
+        if self['BACKGROUND'] is None:
+            return None
         return self['BACKGROUND'].data
 
     @background.setter
@@ -289,6 +302,15 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         return self.meta['APERWID']
 
     @property
+    def slit_position_angle(self) -> float | None:
+        # The rotator is set to the parallactic angle at acquisition, so this is where the slit
+        # actually sat on the sky
+        try:
+            return float(self.meta.get('ROTSKYPA'))
+        except (ValueError, TypeError):
+            return None
+
+    @property
     def ra(self):
         # We use CAT-RA as the default since that is the object requested by the user
         try:
@@ -301,7 +323,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                 # Fallback to CRVAL1 and CRVAL2
                 try:
                     coord = Angle(self.meta.get('CRVAL1'), unit='degree').deg
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     coord = np.nan
         return coord
 
@@ -331,7 +353,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
                 # Fallback to CRVAL1 and CRVAL2
                 try:
                     coord = Angle(self.meta.get('CRVAL2'), unit='degree').deg
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     coord = np.nan
         return coord
 

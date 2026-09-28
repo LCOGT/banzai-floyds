@@ -1,12 +1,12 @@
-import matplotlib.pyplot as plt
-from astropy.visualization import ZScaleInterval
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
 from banzai_floyds.orders import Orders, order_region, smooth_order_weights
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
+from banzai_floyds.utils.profile_utils import profile_sigmas
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
 from banzai_floyds.utils.telluric_utils import estimate_telluric
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.utils.flux_utils import airmass_extinction
+from banzai_floyds.utils.gaia_utils import GAIA_COLUMNS
 
 import numpy as np
 from astropy.io import fits
@@ -122,24 +122,12 @@ def fit_smooth_fringe_spline(data, data_region):
                                       data[data_region], fill_value=0.0)
 
 
-def plot_array(data, overlays=None):
-    if len(data) == 2:
-        plt.plot(data[0], data[1])
-    elif len(data.shape) > 1:
-        z_interval = ZScaleInterval().get_limits(data)
-        plt.imshow(data, cmap='gray', vmin=z_interval[0], vmax=z_interval[1])
-        # plt.imshow(data, cmap='gray', vmin=0, vmax=1)
-    else:
-        plt.plot(data)
-    if overlays:
-        for overlay in overlays:
-            plt.plot(overlay[0], overlay[1], color="green")
-    plt.show()
-
-
 def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=False, fringe_offset=0,
                                 fringe_offset_x=0, include_trace=True, background=0.0,
-                                include_super_fringe=False):
+                                include_super_fringe=False, flux_normalization=10000.0,
+                                second_trace_offset=None, second_trace_fraction=0.4,
+                                trace_wavelength_range=None, profile_fwhm=10.0,
+                                order_center_offset=0.0, host_fraction=0.0, host_width_ratio=4.0):
     """
     Generate a fake science frame to run tests on.
 
@@ -161,6 +149,24 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         Background level to add to the frame
     include_super_fringe: bool
         Include the super fringe pattern in the frame attributes?
+    flux_normalization: float
+        Peak counts in the object trace. Lower values make a fainter object.
+    second_trace_offset: float
+        If set, add a second object this many pixels from the first one in the slit
+    second_trace_fraction: float
+        Brightness of the second object relative to the first
+    trace_wavelength_range: tuple of two floats
+        If set, only include the object trace between these wavelengths
+    profile_fwhm: float
+        FWHM of the object profile in pixels. Wide values are what push a background window off the
+        end of a 93 pixel order.
+    order_center_offset: float
+        Shift the object this many pixels in the second order relative to the first, the way the two
+        orders imaging the slit at different scales does on real frames.
+    host_fraction: float
+        Brightness of a galaxy centered under the object relative to it, with a flat spectrum
+    host_width_ratio: float
+        Width of that galaxy relative to the object
 
     Returns
     -------
@@ -168,10 +174,12 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     """
     nx = 2048
     ny = 512
-    # DISPERSIONS = {1: 3.13, 2: 1.72}
+    # DISPERSIONS = {1: 3.49, 2: 1.73}, measured off real wavelength maps as 3.484 and 1.724.
+    # The red order stops at 10139 A rather than the instrument's ~10800 because that is where the
+    # fringe pattern harvested from real data ends, and past it we would be painting a fringe free
+    # tail that no real frame has.
     # Tilts in degrees measured counterclockwise (right-handed coordinates)
     INITIAL_LINE_TILTS = {1: 8., 2: 8.}
-    profile_fwhm = 10.0
     order_height = 93
     read_noise = 6.5
     # Real order edges roll off smoothly over a few pixels (see the vignetting profile in a
@@ -184,18 +192,20 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
     line_fwhms_angstroms = [15.6, 8.6]
     input_fringe_shift = fringe_offset
 
-    order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1700))
+    order1 = Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1541))
     order2 = Legendre((380, 17, 63, -12), domain=(475, 1975))
     data = np.zeros((ny, nx))
     orders = Orders([order1, order2], (ny, nx), [order_height, order_height])
     expanded_order_height = order_height + 20
     # make a reasonable wavelength model
-    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
-                                 domain=(0, 1700))
+    wavelength_model1 = Legendre((7433.3, 2689.6, 20.2, -5.1, 1.0),
+                                 domain=(0, 1541))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
-    trace1 = Legendre((5, 10, 4), domain=(wavelength_model1(0), wavelength_model1(1700)))
-    trace2 = Legendre((-10, -8, -3), domain=(wavelength_model2(475), wavelength_model2(1975)))
-    profile_centers = [trace1, trace2]
+    # The object sits at one place in the slit and the slow drift with wavelength is differential
+    # atmospheric refraction, but the orders image the slit at slightly different scales, so the
+    # same object lands a pixel or two apart in the two orders.
+    trace = Legendre((5, 10, 4), domain=(3200.0, 10200.0))
+    profile_centers = [trace, trace + order_center_offset]
 
     # Work out the wavelength solution for larger than the typical order size so that we
     # can shift the fringe pattern up and down
@@ -212,7 +222,6 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                      orders=orders.new(expanded_order_height),
                                      lsf_params=lsf_params)
     profile_sigma = fwhm_to_sigma(profile_fwhm)
-    flux_normalization = 10000.0
 
     sky_continuum = 800.0
     sky_normalization = 6000.0
@@ -232,14 +241,29 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
         weight = smooth_order_weights(order_models[i].coef, (x2d, y2d), orders.order_heights[i],
                                       order_models[i].domain, k=EDGE_SHARPNESS)
         trace_center = profile_centers[i](wavelengths.data)
+        # The width the frame is built with follows the same seeing power law the pipeline assumes
+        profile_widths = profile_sigmas(wavelengths.data[in_order], Legendre([profile_fwhm]))
+        if trace_wavelength_range is None:
+            trace_weight = weight
+        else:
+            in_trace_range = np.logical_and(wavelengths.data >= trace_wavelength_range[0],
+                                            wavelengths.data <= trace_wavelength_range[1])
+            trace_weight = weight * in_trace_range
         if include_trace:
             if flat_spectrum:
-                data[in_order] += weight[in_order] * flux_normalization * gauss(
+                data[in_order] += trace_weight[in_order] * flux_normalization * gauss(
                     slit_coordinates[in_order], trace_center[in_order],
-                    profile_sigma)
+                    profile_widths)
+                if second_trace_offset is not None:
+                    data[in_order] += trace_weight[in_order] * flux_normalization * second_trace_fraction * gauss(
+                        slit_coordinates[in_order], trace_center[in_order] + second_trace_offset,
+                        profile_widths)
+                if host_fraction > 0.0:
+                    data[in_order] += trace_weight[in_order] * flux_normalization * host_fraction * gauss(
+                        slit_coordinates[in_order], trace_center[in_order], host_width_ratio * profile_widths)
             else:
                 profile = gauss(slit_coordinates[in_order], trace_center[in_order],
-                                profile_sigma)
+                                profile_widths)
                 input_spectrum = flux_normalization
                 input_spectrum *= continuum_polynomial(wavelengths.data[in_order])
                 input_spectrum *= profile
@@ -247,7 +271,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                     # add some random emission lines
                     input_spectrum += strength * gauss(wavelengths.data[in_order],
                                                        input_line, fwhm_to_sigma(fhwm)) * profile
-                data[in_order] += weight[in_order] * input_spectrum
+                data[in_order] += trace_weight[in_order] * input_spectrum
 
         data[in_order] += weight[in_order] * background
 
@@ -258,8 +282,9 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                 line_spread = gauss(sky_wavelengths, line['wavelength'],
                                     fwhm_to_sigma(line_fwhms_angstroms[i]))
                 sky_spectrum += line['line_strength'] * line_spread * sky_normalization
-            # Make a slow illumination gradient to make sure things work even if the sky is not flat
-            illumination = 100 * gauss(slit_coordinates[in_order], 0.0, 48)
+            # The real slit is flat to a few percent across its interior, with the roll-off confined to
+            # the outer rows that the stacks and the background fit both drop
+            illumination = 0.83 * (1.0 - 0.03 * (slit_coordinates[in_order] / (order_height / 2.0)) ** 2)
             input_sky[in_order] = weight[in_order] * np.interp(wavelengths.data[in_order],
                                                                sky_wavelengths,
                                                                sky_spectrum) * illumination
@@ -320,8 +345,8 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
 
 
 def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
-    wavelength_model1 = Legendre((7487.2, 2662.3, 20., -5., 1.),
-                                 domain=(0, 1700))
+    wavelength_model1 = Legendre((7433.3, 2689.6, 20.2, -5.1, 1.0),
+                                 domain=(0, 1541))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     read_noise = 4.0
 
@@ -398,3 +423,23 @@ class TestCalibrationFrame(FLOYDSCalibrationFrame):
     def write(self, context):
         # Short circuit the write method so we don't actually write anything during testing
         return
+
+
+def fake_gaia_source(ra: float, dec: float, east: float = 0.0, north: float = 0.0, gmag: float = 12.0,
+                     parallax: float = 10.0, parallax_error: float = 0.05, pm_ra: float = 0.0,
+                     pm_dec: float = 0.0, qso: int = 0, galaxy: int = 0) -> dict:
+    """One Gaia DR3 row this many arcseconds east and north of (ra, dec) at the catalog epoch.
+
+    By default it is a nearby star: bright, with a parallax measured at 200 sigma.
+    """
+    source_dec = dec + north / 3600.0
+    return {'RA_ICRS': ra + east / 3600.0 / np.cos(np.radians(source_dec)), 'DE_ICRS': source_dec,
+            'pmRA': pm_ra, 'pmDE': pm_dec, 'Plx': parallax, 'e_Plx': parallax_error, 'Gmag': gmag,
+            'QSO': qso, 'Gal': galaxy}
+
+
+def fake_gaia_field(*sources: dict) -> Table:
+    """The table a Gaia query around a target returns, empty if no sources are given."""
+    if len(sources) == 0:
+        return Table(names=GAIA_COLUMNS)
+    return Table(rows=list(sources), names=GAIA_COLUMNS)

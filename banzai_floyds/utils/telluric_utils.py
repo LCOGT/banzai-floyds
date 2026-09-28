@@ -44,28 +44,6 @@ def scale_transmission(transmission, airmass_scale):
     return transmission ** airmass_scale
 
 
-def get_molecular_regions(wavelength):
-    o2_region = np.zeros_like(wavelength, dtype=bool)
-    h2o_region = np.zeros_like(wavelength, dtype=bool)
-    for region in TELLURIC_REGIONS:
-        telluric_wavelengths = np.logical_and(wavelength >= region['wavelength_min'],
-                                              wavelength <= region['wavelength_max'])
-        if region['molecule'] == 'O2':
-            o2_region = np.logical_or(o2_region, telluric_wavelengths)
-        elif region['molecule'] == 'H2O':
-            h2o_region = np.logical_or(h2o_region, telluric_wavelengths)
-    return o2_region, h2o_region
-
-
-def scale_telluric(telluric_transmission, wavelength, o2_scale, h2o_scale, h2o_region=None, o2_region=None):
-    scaled_model = telluric_transmission.copy()
-    if o2_region is None or h2o_region is None:
-        o2_region, h2o_region = get_molecular_regions(wavelength)
-    scaled_model[h2o_region] = scale_transmission(scaled_model[h2o_region], h2o_scale)
-    scaled_model[o2_region] = scale_transmission(scaled_model[o2_region], o2_scale)
-    return {'telluric': scaled_model, 'wavelength': wavelength}
-
-
 def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resolution_fwhm=17.5):
     if telluric_model is None:
         # Load the default telluric absorption model from Matheson 2000
@@ -85,17 +63,6 @@ def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resol
                                     right=1.0, left=1.0)
     # telluric_correction = scale_trasmission(telluric_correction, airmass)
     return telluric_correction
-
-
-def telluric_match_weights(params, x, correction, wavelengths, o2_region, h2o_region):
-    shift, o2_scale, h2o_scale = params
-    model_correction = correction.copy()
-    model_correction[o2_region] = scale_transmission(model_correction[o2_region], o2_scale)
-    model_correction[h2o_region] = scale_transmission(model_correction[h2o_region], h2o_scale)
-    correction = np.interp(x, wavelengths - shift, model_correction, right=1.0, left=1.0)
-    correction[correction < 0.0] = 0.0
-    correction[correction > 1.0] = 1.0
-    return correction
 
 
 def elevation_to_airmass_ratio(elevation1, elevation2):

@@ -27,11 +27,6 @@ class WavelengthSolution:
         return self._tilt_polynomials
 
     @property
-    def lsf_sigma(self):
-        """Gauss-Hermite sigma (pixels) per order, indexed by order_id - 1."""
-        return [params['sigma'] for params in self.lsf_params]
-
-    @property
     def fwhm(self):
         """Line FWHM (pixels) per order, indexed by order_id - 1."""
         return [sigma_to_fwhm(params['sigma']) for params in self.lsf_params]

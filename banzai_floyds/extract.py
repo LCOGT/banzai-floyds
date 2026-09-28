@@ -1,8 +1,13 @@
 from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table
+from banzai.logs import get_logger
+from collections import Counter
 from banzai_floyds.utils.binning_utils import rebin_data_combined
 from banzai_floyds.utils.flux_utils import flux_calibrate
+
+
+logger = get_logger()
 
 
 def set_extraction_region(image):
@@ -34,10 +39,11 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
 
-    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [], 
+    results = {flux_keyword: [], flux_error_key: [], 'wavelength': [], 'binwidth': [],
                background_out_key: [], 'mask': []}
     if include_order:
         results['order'] = []
+    n_skipped = Counter()
     for data_to_sum in binned_data.groups:
         wavelength_bin = data_to_sum[bin_key][0]
         order = data_to_sum['order'][0]
@@ -45,11 +51,13 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         if wavelength_bin == 0:
             continue
         if data_to_sum['extraction_window'].sum() == 0:
+            n_skipped[order] += 1
             continue
         # Cut any bins that don't include the profile center. If the weights are small (i.e. we only caught the edge
         # of the profile), this blows up numerically. The threshold here is a little arbitrary. It needs to be small
         # enough to not have numerical artifacts but large enough to not reject broad profiles.
         if np.max(data_to_sum[weights_key][data_to_sum['extraction_window']]) < 5e-3:
+            n_skipped[order] += 1
             continue
 
         wavelength_bin_width = data_to_sum[bin_key + '_width'][0]
@@ -86,13 +94,30 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
         results['mask'].append(mask)
         if include_order:
             results['order'].append(order)
+    for order in sorted(n_skipped):
+        # These bins are silently missing from the extracted spectrum, which usually means the
+        # profile is not where the flux is
+        logger.warning(f'Skipped {n_skipped[order]} wavelength bins in order {order} that missed the profile')
     return Table(results)
 
 
 class Extractor(Stage):
-    DEFAULT_EXTRACT_WINDOW = 2.5
+    # Half width of the extraction window in profile sigma. The window is not symmetric in what it
+    # costs: on a gamma_ratio = 0.2 Voigt, 2.5 sigma holds 93.8% of the flux and 3.0 sigma holds
+    # 95.5%, but the point of the extra half sigma is that it also cuts what a mismeasured width
+    # costs. A sigma 25% too small throws away 5.4% of the flux at 2.5 sigma and 3.2% at 3.0, for 9.5% more sky
+    # noise, and only where the sky dominates. That is the right trade for an unweighted extraction,
+    # where every pixel in the window counts the same; Horne 1986 weighting gives the extra wing
+    # almost no weight either way.
+    DEFAULT_EXTRACT_WINDOW = 3.0
 
     def do_stage(self, image):
+        # Nothing was found in the slit. Hand the frame back untouched rather than raising on the
+        # missing profile columns, which banzai would turn into the frame being dropped from the
+        # reduction with no product written at all.
+        if image.profile_fits is None:
+            logger.warning('No object was detected, so there is nothing to extract.', image=image)
+            return image
         if not image.extraction_windows:
             window = [-self.DEFAULT_EXTRACT_WINDOW, self.DEFAULT_EXTRACT_WINDOW]
             image.extraction_windows = [window, window]

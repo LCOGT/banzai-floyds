@@ -12,6 +12,30 @@ from banzai.utils.date_utils import parse_date_obs
 import importlib.resources
 
 
+def find_flux_standard(ra, dec, db_address, offset_threshold=5):
+    """
+    The flux standard at a position, or None if there is not one there.
+
+    ra: float
+        RA in decimal degrees
+    dec: float
+        Declination in decimal degrees
+    db_address: str
+        Database address in SQLAlchemy format
+    offset_threshold: float
+        Match radius in arcseconds
+    """
+    found_standard = None
+    test_coordinate = SkyCoord(ra, dec, unit=(units.deg, units.deg))
+    with get_session(db_address) as db_session:
+        standards = db_session.query(FluxStandard).all()
+        for standard in standards:
+            standard_coordinate = SkyCoord(standard.ra, standard.dec, unit=(units.deg, units.deg))
+            if standard_coordinate.separation(test_coordinate) < (offset_threshold * units.arcsec):
+                found_standard = standard
+    return found_standard
+
+
 def get_standard(ra, dec, runtime_context, offset_threshold=5):
     """
     Check if a position is in the table of flux standards
@@ -25,17 +49,12 @@ def get_standard(ra, dec, runtime_context, offset_threshold=5):
     offset_threshold: float
         Match radius in arcseconds
     """
-    found_standard = None
-    test_coordinate = SkyCoord(ra, dec, unit=(units.deg, units.deg))
-    with get_session(runtime_context.db_address) as db_session:
-        standards = db_session.query(FluxStandard).all()
-        for standard in standards:
-            standard_coordinate = SkyCoord(standard.ra, standard.dec, unit=(units.deg, units.deg))
-            if standard_coordinate.separation(test_coordinate) < (offset_threshold * units.arcsec):
-                found_standard = standard
+    found_standard = find_flux_standard(ra, dec, runtime_context.db_address, offset_threshold)
     if found_standard is not None:
         found_standard = open_fits_file(
-            {'path': os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'standards', found_standard.filename),
+            {'path': os.path.join(
+                importlib.resources.files('banzai_floyds'), 'data', 'standards', found_standard.filename
+            ),
              'frameid': found_standard.frameid,
              'filename': found_standard.filename},
             runtime_context)
@@ -130,6 +149,28 @@ class LSFParams(Base):
     good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
 
 
+class ProfileShape(Base):
+    __tablename__ = 'profileshape'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), index=True)
+    # One star produces a record per order, so filename is only unique per order
+    filename = Column(String(100))
+    order_id = Column(Integer)
+    slit_width = Column(Float)
+    dateobs = Column(DateTime)
+    # Legendre coefficients over [wavelength_min, wavelength_max]: the FWHM at the seeing reference
+    # wavelength is a quadratic and gamma_ratio is a line
+    wavelength_min = Column(Float)
+    wavelength_max = Column(Float)
+    fwhm_c0 = Column(Float)
+    fwhm_c1 = Column(Float)
+    fwhm_c2 = Column(Float)
+    gamma_c0 = Column(Float)
+    gamma_c1 = Column(Float)
+    good_until = Column(DateTime, default=datetime.datetime(3000, 1, 1))
+    good_after = Column(DateTime, default=datetime.datetime(1000, 1, 1))
+
+
 def create_db(db_address):
     # Create an engine for the database
     engine = create_engine(db_address)
@@ -186,6 +227,44 @@ def add_lsf_params(db_address, instrument_id, filename, order_id, slit_width, da
                          'good_after': parse_date_obs(good_after), 'good_until': parse_date_obs(good_until)}
     with get_session(db_address) as db_session:
         add_or_update_record(db_session, LSFParams, {'filename': filename, 'order_id': order_id},
+                             record_attributes)
+        db_session.commit()
+
+
+def get_star_profile_shape(dateobs, instrument, slit_width, db_address):
+    """The per order profile records of the star closest in time on this instrument and slit, or an
+    empty list if no star has been recorded there."""
+    with get_session(db_address) as db_session:
+        shape_query = db_session.query(ProfileShape).filter(ProfileShape.instrument_id == instrument.id)
+        shape_query = shape_query.filter(ProfileShape.slit_width == slit_width)
+        shape_query = shape_query.filter(ProfileShape.good_after <= dateobs)
+        shape_query = shape_query.filter(ProfileShape.good_until >= dateobs)
+        closest = shape_query.order_by(get_order_func(db_session, dateobs, ProfileShape)).first()
+        if closest is None:
+            return []
+        return shape_query.filter(ProfileShape.filename == closest.filename).all()
+
+
+def add_profile_shape(db_address, instrument_id, filename, order_id, slit_width, dateobs, fwhm, gamma_ratio,
+                      good_after='1000-01-01T00:00:00', good_until='3000-01-01T00:00:00'):
+    """Store (or update) the width and shape of the profile measured on one order of an isolated star.
+
+    fwhm and gamma_ratio are Legendre polynomials in wavelength over the same domain, of at most degree
+    2 and 1.
+    """
+    if isinstance(dateobs, str):
+        dateobs = parse_date_obs(dateobs)
+    fwhm_coefficients = list(fwhm.coef) + [0.0] * (3 - len(fwhm.coef))
+    gamma_coefficients = list(gamma_ratio.coef) + [0.0] * (2 - len(gamma_ratio.coef))
+    record_attributes = {'instrument_id': instrument_id, 'filename': filename, 'order_id': order_id,
+                         'slit_width': slit_width, 'dateobs': dateobs,
+                         'wavelength_min': float(fwhm.domain[0]), 'wavelength_max': float(fwhm.domain[1]),
+                         'fwhm_c0': float(fwhm_coefficients[0]), 'fwhm_c1': float(fwhm_coefficients[1]),
+                         'fwhm_c2': float(fwhm_coefficients[2]),
+                         'gamma_c0': float(gamma_coefficients[0]), 'gamma_c1': float(gamma_coefficients[1]),
+                         'good_after': parse_date_obs(good_after), 'good_until': parse_date_obs(good_until)}
+    with get_session(db_address) as db_session:
+        add_or_update_record(db_session, ProfileShape, {'filename': filename, 'order_id': order_id},
                              record_attributes)
         db_session.commit()
 

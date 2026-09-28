@@ -81,3 +81,10 @@ FRINGE_CUTOFF_WAVELENGTH = 6200.0
 
 # Tilts in degrees measured counterclockwise (right-handed coordinates)
 WAVELENGTH_TILT_GUESS = 8.0
+
+PROFILE_TRACE_POLYNOMIAL_DEGREE = 5
+PROFILE_WIDTH_POLYNOMIAL_DEGREE = 1
+# For cases that we have FWHM measurements of the profile for many points across the dispersion direction
+# we fit a higher degree polynomial
+PROFILE_WELL_COVERED_WIDTH_DEGREE = 2
+PROFILE_SHAPE_POLYNOMIAL_DEGREE = 1
