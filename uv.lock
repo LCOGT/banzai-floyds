@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.11, <4"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform != 'darwin'",
-    "python_full_version < '3.12' and sys_platform != 'darwin'",
     "python_full_version >= '3.12' and sys_platform == 'darwin'",
+    "python_full_version < '3.12' and sys_platform != 'darwin'",
     "python_full_version < '3.12' and sys_platform == 'darwin'",
 ]
 
@@ -78,8 +78,8 @@ wheels = [
 
 [[package]]
 name = "astropy"
-version = "8.0.1"
-source = { registry = "https://pypi.org/simple" }
+version = "8.0.0.dev694+gf57f873be"
+source = { git = "https://github.com/cmccully/astropy.git?rev=fix%2Ffunpack#f57f873bea5b4295b4e37d4c53b63665ba6f01ba" }
 dependencies = [
     { name = "astropy-iers-data" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -87,17 +87,6 @@ dependencies = [
     { name = "packaging" },
     { name = "pyerfa" },
     { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/c4/21be4313ddfde5f60e0607fd307f367b9e0f0bf153a89b10cbd036dd8cfd/astropy-8.0.1.tar.gz", hash = "sha256:45ca31d5b91fa294cd590a4791a32db94de7f9c8a343155f4d5877baa82351da", size = 7152500, upload-time = "2026-07-05T07:24:48.482Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/80/69a84af0b35d55a859cde38e16b71553840a156bdf7dc4b767ec2b2d2829/astropy-8.0.1-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:24813c764d5ea111e7f716127121e22a0cfe233ca1eac2ed23c4a3848390610e", size = 6635649, upload-time = "2026-07-05T07:24:31.957Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/34/074f367d5699a1008b24c50acc1539f05f2cfc881b1901f4b110d57eae20/astropy-8.0.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:222f0b9837e79fd3d101e6d4e4579e3aa98c490000bb01e35cd32fd3e3c12bf5", size = 6607950, upload-time = "2026-07-05T07:24:34.148Z" },
-    { url = "https://files.pythonhosted.org/packages/56/3b/d29035da0a08e3b0b03d63abe9ce69b900d8ef7863dc557a2e34ebf56a4e/astropy-8.0.1-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9a4044396c15969bb029b648521f7c25d294e982dbd23e7c2c7dd328178b8b98", size = 10414634, upload-time = "2026-07-05T07:24:36.129Z" },
-    { url = "https://files.pythonhosted.org/packages/fa/14/6f4427419f8a02e1d0a885fb64d8d4454c5d443627aa7cb1a3a36e16abb7/astropy-8.0.1-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fa11d56855e10107ea2231a6b6a33dbf1edbea6890adf34634c1f1d8f25c5a5a", size = 10452095, upload-time = "2026-07-05T07:24:38.424Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/ef/a5cf36a402c4511a776405f12d0b35196f55f4312ce407012a2fbcf1e4e0/astropy-8.0.1-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:5b482bc6c57c966e6c6234410a1d9afbcf92bcac858cf287812f8c99ddc3fafc", size = 10407732, upload-time = "2026-07-05T07:24:40.774Z" },
-    { url = "https://files.pythonhosted.org/packages/58/6d/59e7fb6f9ade53889c9553afff89991b8076c021581ba66eb51d913ca6c9/astropy-8.0.1-cp311-abi3-win32.whl", hash = "sha256:13a6ef59347a15c55406bb630e0d25d0248a179af84fae06a7ddb85a229065b2", size = 6394540, upload-time = "2026-07-05T07:24:43.146Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/6a/8534fd98e2d3eb51cbaa261e6c6b59e4ad969a1787d72bb1208499080dbd/astropy-8.0.1-cp311-abi3-win_amd64.whl", hash = "sha256:ee9024f2237243ebc98726f8eff2efbf201ea4e0bba1d21f6e2dee0cb499fbdf", size = 6529976, upload-time = "2026-07-05T07:24:44.693Z" },
-    { url = "https://files.pythonhosted.org/packages/8a/df/96b8bf4ec218d03969a8b904ade5fc5b1a63f4a7f02c4e107b6264bcf152/astropy-8.0.1-cp311-abi3-win_arm64.whl", hash = "sha256:435e784f2cd9a4c31a03102e6ad27a51b901a8d5587bc78afe8d28e41eb44824", size = 6395252, upload-time = "2026-07-05T07:24:46.56Z" },
 ]
 
 [[package]]
@@ -203,19 +192,6 @@ wheels = [
 ]
 
 [[package]]
-name = "auto-stretch"
-version = "1.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/57/7a/7a44e43ef7e76cc186ae8cc7792978eeac31e272386c7bc617c231999a20/auto_stretch-1.1.0.tar.gz", hash = "sha256:c8c91dbb1c32914d64f9ec065df5abe274f9b5f707f4497deba8fcb05acc4ab9", size = 1060848, upload-time = "2026-07-03T16:08:12.828Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/16/af03a65d260bd3d8634d8e3bb6423cbae5b9c52f4b9709611d2592177da4/auto_stretch-1.1.0-py3-none-any.whl", hash = "sha256:5029de2771f5de667a6663c4f21ac7d1fc8c6d23e4293789892955651dbca4e4", size = 5308, upload-time = "2026-07-03T16:08:11.686Z" },
-]
-
-[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -249,7 +225,7 @@ dependencies = [
     { name = "pywavelets", version = "1.10.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "scikit-image" },
     { name = "scikit-learn" },
-    { name = "torch", version = "2.14.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.14.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.14.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
 
@@ -279,7 +255,7 @@ requires-dist = [
     { name = "coverage", marker = "extra == 'test'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "ipython" },
-    { name = "lco-banzai", specifier = ">=1.39.0" },
+    { name = "lco-banzai", git = "https://github.com/lcogt/banzai.git?rev=1.37.1" },
     { name = "matplotlib" },
     { name = "mock", marker = "extra == 'test'" },
     { name = "nbsphinx", marker = "extra == 'docs'" },
@@ -958,7 +934,7 @@ wheels = [
 
 [package.optional-dependencies]
 cpu = [
-    { name = "torch", version = "2.14.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.14.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.14.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
 
@@ -1955,13 +1931,12 @@ wheels = [
 
 [[package]]
 name = "lco-banzai"
-version = "1.39.0"
-source = { registry = "https://pypi.org/simple" }
+version = "1.37.1"
+source = { git = "https://github.com/lcogt/banzai.git?rev=1.37.1#79a5490b3eecb3997b5c2f47c321b505db0f8630" }
 dependencies = [
     { name = "alembic" },
     { name = "apscheduler" },
     { name = "astropy" },
-    { name = "auto-stretch" },
     { name = "bottleneck" },
     { name = "celery", extra = ["redis"] },
     { name = "cosmic-conn", extra = ["cpu"] },
@@ -1977,7 +1952,6 @@ dependencies = [
     { name = "ocs-ingester" },
     { name = "opensearch-py" },
     { name = "photutils" },
-    { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "python-dateutil" },
@@ -1988,25 +1962,8 @@ dependencies = [
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sqlalchemy" },
     { name = "tenacity" },
-    { name = "torch", version = "2.14.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.14.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.14.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/94/a7/08dce25f3886b7991b2e66bb119e3653a9a64b1d9f0db94e127081af80c7/lco_banzai-1.39.0.tar.gz", hash = "sha256:dd4348122b57a73a38b8e1714c7c839847101ed807e212c96acc07e1c6be3d89", size = 1071823, upload-time = "2026-09-28T22:21:28.366Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/f5/2743224f96be8d25fc610b5fe45549e9f8159185008f825c450ab3b613c0/lco_banzai-1.39.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9a4b52e166bfbe0c3caabf1eb898479fc68f04f11de4cb7564874666e4fb68df", size = 1796744, upload-time = "2026-09-28T22:21:04.788Z" },
-    { url = "https://files.pythonhosted.org/packages/46/12/14912996b474caf4b3f1e586215aa9cb82407914a24da07928bf37663025/lco_banzai-1.39.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:2d772fe3ed8c1eadb2b0479109fe94429dd3009bd152f3883d0ce3a614a6aaca", size = 1838788, upload-time = "2026-09-28T22:21:06.847Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/31/e873b8ce57de3e1ad9ae3bf6612bf6589cdad497501bdb17254e4653cc50/lco_banzai-1.39.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:19e89dfa3f60357a0e59d8645b49e66bd70ab6af73c6508a654a66456373fe0c", size = 1953105, upload-time = "2026-09-28T22:21:08.706Z" },
-    { url = "https://files.pythonhosted.org/packages/c2/ee/4734b0ee9077171f378aa4bbe7cb04445217ce2b6a7aaec8c1e7b96feb37/lco_banzai-1.39.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:c0424aa18616e35e2b0b7c32c2300ca01d5c9c79cff754e96604dab34cf360de", size = 1989888, upload-time = "2026-09-28T22:21:10.429Z" },
-    { url = "https://files.pythonhosted.org/packages/43/c7/56374836e32a1c3c22489e931ab95142d22b41edabd5c83ecc2aa48d5c75/lco_banzai-1.39.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7a9d4923d169558ade122b8f50c645dfe72120148c4f33af8b821ec237cfcc69", size = 1953356, upload-time = "2026-09-28T22:21:12.287Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/0d/3ea74dc0e33037910f8c104da01a98c164668d050e2dfd2f30af4c65f32e/lco_banzai-1.39.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:c61cc6cc432e286f3cd4da8e29ce3bfc8335be2f201a45d36003bf82bfc5b5c9", size = 1991271, upload-time = "2026-09-28T22:21:13.867Z" },
-    { url = "https://files.pythonhosted.org/packages/36/0d/56ed9349fc389b19e6b98d804f897f34dc6774c817502a42794a516ac68c/lco_banzai-1.39.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:398a40754ac10dfe96e67483aeed318fbd2ef858d18a70972ab0c81ec8d79a13", size = 1952910, upload-time = "2026-09-28T22:21:15.366Z" },
-    { url = "https://files.pythonhosted.org/packages/8a/f4/d2896fcd757892d316c33cc938288ec634187d1030e256018ad5c64f100a/lco_banzai-1.39.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:e58c5a91ff92e739c71b4fe45f5f9dbd8415c1fc71d38fc96a83ef83a27eea98", size = 1991406, upload-time = "2026-09-28T22:21:17.132Z" },
-    { url = "https://files.pythonhosted.org/packages/77/b5/c927a969d37c57dee5d258e23181fe17b480825f578d8e80202ee63a4e7c/lco_banzai-1.39.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a44a0a49ff1caa0f7b5ef6f41f152eca13ae8cddd4db201d6629f13e4cc585fb", size = 1962396, upload-time = "2026-09-28T22:21:18.632Z" },
-    { url = "https://files.pythonhosted.org/packages/9f/1a/f99a85eab18541d0a12ce7a1c9e7cb4fa5aefb33bd3d22f8e49bda72451f/lco_banzai-1.39.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:58255f350d8007fe8fdb1ac93a83edc7062c7f5ed4ff02fcc62124d1d7c881f8", size = 1996887, upload-time = "2026-09-28T22:21:20.413Z" },
-    { url = "https://files.pythonhosted.org/packages/06/44/279b9b8015a97ed982d4d70ae79acb84a28e23cca8f44f3034642bf220ed/lco_banzai-1.39.0-cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:095e80b7ecb44291c84b08ed9c7949088ec57f953d94bed1c9da24fbb9e9d65d", size = 1964364, upload-time = "2026-09-28T22:21:21.948Z" },
-    { url = "https://files.pythonhosted.org/packages/82/94/22a202506b0d835dc9d8b5f4977af845f6d5c2aba1cbb58acb91bd0e1cce/lco_banzai-1.39.0-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:225602bafc9eb7cb1a329ddf29abea8fdc37cb516be8e50f7b6d8e8210212fc3", size = 2001646, upload-time = "2026-09-28T22:21:23.501Z" },
-    { url = "https://files.pythonhosted.org/packages/37/6b/26e5c87eb32b7ba97e06faaccffb17bd82431cb40403358bd409595a7e3b/lco_banzai-1.39.0-cp315-cp315t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:db895140d4b0a4104c6a9d831dc58a5db4854e10a23ec4a67eb70d389c64bf7b", size = 1959632, upload-time = "2026-09-28T22:21:25.084Z" },
-    { url = "https://files.pythonhosted.org/packages/8e/e8/329947c5667268f678c1248ac59eac8fe0903922adbc3f757710c938e2f5/lco_banzai-1.39.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:05f0a16df3bf56f4c780b92931babf724b193e4123f07e87057ce5f3239975da", size = 1993901, upload-time = "2026-09-28T22:21:26.967Z" },
 ]
 
 [[package]]
@@ -4473,7 +4430,7 @@ wheels = [
 [[package]]
 name = "torch"
 version = "2.14.0"
-source = { registry = "https://pypi.org/simple" }
+source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'darwin'",
     "python_full_version < '3.12' and sys_platform == 'darwin'",
@@ -4489,11 +4446,13 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/2c/0c9757a1ea1fff8ccc4faff1d1c87e98a69542b5d4b606e50f7518f72e58/torch-2.14.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:ae530ddd3f3b94248b77f1fd3313c4f3405bd0d17283d505b81574816767133a", size = 127277244, upload-time = "2026-09-02T13:42:57.855Z" },
-    { url = "https://files.pythonhosted.org/packages/17/76/bb4770f56cf6d8971671dbcbb7493e5a6a15ad2825f4e359b02c27c38297/torch-2.14.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:c1f844f1c750e87df4b68bc3afbc0e2b0c7ef19d7b8f666e48bdcf6a0c4f0056", size = 127303200, upload-time = "2026-09-02T13:43:20.311Z" },
-    { url = "https://files.pythonhosted.org/packages/ca/40/0db773452c2a62b37761d3f418acf933d381f9e87077036fb57c2a386c37/torch-2.14.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:9d4b1022a5d9b71282ec67ad0d9e7235870096b8a246dc1c32d6ea1fc83dc998", size = 127311393, upload-time = "2026-09-02T13:43:59.607Z" },
-    { url = "https://files.pythonhosted.org/packages/ee/90/1241e7db5ccc2455f8735bd6b1becfad39916206ad18001c4c0014d139e2/torch-2.14.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:860423e970f2ce02c4476e8e2d1350131b1c5c5a5e4912180e78b50b53241efa", size = 127321431, upload-time = "2026-09-02T13:44:38.236Z" },
-    { url = "https://files.pythonhosted.org/packages/a5/49/bbaee76337742a42d2c5b0296ea62252567050e1d821bc2283b2e72ba6fb/torch-2.14.0-cp314-cp314t-macosx_14_0_arm64.whl", hash = "sha256:553aec938d37d77b783bcf801e638cad068870e7643c47eadac21eb180f551ed", size = 127653463, upload-time = "2026-09-02T13:45:17.1Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:1040f689e560ba6e02a0a147dfb9ec8dfdd3e4486ebec4b24dc8fdaa258fa9ba", upload-time = "2026-09-02T00:26:07Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:ab7e226c18d3cbc134dfa952d18ab1df202055dd33446837c8fd050ad449e6f5", upload-time = "2026-09-02T00:26:12Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:caf6359d64c0074bcb9f8641a169239118c8165a0a0fef79110c72bfd6474bec", upload-time = "2026-09-02T00:26:15Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:d0f78744000a7863cc3f1eafaf511d4b9944f079f08277de6fefe4b01f4d41b9", upload-time = "2026-09-02T00:26:19Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp314-cp314t-macosx_14_0_arm64.whl", hash = "sha256:dd4c297f1af83ad44368ffdaa9ed0318984567ff952bbda3d90cc300afe1e8a0", upload-time = "2026-09-02T00:26:23Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp315-cp315-macosx_14_0_arm64.whl", hash = "sha256:c65f7d7783e76272bbd53e4220aa029ac14e2dc346c6641691e041202a03b0e0", upload-time = "2026-09-02T00:26:27Z" },
+    { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.0-cp315-cp315t-macosx_14_0_arm64.whl", hash = "sha256:879140333148a3a5b1a14ab29a35b58c3c8db4d85c7130018a79178eb239008b", upload-time = "2026-09-02T00:26:30Z" },
 ]
 
 [[package]]
