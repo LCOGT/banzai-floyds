@@ -13,7 +13,7 @@ import numpy as np
 from banzai.utils.fits_utils import download_from_s3
 import banzai.main
 from banzai_floyds import settings
-from banzai.utils import file_utils
+from banzai.utils import messaging
 from types import ModuleType
 import banzai_floyds.dbs
 import logging
@@ -67,7 +67,7 @@ def run_reduce_individual_frames(filename_pattern, extra_checks=None):
         if extra_checks is not None:
             frame_passes = frame_passes and extra_checks(frame)
         if frame_passes:
-            file_utils.post_to_archive_queue(frame['filename'], 
+            messaging.post_to_archive_queue(frame['filename'], 
                                              os.getenv('FITS_BROKER'),
                                              exchange_name=os.getenv('FITS_EXCHANGE'),
                                              frameid=frame['frameid'],
