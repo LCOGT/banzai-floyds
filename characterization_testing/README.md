@@ -11,7 +11,6 @@ python fringe_correction_results.py --workers 8
 python single_flat_fringe_comparison.py --workers 8
 python profile_results.py --workers 8 --skip-download
 python background_results.py --workers 8 --skip-download
-python background_comparison.py --workers 8 --skip-download
 ```
 
 `profile_results.py` writes both `trace_overlay_results.pdf` and
