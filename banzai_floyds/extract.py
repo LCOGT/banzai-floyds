@@ -10,7 +10,10 @@ from banzai_floyds.utils.flux_utils import flux_calibrate
 logger = get_logger()
 
 
-def set_extraction_region(image):
+def set_extraction_region(image, default_window):
+    if not image.extraction_windows:
+        window = [-default_window, default_window]
+        image.extraction_windows = [window, window]
     image.binned_data['extraction_window'] = False
     for order_id in [2, 1]:
         in_order = image.binned_data['order'] == order_id
@@ -102,13 +105,6 @@ def extract(binned_data, bin_key='order_wavelength_bin', data_keyword='data', ba
 
 
 class Extractor(Stage):
-    # Half width of the extraction window in profile sigma. The window is not symmetric in what it
-    # costs: on a gamma_ratio = 0.2 Voigt, 2.5 sigma holds 93.8% of the flux and 3.0 sigma holds
-    # 95.5%, but the point of the extra half sigma is that it also cuts what a mismeasured width
-    # costs. A sigma 25% too small throws away 5.4% of the flux at 2.5 sigma and 3.2% at 3.0, for 9.5% more sky
-    # noise, and only where the sky dominates. That is the right trade for an unweighted extraction,
-    # where every pixel in the window counts the same; Horne 1986 weighting gives the extra wing
-    # almost no weight either way.
     DEFAULT_EXTRACT_WINDOW = 3.0
 
     def do_stage(self, image):
@@ -118,10 +114,7 @@ class Extractor(Stage):
         if image.profile_fits is None:
             logger.warning('No object was detected, so there is nothing to extract.', image=image)
             return image
-        if not image.extraction_windows:
-            window = [-self.DEFAULT_EXTRACT_WINDOW, self.DEFAULT_EXTRACT_WINDOW]
-            image.extraction_windows = [window, window]
-        set_extraction_region(image)
+        set_extraction_region(image, self.DEFAULT_EXTRACT_WINDOW)
 
         image.extracted = extract(image.binned_data)
         return image
