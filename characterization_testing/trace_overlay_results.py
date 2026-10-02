@@ -19,7 +19,7 @@ from process_lamp_flats import make_context
 from fringe_correction_results import add_stats_panel
 from reduction_utils import reduce_to_stage, frame_metadata
 from report_utils import Report, raw_frame_paths, write_reports
-from banzai_floyds.background import ORDER_EDGE_MARGIN
+from banzai_floyds.background import BackgroundFitter
 from banzai_floyds.extract import Extractor
 from banzai_floyds.profile import ProfileFitter, remove_smooth_background
 from banzai_floyds.utils.profile_utils import profile_sigmas
@@ -247,7 +247,7 @@ def plot_order(ax, ax_profile, order: dict, panel: dict, order_id: int):
               origin='lower', aspect='auto', interpolation='nearest',
               extent=[columns[0] - 0.5, columns[n_shown - 1] + 0.5, -half_height - 0.5, half_height + 0.5])
     for sign in [-1.0, 1.0]:
-        ax.axhline(sign * (half_height - ORDER_EDGE_MARGIN), color='goldenrod', lw=0.5, ls=':')
+        ax.axhline(sign * (half_height - BackgroundFitter.ORDER_EDGE_MARGIN), color='goldenrod', lw=0.5, ls=':')
         ax.plot(columns, center + sign * Extractor.DEFAULT_EXTRACT_WINDOW * sigma,
                 color=TRACE_COLOR, lw=0.6, ls='--')
     ax.plot(columns, center, color=TRACE_COLOR, lw=0.8)

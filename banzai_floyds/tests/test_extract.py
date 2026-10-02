@@ -36,7 +36,7 @@ def test_extraction_region():
                          'profile_sigma': profile_sigma * np.ones(x.size),
                          'y_profile': y_profile.ravel()})
     fake_data = FakeImage(binned_data, {}, [[-5.0, 5.0], [-5.0, 5.0]])
-    set_extraction_region(fake_data)
+    set_extraction_region(fake_data, Extractor.DEFAULT_EXTRACT_WINDOW)
     # The extraction should be +- 5 pixels high so there should be 11 pixels in the extraction region
     for order in [1, 2]:
         in_order = fake_data.binned_data['order'] == order
@@ -54,7 +54,7 @@ def test_extraction():
     input_brightness = 10000.0
 
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
-    set_extraction_region(fake_frame)
+    set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     extracted = extract(fake_frame.binned_data)
     residuals = extracted['fluxraw'] - input_brightness
     residuals /= extracted['fluxrawerr']
@@ -86,7 +86,7 @@ def test_combined_extraction():
     frame.binned_data['background'] = frame.input_sky[frame.binned_data['y'].astype(int),
                                                       frame.binned_data['x'].astype(int)]
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
-    set_extraction_region(frame)
+    set_extraction_region(frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     frame.sensitivity = Table({'wavelength': [0, 1e6, 0, 1e6], 'sensitivity': [1, 1, 1, 1], 'order': [1, 1, 2, 2]})
     frame.telluric = Table({'wavelength': [0, 1e6], 'telluric': [1, 1]})
     extracted_waves = np.arange(3000.0, 10000.0)

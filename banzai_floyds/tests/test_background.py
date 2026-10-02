@@ -1,11 +1,16 @@
-from banzai_floyds.background import fit_background, background_degree, BackgroundFitter
-from banzai_floyds.utils.fitting_utils import robust_legendre_fit, fwhm_to_sigma, sigma_to_fwhm
+from banzai_floyds.background import fit_background, background_degree, BackgroundFitter, adaptive_knots
+from banzai_floyds.background import uniform_knots
+from banzai_floyds.background import gap_degree
+from banzai_floyds.utils.fitting_utils import robust_legendre_fit, robust_linear_fit, fwhm_to_sigma, sigma_to_fwhm
+from banzai_floyds.utils.fitting_utils import gauss
 from banzai_floyds.cosmics import CosmicRayDetector
-from banzai_floyds.extract import set_extraction_region
+from banzai_floyds.extract import set_extraction_region, Extractor
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.utils.binning_utils import bin_data
 import numpy as np
 from numpy.polynomial.legendre import Legendre as NumpyLegendre
+from scipy import sparse
+from scipy.interpolate import make_interp_spline
 from scipy.ndimage import binary_erosion
 from banzai import context
 from numpy.polynomial.legendre import Legendre
@@ -70,8 +75,8 @@ def test_background_fitting():
     fake_frame.binned_data = binned_data
     set_up_profile(fake_frame)
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
-    set_extraction_region(fake_frame)
-    fitted_background, _ = fit_background(binned_data, background_order=3)
+    set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
+    fitted_background, _ = fit_background(binned_data, spatial_background_order=3)
     fake_frame.background = fitted_background
     # If we are fitting to the noise, I think the residuals / uncertainty per pixel should
     # follow a Gaussian distribution with sigma=1. So check cuts of the residual
@@ -89,24 +94,16 @@ def test_background_stage():
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
     set_up_profile(frame)
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
-    set_extraction_region(frame)
+    set_extraction_region(frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     frame = BackgroundFitter(input_context).do_stage(frame)
 
     residuals, interior = sky_residuals(frame)
     assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()
-    # A 10 pixel FWHM on a 93 pixel order leaves plenty of room for the requested degree
-    assert frame.meta['L1BKDG1'] == 3
-    assert frame.meta['L1BKDG2'] == 3
+    assert frame.meta['L1BKDG1'] == 1
+    assert frame.meta['L1BKDG2'] == 1
 
 
 def test_background_survives_a_profile_too_wide_for_a_window():
-    """The failure this stage was rewritten for.
-
-    A 24 pixel FWHM on a 93 pixel order puts +-4 sigma past the end of the slit wherever the trace
-    is not dead center, so a background region outside the object would collapse to a few pixels on
-    one side and the polynomial across it would lever. Fitting the object alongside the sky has no
-    region to collapse, so the sky has to come back right anyway.
-    """
     np.random.seed(6112)
     frame = generate_fake_science_frame(include_sky=True, profile_fwhm=24.0)
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
@@ -115,9 +112,10 @@ def test_background_survives_a_profile_too_wide_for_a_window():
 
     residuals, interior = sky_residuals(frame)
     assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()
-    # Every wavelength bin should get its own fit; nothing is left to inherit a neighbor's
-    assert frame.meta['L1BKNB1'] > 1500
-    assert frame.meta['L1BKNB2'] > 1300
+    # The mask shrinks to leave some slit to fit, and the gap it leaves is still too wide for a curve
+    assert frame.meta['L1BKDG1'] == 1
+    assert frame.meta['L1BKDG2'] == 1
+    assert frame.meta['L1BKMW1'] < BackgroundFitter.OBJECT_MASK_WINDOW
 
 
 def test_background_degree_drops_when_the_object_is_wide():
@@ -128,6 +126,14 @@ def test_background_degree_drops_when_the_object_is_wide():
     assert background_degree(n_slit_pixels, fwhm_to_sigma(45.0), 3) == 1
     # It can never go up past what was asked for, however good the seeing is
     assert background_degree(n_slit_pixels, fwhm_to_sigma(3.0), 3) == 3
+
+
+def test_gap_degree_keeps_the_polynomial_wider_than_the_mask():
+    n_slit_pixels = 84
+    # Typical FLOYDS seeing, a 5 pixel FWHM, masked to +-6 sigma leaves room for a cubic
+    assert gap_degree(n_slit_pixels, 2 * BackgroundFitter.OBJECT_MASK_WINDOW * fwhm_to_sigma(5.0), 3) == 3
+    assert gap_degree(n_slit_pixels, 2 * BackgroundFitter.OBJECT_MASK_WINDOW * fwhm_to_sigma(10.0), 3) == 1
+    assert gap_degree(n_slit_pixels, 100.0, 3) == 0
 
 
 def test_background_fitting_is_robust_to_an_unflagged_cosmic_ray():
@@ -147,7 +153,8 @@ def test_background_fitting_is_robust_to_an_unflagged_cosmic_ray():
     spike_row = np.flatnonzero(off_trace)[np.sum(off_trace) // 2]
     binned_data['data'][spike_row] += 50000.0
 
-    fitted_background, _ = fit_background(binned_data, background_order=3)
+    set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
+    fitted_background, _ = fit_background(binned_data, spatial_background_order=3)
     fake_frame.background = fitted_background
     residuals, interior = sky_residuals(fake_frame)
     assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()
@@ -183,3 +190,67 @@ def test_second_background_fit_benefits_from_cosmic_ray_mask():
 
     residuals, interior = sky_residuals(frame)
     assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()
+
+
+def test_knots_are_fine_on_sky_lines_and_coarse_in_the_continuum():
+    dispersion = 3.5
+    wavelength = np.arange(5000.0, 9000.0, dispersion)
+    line_center = 7000.0
+    sky = 100.0 + 2000.0 * gauss(wavelength, line_center, fwhm_to_sigma(15.0))
+    degree = BackgroundFitter.WAVELENGTH_SPLINE_DEGREE
+    sky_spectrum = make_interp_spline(wavelength, sky, k=degree)
+    knots = adaptive_knots(wavelength, sky_spectrum, dispersion, degree)[degree:-degree]
+    spacings = np.diff(knots) / dispersion
+    midpoints = 0.5 * (knots[1:] + knots[:-1])
+    on_line = np.abs(midpoints - line_center) < 10.0
+    far_from_line = np.abs(midpoints - line_center) > 100.0
+    assert np.allclose(spacings[on_line], BackgroundFitter.SKY_LINE_KNOT_SPACING)
+    assert np.allclose(spacings[far_from_line][:-1], BackgroundFitter.CONTINUUM_KNOT_SPACING)
+    assert knots[0] == wavelength[0] and knots[-1] == wavelength[-1]
+
+
+def test_uniform_knots_span_the_wavelengths():
+    wavelength = np.linspace(3000.0, 5000.0, 101)
+    degree = BackgroundFitter.WAVELENGTH_SPLINE_DEGREE
+    knots = uniform_knots(wavelength, 7.0, degree)
+    assert np.all(knots[:degree + 1] == 3000.0)
+    assert np.all(knots[-degree - 1:] == 5000.0)
+    assert np.max(np.diff(knots)) <= 7.0
+
+
+def test_sparse_robust_linear_fit_matches_dense():
+    """The sparse solve is the same least squares problem, so it has to land on the same answer,
+    outlier rejection included.
+    """
+    rng = np.random.default_rng(5112)
+    design = rng.normal(size=(500, 6))
+    design[np.abs(design) < 1.0] = 0.0
+    truth = rng.normal(size=6)
+    uncertainty = rng.uniform(0.5, 2.0, size=500)
+    y = design @ truth + rng.normal(0.0, uncertainty)
+    y[17] += 1000.0
+    dense, dense_used = robust_linear_fit(design, y, uncertainty)
+    sparse_coefficients, sparse_used = robust_linear_fit(sparse.csr_matrix(design), y, uncertainty)
+    np.testing.assert_allclose(sparse_coefficients, dense, rtol=1e-6)
+    np.testing.assert_array_equal(sparse_used, dense_used)
+    assert not sparse_used[17]
+
+
+def test_faint_sky_is_not_biased_low():
+    """Weighting each pixel by its own counts favors the pixels that fluctuated low. On a 20 count sky
+    that pulls the fit about 0.14 σ low; with the uncertainties taken from the model it has to stay
+    within a few hundredths of σ.
+    """
+    np.random.seed(20260928)
+    frame = generate_fake_science_frame(include_sky=False, flux_normalization=3000.0)
+    in_order = frame.orders.data > 0
+    sky = np.where(in_order, 20.0, 0.0)
+    frame.data[:] += np.random.poisson(sky).astype(float)
+    frame.uncertainty[:] = np.sqrt(frame.meta['RDNOISE'] ** 2 + np.abs(frame.data))
+    frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
+    set_up_profile(frame)
+    frame = BackgroundFitter(context.Context({})).do_stage(frame)
+
+    interior = binary_erosion(in_order, structure=np.ones((2 * ORDER_EDGE_MARGIN + 1, 1)))
+    bias = np.mean(frame.background[interior] - sky[interior]) / np.median(frame.uncertainty[interior])
+    assert abs(bias) < 0.05
