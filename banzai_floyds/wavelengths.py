@@ -743,6 +743,9 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
       wavelength minus the constant+slope part of the solution evaluated at the centroid), so
       diagnostics can read the curvature straight from the file instead of reconstructing it.
 
+    Both tables carry 'measured_wavelength_err', the centroid error propagated through the solution,
+    ``σ_λ = |dλ/dx| σ_x``. The catalog wavelengths are taken as exact, so this is also the residual's error.
+
     Parameters
     ----------
     line_tilts : Table
@@ -767,16 +770,17 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
     centroids : Table
         One row per catalog line: 'order', 'reference_wavelength', 'blend', 'centroid' (x of that
         component at the order center), 'width' (fitting-window width in pixels), 'measured_wavelength',
-        and the tilt-fit columns 'centroid_err', 'tilt', 'tilt_err' (shared across a blend's components).
+        'measured_wavelength_err', and the tilt-fit columns 'centroid_err', 'tilt', 'tilt_err' (shared across a
+        blend's components).
     residuals : Table
         One row per fitted feature: 'order', 'reference_wavelength' (strength-weighted for blends),
-        'blend', 'centroid' (the composite centroid), 'centroid_err', 'measured_wavelength', 'residual',
-        'linear_subtracted_residual', 'tilt', 'tilt_err'.
+        'blend', 'centroid' (the composite centroid), 'centroid_err', 'measured_wavelength',
+        'measured_wavelength_err', 'residual', 'linear_subtracted_residual', 'tilt', 'tilt_err'.
     """
-    centroid_columns = ['order', 'reference_wavelength', 'blend', 'centroid', 'width',
-                        'measured_wavelength', 'centroid_err', 'tilt', 'tilt_err']
-    residual_columns = ['order', 'reference_wavelength', 'blend', 'centroid', 'centroid_err',
-                        'measured_wavelength', 'residual', 'linear_subtracted_residual', 'tilt', 'tilt_err']
+    centroid_columns = ['order', 'reference_wavelength', 'blend', 'centroid', 'width', 'measured_wavelength',
+                        'measured_wavelength_err', 'centroid_err', 'tilt', 'tilt_err']
+    residual_columns = ['order', 'reference_wavelength', 'blend', 'centroid', 'centroid_err', 'measured_wavelength',
+                        'measured_wavelength_err', 'residual', 'linear_subtracted_residual', 'tilt', 'tilt_err']
     centroid_rows = {column: [] for column in centroid_columns}
     residual_rows = {column: [] for column in residual_columns}
     catalog_wavelengths = np.asarray(used_lines['wavelength'], dtype=float)
@@ -788,6 +792,7 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
         sigma = lsf_params_per_order[order - 1]['sigma']
         window_width = 2.0 * window_halfwidth * sigma
         wavelength_polynomial = wavelength_solution.wavelength_polynomials[order - 1]
+        dispersion_polynomial = wavelength_polynomial.deriv()
         # The linear (constant + slope) part of the solution: its first two Legendre coefficients.
         linear = Legendre(wavelength_polynomial.coef[:2], domain=wavelength_polynomial.domain)
         grid = np.arange(wavelength_polynomial.domain[0], wavelength_polynomial.domain[1] + 1, dtype=float)
@@ -804,7 +809,7 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
                 continue   # this feature was not fit in this order
             tilt_row = order_tilts[np.argmax(match)]
             composite_centroid = tilt_row['centroid']
-            dispersion = wavelength_polynomial.deriv()(composite_centroid)
+            dispersion = dispersion_polynomial(composite_centroid)
             is_blend = len(component_wavelengths) > 1
 
             # For plotting purposes, the measured centroid for each
@@ -820,6 +825,8 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
                 centroid_rows['centroid'].append(float(centroid))
                 centroid_rows['width'].append(float(window_width))
                 centroid_rows['measured_wavelength'].append(float(wavelength_polynomial(centroid)))
+                centroid_rows['measured_wavelength_err'].append(
+                    float(np.abs(dispersion_polynomial(centroid)) * tilt_row['centroid_err']))
                 centroid_rows['centroid_err'].append(tilt_row['centroid_err'])
                 centroid_rows['tilt'].append(tilt_row['tilt'])
                 centroid_rows['tilt_err'].append(tilt_row['tilt_err'])
@@ -832,6 +839,7 @@ def build_centroid_and_residual_tables(line_tilts, wavelength_solution, used_lin
             residual_rows['centroid'].append(float(composite_centroid))
             residual_rows['centroid_err'].append(tilt_row['centroid_err'])
             residual_rows['measured_wavelength'].append(measured_wavelength)
+            residual_rows['measured_wavelength_err'].append(float(np.abs(dispersion) * tilt_row['centroid_err']))
             residual_rows['residual'].append(measured_wavelength - mean_wavelength)
             residual_rows['linear_subtracted_residual'].append(mean_wavelength - float(linear(composite_centroid)))
             residual_rows['tilt'].append(tilt_row['tilt'])

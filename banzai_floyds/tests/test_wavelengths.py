@@ -316,8 +316,14 @@ def test_full_wavelength_solution():
     # split into components) with the residual and the linear-term-removed residual.
     residuals = Table(frame['RESIDUALS'].data)
     for column in ['order', 'reference_wavelength', 'blend', 'centroid', 'measured_wavelength',
-                   'residual', 'linear_subtracted_residual']:
+                   'measured_wavelength_err', 'residual', 'linear_subtracted_residual']:
         assert column in residuals.colnames
+    # The wavelength error is the centroid error scaled by the local dispersion.
+    dispersions = [frame.wavelengths.wavelength_polynomials[row['order'] - 1].deriv()(row['centroid'])
+                   for row in residuals]
+    np.testing.assert_allclose(residuals['measured_wavelength_err'],
+                               np.abs(dispersions) * residuals['centroid_err'])
+    assert np.all(residuals['measured_wavelength_err'] > 0)
     np.testing.assert_allclose(residuals['residual'],
                                residuals['measured_wavelength'] - residuals['reference_wavelength'])
     assert np.median(np.abs(residuals['residual'])) < 1.0
