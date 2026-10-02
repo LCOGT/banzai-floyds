@@ -1,10 +1,10 @@
 from banzai_floyds.background import fit_background, background_degree, BackgroundFitter, adaptive_knots
 from banzai_floyds.background import uniform_knots
-from banzai_floyds.background import gap_degree, BACKGROUND_MASK_WINDOW
+from banzai_floyds.background import gap_degree
 from banzai_floyds.utils.fitting_utils import robust_legendre_fit, robust_linear_fit, fwhm_to_sigma, sigma_to_fwhm
 from banzai_floyds.utils.fitting_utils import gauss
 from banzai_floyds.cosmics import CosmicRayDetector
-from banzai_floyds.extract import set_extraction_region
+from banzai_floyds.extract import set_extraction_region, Extractor
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.utils.binning_utils import bin_data
 import numpy as np
@@ -75,7 +75,7 @@ def test_background_fitting():
     fake_frame.binned_data = binned_data
     set_up_profile(fake_frame)
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
-    set_extraction_region(fake_frame)
+    set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     fitted_background, _ = fit_background(binned_data, spatial_background_order=3)
     fake_frame.background = fitted_background
     # If we are fitting to the noise, I think the residuals / uncertainty per pixel should
@@ -94,7 +94,7 @@ def test_background_stage():
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
     set_up_profile(frame)
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
-    set_extraction_region(frame)
+    set_extraction_region(frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     frame = BackgroundFitter(input_context).do_stage(frame)
 
     residuals, interior = sky_residuals(frame)
@@ -115,7 +115,7 @@ def test_background_survives_a_profile_too_wide_for_a_window():
     # The mask shrinks to leave some slit to fit, and the gap it leaves is still too wide for a curve
     assert frame.meta['L1BKDG1'] == 1
     assert frame.meta['L1BKDG2'] == 1
-    assert frame.meta['L1BKMW1'] < BACKGROUND_MASK_WINDOW
+    assert frame.meta['L1BKMW1'] < BackgroundFitter.OBJECT_MASK_WINDOW
 
 
 def test_background_degree_drops_when_the_object_is_wide():
@@ -131,8 +131,8 @@ def test_background_degree_drops_when_the_object_is_wide():
 def test_gap_degree_keeps_the_polynomial_wider_than_the_mask():
     n_slit_pixels = 84
     # Typical FLOYDS seeing, a 5 pixel FWHM, masked to +-6 sigma leaves room for a cubic
-    assert gap_degree(n_slit_pixels, 2 * BACKGROUND_MASK_WINDOW * fwhm_to_sigma(5.0), 3) == 3
-    assert gap_degree(n_slit_pixels, 2 * BACKGROUND_MASK_WINDOW * fwhm_to_sigma(10.0), 3) == 1
+    assert gap_degree(n_slit_pixels, 2 * BackgroundFitter.OBJECT_MASK_WINDOW * fwhm_to_sigma(5.0), 3) == 3
+    assert gap_degree(n_slit_pixels, 2 * BackgroundFitter.OBJECT_MASK_WINDOW * fwhm_to_sigma(10.0), 3) == 1
     assert gap_degree(n_slit_pixels, 100.0, 3) == 0
 
 
@@ -153,7 +153,7 @@ def test_background_fitting_is_robust_to_an_unflagged_cosmic_ray():
     spike_row = np.flatnonzero(off_trace)[np.sum(off_trace) // 2]
     binned_data['data'][spike_row] += 50000.0
 
-    set_extraction_region(fake_frame)
+    set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     fitted_background, _ = fit_background(binned_data, spatial_background_order=3)
     fake_frame.background = fitted_background
     residuals, interior = sky_residuals(fake_frame)

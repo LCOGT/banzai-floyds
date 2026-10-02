@@ -7,7 +7,7 @@ from scipy.ndimage import median_filter, binary_dilation
 from banzai.stages import Stage
 from banzai.logs import get_logger
 from banzai_floyds.utils.fitting_utils import robust_linear_fit, resolvable_background_degree, ClampedLegendre
-from banzai_floyds.extract import set_extraction_region
+from banzai_floyds.extract import set_extraction_region, Extractor
 
 logger = get_logger()
 
@@ -181,8 +181,8 @@ def fit_background(data: Table, spatial_background_order: int = 3,
                    line_knot_spacing: float = 1.0, wavelength_spline_degree: int = 3,
                    continuum_knot_spacing: float = 3.0,
                    window_key: str = 'extraction_window',
-                   object_mask_window: float = 5.0,
-                   min_background_fraction: float = 0.1,
+                   object_mask_window: float = 6.0,
+                   min_background_fraction: float = 0.25,
                    edge_margin: int = 5,
                    continuum_filter_width: int = 31,
                    line_contrast: float = 0.15,
@@ -286,7 +286,7 @@ class BackgroundFitter(Stage):
             logger.info('No object was detected, so skipping background fit',
                         image=image)
             return image
-        set_extraction_region(image)
+        set_extraction_region(image, Extractor.DEFAULT_EXTRACT_WINDOW)
         background, fits = fit_background(
             image.binned_data,
             spatial_background_order=self.SPATIAL_BACKGROUND_ORDER,
