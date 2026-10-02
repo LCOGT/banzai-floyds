@@ -27,23 +27,24 @@ def airmass_extinction(wavelength, elevation, airmass):
     return np.interp(wavelength, extinction_curve['wavelength'], transmission)
 
 
-def flux_calibrate(data, sensitivity, elevation, airmass, raw_key='fluxraw', error_key='fluxrawerr'):
-    data['flux'] = np.zeros_like(data[raw_key])
-    data['fluxerror'] = np.zeros_like(data[raw_key])
-
+def sensitivity_correction(wavelength: np.ndarray, order: np.ndarray, sensitivity, elevation: float,
+                           airmass: float) -> np.ndarray:
+    """Factor that converts electrons to flux: the sensitivity of each order over the atmospheric extinction."""
+    correction = np.zeros(len(wavelength))
     for order_id in [1, 2]:
-        in_order = data['order'] == order_id
-        in_order = np.logical_and(in_order, np.isfinite(data[raw_key]))
+        in_order = order == order_id
         sensitivity_order = sensitivity['order'] == order_id
-        # Divide the spectrum by the sensitivity function, correcting for airmass
-        sensitivity_model = np.interp(data['wavelength'][in_order],
-                                      sensitivity['wavelength'][sensitivity_order],
-                                      sensitivity['sensitivity'][sensitivity_order])
-        data['flux'][in_order] = data[raw_key][in_order] * sensitivity_model
-        data['fluxerror'][in_order] = data[error_key][in_order] * sensitivity_model
+        correction[in_order] = np.interp(wavelength[in_order], sensitivity['wavelength'][sensitivity_order],
+                                         sensitivity['sensitivity'][sensitivity_order])
+    return correction / airmass_extinction(wavelength, elevation, airmass)
 
-    airmass_correction = airmass_extinction(data['wavelength'], elevation, airmass)
-    # Divide by the atmospheric extinction to get back to intrinsic flux
-    data['flux'] /= airmass_correction
-    data['fluxerror'] /= airmass_correction
+
+def flux_calibrate(data, sensitivity, elevation, airmass, raw_key='fluxraw', error_key='fluxrawerr',
+                   flux_key='flux', flux_error_key='fluxerror'):
+    correction = sensitivity_correction(data['wavelength'], data['order'], sensitivity, elevation, airmass)
+    finite = np.isfinite(data[raw_key])
+    data[flux_key] = np.zeros_like(data[raw_key])
+    data[flux_error_key] = np.zeros_like(data[raw_key])
+    data[flux_key][finite] = data[raw_key][finite] * correction[finite]
+    data[flux_error_key][finite] = data[error_key][finite] * correction[finite]
     return data
