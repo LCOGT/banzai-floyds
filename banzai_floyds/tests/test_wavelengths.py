@@ -318,11 +318,14 @@ def test_full_wavelength_solution():
     for column in ['order', 'reference_wavelength', 'blend', 'centroid', 'measured_wavelength',
                    'measured_wavelength_err', 'residual', 'linear_subtracted_residual']:
         assert column in residuals.colnames
+
+    def propagated_error(table):
+        dispersions = [frame.wavelengths.wavelength_polynomials[row['order'] - 1].deriv()(row['centroid'])
+                       for row in table]
+        return np.abs(dispersions) * table['centroid_err']
+
     # The wavelength error is the centroid error scaled by the local dispersion.
-    dispersions = [frame.wavelengths.wavelength_polynomials[row['order'] - 1].deriv()(row['centroid'])
-                   for row in residuals]
-    np.testing.assert_allclose(residuals['measured_wavelength_err'],
-                               np.abs(dispersions) * residuals['centroid_err'])
+    np.testing.assert_allclose(residuals['measured_wavelength_err'], propagated_error(residuals))
     assert np.all(residuals['measured_wavelength_err'] > 0)
     np.testing.assert_allclose(residuals['residual'],
                                residuals['measured_wavelength'] - residuals['reference_wavelength'])
@@ -330,6 +333,11 @@ def test_full_wavelength_solution():
     # Each blend appears once in RESIDUALS but is split into its components in CENTROIDS.
     centroids = Table(frame['CENTROIDS'].data)
     assert centroids['blend'].sum() >= residuals['blend'].sum()
+    # Blend components share the composite's centroid error but each uses the dispersion at its own centroid.
+    assert np.any(centroids['blend'])
+    assert 'measured_wavelength_err' in centroids.colnames
+    np.testing.assert_allclose(centroids['measured_wavelength_err'], propagated_error(centroids))
+    assert np.all(centroids['measured_wavelength_err'] > 0)
 
 
 def test_empty_calibrate_wavelengths_stage():
