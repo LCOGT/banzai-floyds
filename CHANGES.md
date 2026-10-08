@@ -4,7 +4,7 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
-- We now adopt a outlier rejection version of the Kelson 2-D B-spline method for the background fits.
+- We now adopt an outlier rejection version of the Kelson 2-D B-spline method for the background fits.
 - Significant hardening to the profile fitting stage.
 - Significant hardening to fringe fitting code
 - Processed lamp flats now carry their own fringe pattern in a FRINGE extension, the way a stacked

@@ -20,10 +20,5 @@ python background_results.py --workers 8 --skip-download
 subtraction metrics defined in its module docstring. Pass `--output` and `--csv`
 to keep a baseline and score a change to the background fit against it.
 
-`background_comparison.py` fits the sky of each frame both with the pipeline's
-Kelson 2003 2d fit and with the per bin fit it replaced (`per_bin_background.py`),
-and writes their residuals side by side to `background_comparison.pdf`, with
-in-sample and held-out metrics for both in `background_comparison.csv`.
-
 Note that you will need to export your archive token
 `export ARCHIVE_AUTH_TOKEN=your_token` to get all of the most recent data.
