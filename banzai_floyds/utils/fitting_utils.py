@@ -1,7 +1,9 @@
 import numpy as np
 from collections.abc import Callable, Sequence
 from numpy.polynomial.legendre import Legendre, legder, legval, leggauss
+from scipy import sparse
 from scipy.optimize import least_squares
+from scipy.sparse.linalg import spsolve
 from scipy.special import eval_hermite, factorial, wofz
 
 # Scale factor that makes the median absolute deviation an unbiased estimator of the standard
@@ -192,7 +194,22 @@ def legendre_design(x: np.ndarray, degree: int, domain: Sequence[float]) -> np.n
     return np.array([Legendre.basis(i, domain=domain)(x) for i in range(degree + 1)]).T
 
 
-def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray,
+def sparse_least_squares(design: sparse.spmatrix, y: np.ndarray, weights: np.ndarray,
+                         penalty: np.ndarray) -> np.ndarray:
+    """Weighted least squares through the normal equations, which stay sparse where a QR of the design
+    would not.
+    """
+    weighted = sparse.csr_matrix(design.multiply(weights[:, np.newaxis]))
+    normal = (weighted.T @ weighted).tocsc()
+    if len(penalty):
+        normal = normal + sparse.csc_matrix(penalty.T @ penalty)
+    # A basis function with no points left under it would make the system singular
+    ridge = 1e-10 * max(normal.diagonal().max(), 1.0)
+    normal = normal + ridge * sparse.identity(normal.shape[0], format='csc')
+    return spsolve(normal, weighted.T @ (y * weights))
+
+
+def robust_linear_fit(design: np.ndarray | sparse.spmatrix, y: np.ndarray, uncertainty: np.ndarray,
                       huber_scale: float = 6.0, clip_sigma: float = 4.0,
                       maxiters: int = 5, penalty: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -208,8 +225,9 @@ def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray
 
     Parameters
     ----------
-    design : array, shape (n_points, n_terms)
-        One column per basis function, evaluated at the points being fit.
+    design : array or sparse matrix, shape (n_points, n_terms)
+        One column per basis function, evaluated at the points being fit. A sparse design is solved
+        through its normal equations.
     y : array
         Values being fit.
     uncertainty : array
@@ -229,13 +247,16 @@ def robust_linear_fit(design: np.ndarray, y: np.ndarray, uncertainty: np.ndarray
     -------
     (coefficients, used), with used flagging the points that survived the clip
     """
-    design = np.asarray(design, dtype=float)
+    if not sparse.issparse(design):
+        design = np.asarray(design, dtype=float)
     y = np.asarray(y, dtype=float)
     uncertainty = np.asarray(uncertainty, dtype=float)
     penalty = np.zeros((0, design.shape[1])) if penalty is None else np.asarray(penalty, dtype=float)
     penalty_targets = np.zeros(len(penalty))
 
     def solve(weights):
+        if sparse.issparse(design):
+            return sparse_least_squares(design, y, weights, penalty)
         matrix = np.vstack([design * weights[:, np.newaxis], penalty])
         values = np.concatenate([y * weights, penalty_targets])
         return np.linalg.lstsq(matrix, values, rcond=None)[0]

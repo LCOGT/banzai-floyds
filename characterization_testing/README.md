@@ -10,10 +10,15 @@ python process_lamp_flats.py --workers 8 --science
 python fringe_correction_results.py --workers 8
 python single_flat_fringe_comparison.py --workers 8
 python profile_results.py --workers 8 --skip-download
+python background_results.py --workers 8 --skip-download
 ```
 
 `profile_results.py` writes both `trace_overlay_results.pdf` and
 `profile_cross_sections.pdf` from a single reduction of each frame.
+
+`background_results.py` writes `background_results.pdf` and a CSV of the sky
+subtraction metrics defined in its module docstring. Pass `--output` and `--csv`
+to keep a baseline and score a change to the background fit against it.
 
 Note that you will need to export your archive token
 `export ARCHIVE_AUTH_TOKEN=your_token` to get all of the most recent data.
