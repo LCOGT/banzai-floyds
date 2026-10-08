@@ -121,14 +121,19 @@ binary table with one row per catalog line giving its centroid measurements. The
 line centroid (in pixels) and its uncertainty at the order center (order_y = 0), and 'tilt' and 'tilt_err' give the line tilt and
 its uncertainty in degrees, all derived from the row-by-row centroids in the FEATURES2D extension.
 The 'width' column gives the fitting-window width in pixels.
+The 'measured_wavelength' column gives the wavelength solution evaluated at the centroid, and 'measured_wavelength_err' its
+uncertainty, both in Angstroms. The uncertainty is the centroid error propagated through the solution,
+``σ_λ = |dλ/dx| σ_x``, with dλ/dx evaluated at that row's centroid.
 Blended lines are recorded one row per component (flagged by the 'blend' column): each component's 'centroid' is the single
-composite measurement spread back onto it by its fixed offset.
+composite measurement spread back onto it by its fixed offset. The components share the composite's 'centroid_err', but each
+component's 'measured_wavelength_err' uses the dispersion at its own centroid.
 The ***RESIDUALS*** extension is a fits binary table with one row per fitted feature (a blend is a single composite row, not
 split into components, flagged by the 'blend' column). It has the 'measured_wavelength' and 'reference_wavelength' columns (both in
 Angstroms; for a blend the reference is the strength-weighted mean of its components), the 'residual' (measured - reference), and
 the 'linear_subtracted_residual' (reference - the constant+slope part of the wavelength solution evaluated at the centroid), which
-isolates the dispersion curvature for diagnostic purposes. It also carries the 'centroid', 'centroid_err', 'tilt', and 'tilt_err'
-columns described above for the composite centroid.
+isolates the dispersion curvature for diagnostic purposes. It also carries the 'centroid', 'centroid_err',
+'measured_wavelength_err', 'tilt', and 'tilt_err' columns described above for the composite centroid. The catalog wavelengths
+are taken as exact, so 'measured_wavelength_err' is also the uncertainty on the 'residual'.
 The ***LSF*** extension is a data table with a sampled version of the line spread function (LSF) with
 columns, order, x, and lsf. The parameters for the Gauss-Hermite fit of the LSF are included in the
 header with the order id appended. 
