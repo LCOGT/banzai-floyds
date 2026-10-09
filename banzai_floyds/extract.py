@@ -34,36 +34,28 @@ def set_extraction_region(image, default_window):
         )
 
 
-def _zero_unused(values, use: np.ndarray) -> np.ndarray:
-    used = np.zeros(len(use))
-    used[use] = np.asarray(values, dtype=float)[use]
-    return used
-
-
 def _group_sum(values: np.ndarray, indices: np.ndarray) -> np.ndarray:
     return np.add.reduceat(values, indices[:-1])
 
 
 def _linear_extraction(coefficients: np.ndarray, signal: np.ndarray, background: np.ndarray,
                        uncertainty: np.ndarray, weights: np.ndarray,
-                       indices: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                       indices: np.ndarray) -> dict[str, np.ndarray]:
     """f = Σ a (d - b) / Σ a P and σ_f = sqrt(Σ a² σ²) / Σ a P for each group, NaN where Σ a P = 0."""
     normalization = _group_sum(coefficients * weights, indices)
     good = normalization > 0
-    totals = [_group_sum(coefficients * signal, indices),
-              np.sqrt(_group_sum((coefficients * uncertainty) ** 2, indices)),
-              _group_sum(coefficients * background, indices)]
-    results = []
-    for total in totals:
-        result = np.full(len(normalization), np.nan)
-        result[good] = total[good] / normalization[good]
-        results.append(result)
-    return tuple(results)
+    totals = {'flux': _group_sum(coefficients * signal, indices),
+              'error': np.sqrt(_group_sum((coefficients * uncertainty) ** 2, indices)),
+              'background': _group_sum(coefficients * background, indices)}
+    results = {}
+    for quantity, total in totals.items():
+        results[quantity] = np.full(len(normalization), np.nan)
+        results[quantity][good] = total[good] / normalization[good]
+    return results
 
 
 def _extract_bins(binned_data: Table, bin_key: str, data_keyword: str, background_key: str, uncertainty_key: str,
-                  model_uncertainty_key: str, weights_key: str) -> tuple[np.ndarray, dict]:
-    """Both extractions of every group in binned_data, and which groups caught the profile."""
+                  model_uncertainty_key: str | None, weights_key: str) -> tuple[np.ndarray, dict]:
     indices = binned_data.groups.indices
     in_window = np.asarray(binned_data['extraction_window'], dtype=bool)
     weights = np.asarray(binned_data[weights_key], dtype=float)
@@ -74,14 +66,17 @@ def _extract_bins(binned_data: Table, bin_key: str, data_keyword: str, backgroun
     hits_profile = window_peak >= 5e-3
 
     use = np.logical_and(in_window, binned_data['mask'] == 0)
-    background = _zero_unused(binned_data[background_key], use)
-    signal = _zero_unused(binned_data[data_keyword], use) - background
-    uncertainty = _zero_unused(binned_data[uncertainty_key], use)
-    profile = _zero_unused(weights, use)
-    optimal = np.zeros(len(use))
-    optimal[use] = profile[use] / np.asarray(binned_data[model_uncertainty_key], dtype=float)[use] ** 2
-    extractions = {weighting: _linear_extraction(coefficients, signal, background, uncertainty, profile, indices)
-                   for weighting, coefficients in [('optimal', optimal), ('unweighted', use.astype(float))]}
+    background = np.where(use, binned_data[background_key], 0.0)
+    signal = np.where(use, binned_data[data_keyword], 0.0) - background
+    uncertainty = np.where(use, binned_data[uncertainty_key], 0.0)
+    profile = np.where(use, weights, 0.0)
+    coefficients = {'unweighted': use.astype(float)}
+    if model_uncertainty_key is not None:
+        model_variance = np.asarray(binned_data[model_uncertainty_key], dtype=float) ** 2
+        coefficients['optimal'] = np.zeros(len(use))
+        coefficients['optimal'][use] = profile[use] / model_variance[use]
+    extractions = {weighting: _linear_extraction(a, signal, background, uncertainty, profile, indices)
+                   for weighting, a in coefficients.items()}
     return hits_profile, extractions
 
 
@@ -93,14 +88,11 @@ def extract(binned_data: Table, bin_key: str = 'order_wavelength_bin', data_keyw
     """
     Optimal and unweighted extractions of each wavelength bin.
 
-    Both are linear estimates of f in d = f P + b, with P the profile normalized to sum to one along each column:
+    f = Σ a (d - b) / Σ a P,  σ_f² = Σ a² σ² / (Σ a P)²
 
-        f = Σ a (d - b) / Σ a P,  σ_f² = Σ a² σ² / (Σ a P)²
-
-    summed over the unmasked pixels in the extraction window. The optimal extraction (Horne 1986) has a = P / V,
+    summed over the unmasked pixels in the extraction window. The optimal extraction (Horne 1986) uses a = P / V,
     with V the variance of the model rather than of the data. The unweighted extraction has a = 1; dividing by Σ P
-    instead of summing the aperture keeps it on the scale of the optimal extraction where the tilted wavelength bins
-    hold zero or two pixels of a row, where pixels are masked, and where the two orders overlap.
+    normalizes the flux making the weighted and unweighted extractions comparable.
 
     Parameters
     ----------
@@ -140,15 +132,14 @@ def extract(binned_data: Table, bin_key: str = 'order_wavelength_bin', data_keyw
                      'binwidth': np.asarray(binned_data[bin_key + '_width'])[first_rows][keep]})
     if include_order:
         results['order'] = orders[keep]
-    for weighting, (flux, error, background) in extractions.items():
-        results[f'{flux_keyword}_{weighting}'] = flux[keep]
-        results[f'{flux_error_key}_{weighting}'] = error[keep]
-        results[f'{background_out_key}_{weighting}'] = background[keep]
+    for weighting in ['optimal', 'unweighted']:
+        for quantity, key in [('flux', flux_keyword), ('error', flux_error_key), ('background', background_out_key)]:
+            results[f'{key}_{weighting}'] = extractions[weighting][quantity][keep]
     results['mask'] = np.isnan(results[f'{flux_keyword}_optimal']).astype(int)
     return results
 
 
-def profile_model_uncertainty(binned_data: Table) -> np.ndarray:
+def horne_model_uncertainty(binned_data: Table) -> np.ndarray:
     """
     The uncertainty of each pixel from the model f P + b rather than from its own counts (Horne 1986).
 
@@ -156,8 +147,8 @@ def profile_model_uncertainty(binned_data: Table) -> np.ndarray:
     unweighted extraction, which does not depend on the weights.
     """
     hits_profile, extractions = _extract_bins(binned_data, 'order_wavelength_bin', 'data', 'background',
-                                              'uncertainty', 'uncertainty', 'weights')
-    flux, _, _ = extractions['unweighted']
+                                              'uncertainty', None, 'weights')
+    flux = extractions['unweighted']['flux']
     bin_flux = np.zeros(len(flux))
     good = np.logical_and(hits_profile, np.isfinite(flux))
     bin_flux[good] = flux[good]
@@ -176,7 +167,7 @@ class Extractor(Stage):
             logger.warning('No object was detected, so there is nothing to extract.', image=image)
             return image
         set_extraction_region(image, self.DEFAULT_EXTRACT_WINDOW)
-        image.binned_data['model_uncertainty'] = profile_model_uncertainty(image.binned_data)
+        image.binned_data['model_uncertainty'] = horne_model_uncertainty(image.binned_data)
         image.extracted = extract(image.binned_data)
         return image
 
