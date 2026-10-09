@@ -3,7 +3,7 @@ import numpy as np
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.extract import Extractor, extract, set_extraction_region, CombinedExtractor
-from banzai_floyds.extract import profile_model_uncertainty
+from banzai_floyds.extract import horne_model_uncertainty
 from banzai_floyds.utils.binning_utils import bin_data
 from collections import namedtuple
 from astropy.table import Table
@@ -73,7 +73,7 @@ def test_extraction():
 
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
-    fake_frame.binned_data['model_uncertainty'] = profile_model_uncertainty(fake_frame.binned_data)
+    fake_frame.binned_data['model_uncertainty'] = horne_model_uncertainty(fake_frame.binned_data)
     extracted = extract(fake_frame.binned_data)
     for weighting in ['optimal', 'unweighted']:
         residuals = extracted[f'fluxraw_{weighting}'] - input_brightness
@@ -108,7 +108,7 @@ def test_combined_extraction():
                                                       frame.binned_data['x'].astype(int)]
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(frame, Extractor.DEFAULT_EXTRACT_WINDOW)
-    frame.binned_data['model_uncertainty'] = profile_model_uncertainty(frame.binned_data)
+    frame.binned_data['model_uncertainty'] = horne_model_uncertainty(frame.binned_data)
     frame.sensitivity = Table({'wavelength': [0, 1e6, 0, 1e6], 'sensitivity': [1, 1, 1, 1], 'order': [1, 1, 2, 2]})
     frame.telluric = Table({'wavelength': [0, 1e6], 'telluric': [1, 1]})
     extracted_waves = np.arange(3000.0, 10000.0)
@@ -128,7 +128,7 @@ def test_combined_extraction():
 def test_faint_extraction_is_unbiased():
     flux = 100.0
     binned_data = make_binned_spectrum(flux, 20.0, seed=8123)
-    binned_data['model_uncertainty'] = profile_model_uncertainty(binned_data)
+    binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
     extracted = extract(binned_data)
     for weighting in ['optimal', 'unweighted']:
         # Weights from each pixel's own counts read 0.4 sigma low here
@@ -141,7 +141,7 @@ def test_extraction_errors_with_masked_pixels():
     binned_data = make_binned_spectrum(flux, 20.0, seed=5521)
     masked_core = np.logical_and(np.abs(binned_data['y']) <= 1, binned_data['order_wavelength_bin'] % 2 == 0)
     binned_data['mask'][masked_core] = 8
-    binned_data['model_uncertainty'] = profile_model_uncertainty(binned_data)
+    binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
     extracted = extract(binned_data)
     for weighting in ['optimal', 'unweighted']:
         pulls = (extracted[f'fluxraw_{weighting}'] - flux) / extracted[f'fluxrawerr_{weighting}']
@@ -154,7 +154,7 @@ def test_fully_masked_window_is_flagged():
     binned_data = make_binned_spectrum(1000.0, 20.0, seed=1, n_bins=3)
     in_middle_bin = binned_data['order_wavelength_bin'] == 2
     binned_data['mask'][np.logical_and(in_middle_bin, binned_data['extraction_window'])] = 8
-    binned_data['model_uncertainty'] = profile_model_uncertainty(binned_data)
+    binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
     with warnings.catch_warnings():
         warnings.simplefilter('error')
         extracted = extract(binned_data)
