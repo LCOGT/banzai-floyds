@@ -28,7 +28,7 @@ class FluxSensitivity(Stage):
         # Red and blue respectively
         for order_id in [1, 2]:
             in_order = image.extracted['order'] == order_id
-            in_order = np.logical_and(in_order, np.isfinite(image.extracted['fluxraw']))
+            in_order = np.logical_and(in_order, np.isfinite(image.extracted['fluxraw_optimal']))
             data_to_fit = image.extracted[in_order]
 
             # Fit the telluric coefficients using data in the red
@@ -48,7 +48,7 @@ class FluxSensitivity(Stage):
             # resolution element and the polynomial order isn't so high we overfit
             window_size = 17
             smoothing_order = 3
-            this_sensitivity = savgol_filter(expected_flux * telluric_model / data_to_fit['fluxraw'],
+            this_sensitivity = savgol_filter(expected_flux * telluric_model / data_to_fit['fluxraw_optimal'],
                                              window_size, smoothing_order)
             # We have to use this temp sensitivity variable because of how python does numpy array copying
             sensitivity[in_order] = this_sensitivity
@@ -92,5 +92,8 @@ class StandardLoader(FLOYDSCalibrationUser):
 
 class FluxCalibrator(Stage):
     def do_stage(self, image):
-        image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass, 'fluxraw')
+        for weighting in ['optimal', 'unweighted']:
+            image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass,
+                                             raw_key=f'fluxraw_{weighting}', error_key=f'fluxrawerr_{weighting}',
+                                             flux_key=f'flux_{weighting}', flux_error_key=f'fluxerror_{weighting}')
         return image

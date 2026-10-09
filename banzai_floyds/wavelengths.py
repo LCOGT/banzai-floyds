@@ -19,7 +19,8 @@ from banzai_floyds.utils.wavelength_utils import WavelengthSolution, tilt_coordi
 from banzai_floyds.arc_lines import arc_lines_table
 from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, fwhm_to_sigma, sigma_to_fwhm, parameter_variances
 from banzai_floyds.dbs import get_recent_lsf_params, add_lsf_params
-from banzai_floyds.extract import extract
+from banzai_floyds.extract import extract, horne_model_uncertainty
+from banzai_floyds.utils.profile_utils import normalize_profile
 from astropy.table import Table, vstack
 from banzai.logs import get_logger
 
@@ -1175,8 +1176,12 @@ class CalibrateWavelengths(Stage):
         # Extract the data
         binned_data = bin_data(image.data, image.uncertainty, image.wavelengths, image.orders)
         binned_data['background'] = 0.0
-        binned_data['weights'] = 1.0
+        # A flat profile makes the unweighted extraction the sum down each column
+        x2d, y2d = np.meshgrid(np.arange(image.data.shape[1]), np.arange(image.data.shape[0]))
+        flat_profile = normalize_profile((image.orders.data > 0).astype(float), image.orders, x2d)
+        binned_data['weights'] = flat_profile[binned_data['y'].astype(int), binned_data['x'].astype(int)]
         binned_data['extraction_window'] = True
+        binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
         image.extracted = extract(binned_data)
 
         # Make sure the line shape hasn't changed dramatically (which would indicate bad fits); if it

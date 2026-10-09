@@ -1,4 +1,5 @@
 import numpy as np
+from astropy.table import Table
 from collections.abc import Callable, Sequence
 from numpy.polynomial.legendre import Legendre, legder, legval, leggauss
 from scipy import sparse
@@ -547,3 +548,12 @@ def weighted_linear_fit(t, x, x_err):
     var_a = s_tt / delta
     var_b = s / delta
     return a, b, var_a, var_b
+
+
+def model_uncertainty(data: Table, model: np.ndarray) -> np.ndarray:
+    """The uncertainty of each pixel from a model of its counts rather than the counts themselves
+    (Horne 1986): σ² = σ_d² - |d| + |model|.
+    """
+    read_variance = np.maximum(np.asarray(data['uncertainty']) ** 2 - np.abs(data['data']), 0.0)
+    uncertainty = np.sqrt(read_variance + np.abs(model))
+    return np.where(uncertainty > 0, uncertainty, data['uncertainty'])

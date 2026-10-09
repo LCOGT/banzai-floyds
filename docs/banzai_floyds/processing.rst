@@ -74,7 +74,10 @@ background variations, and handles fitting instabilities when attempting a fit o
 
 Extraction
 ----------
-We perform an optimal extraction ala Horne 1986, PASP, 98, 609. 
+We perform both an optimal extraction ala Horne 1986, PASP, 98, 609, and an unweighted extraction. The optimal
+extraction weights each pixel by the profile over the variance of the model of its counts rather than of its observed
+counts, which would bias faint fluxes low. The unweighted extraction sums the extraction window and divides by the
+fraction of the profile it covers. See the data products page for the details.
  
 
 Flux Calibration and Telluric Correction
