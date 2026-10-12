@@ -78,9 +78,9 @@ def extract_frame(path: str) -> tuple:
                       f'airmass={float(header.get("AIRMASS", 0)):0.2f}'),
             'note': note,
             'wavelength': np.asarray(extracted['wavelength'], dtype=float),
-            'fluxraw': np.asarray(extracted['fluxraw'], dtype=float),
-            'fluxrawerr': np.asarray(extracted['fluxrawerr'], dtype=float),
-            'background': np.asarray(extracted['background'], dtype=float),
+            'fluxraw': np.asarray(extracted['fluxraw_optimal'], dtype=float),
+            'fluxrawerr': np.asarray(extracted['fluxrawerr_optimal'], dtype=float),
+            'background': np.asarray(extracted['background_optimal'], dtype=float),
             'order': np.asarray(extracted['order'], dtype=int),
             'mask': np.asarray(extracted['mask'], dtype=int),
         }

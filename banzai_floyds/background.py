@@ -7,6 +7,7 @@ from scipy.ndimage import median_filter, binary_dilation
 from banzai.stages import Stage
 from banzai.logs import get_logger
 from banzai_floyds.utils.fitting_utils import robust_linear_fit, resolvable_background_degree, ClampedLegendre
+from banzai_floyds.utils.fitting_utils import model_uncertainty
 from banzai_floyds.extract import set_extraction_region, Extractor
 
 logger = get_logger()
@@ -122,15 +123,6 @@ def object_mask_width(data: Table, usable: np.ndarray,
     """
     distance = np.abs(data['y_profile'][usable] / data['profile_sigma'][usable])
     return float(min(object_mask_window, np.quantile(distance, 1.0 - minimum_background_fraction)))
-
-
-def model_uncertainty(data: Table, model: np.ndarray) -> np.ndarray:
-    """The uncertainty of each pixel from a model of its counts rather than the counts themselves
-    (Horne 1986): σ² = σ_d² - |d| + |model|.
-    """
-    read_variance = np.maximum(np.asarray(data['uncertainty']) ** 2 - np.abs(data['data']), 0.0)
-    uncertainty = np.sqrt(read_variance + np.abs(model))
-    return np.where(uncertainty > 0, uncertainty, data['uncertainty'])
 
 
 def fit_order_background(data: Table, uncertainty: np.ndarray, to_fit: np.ndarray,

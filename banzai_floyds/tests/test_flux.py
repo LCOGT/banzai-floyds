@@ -11,7 +11,8 @@ def test_flux_stage():
     frame = generate_fake_extracted_frame()
     stage = FluxCalibrator(context.Context({}))
     frame = stage.do_stage(frame)
-    np.testing.assert_allclose(frame.extracted['flux'], frame.input_flux, rtol=0.06)
+    for weighting in ['optimal', 'unweighted']:
+        np.testing.assert_allclose(frame.extracted[f'flux_{weighting}'], frame.input_flux, rtol=0.06)
 
 
 @mock.patch('banzai_floyds.flux.get_standard')

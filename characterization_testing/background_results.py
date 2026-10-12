@@ -119,6 +119,8 @@ def match_bins(bin_centers: np.ndarray, bins: np.ndarray) -> tuple:
 def order_spectrum(extracted: Table, order_id: int) -> Table:
     """The good bins of an order's extracted spectrum in increasing wavelength."""
     spectrum = extracted[extracted['order'] == order_id]
+    for column in ['fluxraw', 'fluxrawerr', 'background']:
+        spectrum.rename_column(f'{column}_optimal', column)
     good = np.logical_and(spectrum['mask'] == 0, spectrum['fluxrawerr'] > 0)
     spectrum = spectrum[np.logical_and(good, np.isfinite(spectrum['fluxraw']))]
     spectrum.sort('wavelength')

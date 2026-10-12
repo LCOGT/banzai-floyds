@@ -5,6 +5,13 @@ Versions
 ------------------
 
 - We now adopt an outlier rejection version of the Kelson 2-D B-spline method for the background fits.
+- The 1d files now carry both an optimal and an unweighted extraction. The SPECTRUM and EXTRACTED columns are renamed
+  with explicit suffixes ('flux' is now 'flux_optimal' and 'flux_unweighted', 'fluxraw' is now 'fluxraw_optimal'
+  and 'fluxraw_unweighted', and likewise for the errors and background), so readers of the old names need updating.
+- The optimal extraction is now weighted by the variance of the model rather than of each pixel's own counts
+  (Horne 1986), which biased faint fluxes low by 0.1-0.4 sigma. Its uncertainty no longer carries an extra factor of
+  the summed profile weights, which made errors too small where pixels were masked.
+- Added tools/floyds_1d_to_iraf.py to convert 1d files into IRAF multispec files for splot.
 - Significant hardening to the profile fitting stage.
 - Significant hardening to fringe fitting code
 - Processed lamp flats now carry their own fringe pattern in a FRINGE extension, the way a stacked

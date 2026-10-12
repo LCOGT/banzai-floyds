@@ -339,6 +339,12 @@ def test_full_wavelength_solution():
     np.testing.assert_allclose(centroids['measured_wavelength_err'], propagated_error(centroids))
     assert np.all(centroids['measured_wavelength_err'] > 0)
 
+    # The unweighted arc extraction sums down the columns, so it accounts for all of the counts in each order
+    for order_id in [1, 2]:
+        in_order = frame.extracted['order'] == order_id
+        total_counts = frame.data[frame.orders.data == order_id].sum()
+        np.testing.assert_allclose(np.nansum(frame.extracted['fluxraw_unweighted'][in_order]), total_counts, rtol=0.01)
+
 
 def test_empty_calibrate_wavelengths_stage():
     input_context = context.Context({'db_address': None})

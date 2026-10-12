@@ -381,12 +381,15 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
     if do_telluric:
         flux *= telluric
 
-    flux = np.random.poisson(flux.astype(int)).astype(float)
-    flux += np.random.normal(read_noise, size=flux.shape)
-    flux_error = np.sqrt(read_noise**2 + np.abs(flux))
-    data = Table({'wavelength': wavelengths, 'flux': flux, 'fluxerror': flux_error,
-                  'fluxraw': flux, 'fluxrawerr': flux_error, 'order': orders,
-                  'mask': np.zeros_like(flux, dtype=int)})
+    data = Table({'wavelength': wavelengths, 'order': orders, 'mask': np.zeros_like(flux, dtype=int)})
+    for weighting in ['optimal', 'unweighted']:
+        noisy_flux = np.random.poisson(flux.astype(int)).astype(float)
+        noisy_flux += np.random.normal(read_noise, size=flux.shape)
+        flux_error = np.sqrt(read_noise**2 + np.abs(noisy_flux))
+        data[f'flux_{weighting}'] = noisy_flux
+        data[f'fluxerror_{weighting}'] = flux_error
+        data[f'fluxraw_{weighting}'] = noisy_flux
+        data[f'fluxrawerr_{weighting}'] = flux_error
 
     frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}), name='foo')], file_path='foo.fits')
     frame.telluric = telluric_data

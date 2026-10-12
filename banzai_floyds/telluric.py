@@ -24,7 +24,7 @@ class TelluricMaker(Stage):
                                                   data['wavelength'] <= region['wavelength_max'])
             reference_flux = np.interp(data[telluric_wavelengths]['wavelength'],
                                        flux_standard['wavelength'], flux_standard['flux'])
-            correction[telluric_wavelengths] = data[telluric_wavelengths]['flux'] / reference_flux
+            correction[telluric_wavelengths] = data[telluric_wavelengths]['flux_optimal'] / reference_flux
 
         correction[correction < 0.0] = 0.0
         correction[correction > 1.0] = 1.0
@@ -49,7 +49,8 @@ class TelluricCorrector(Stage):
         # TODO: We should need to rescale the telluric depths here based on humidity and possibly airmass,
         # but the fits did not converge well and the correction is fine without. Need to revist.
         # telluric_model = telluric_utils.scale_transmission(telluric_model, image.airmass)
-        image.extracted['flux'][in_order] /= telluric_model
-        image.extracted['fluxerror'][in_order] /= telluric_model
+        for weighting in ['optimal', 'unweighted']:
+            image.extracted[f'flux_{weighting}'][in_order] /= telluric_model
+            image.extracted[f'fluxerror_{weighting}'][in_order] /= telluric_model
         image.telluric = Table({'wavelength': data['wavelength'], 'telluric': telluric_model})
         return image
