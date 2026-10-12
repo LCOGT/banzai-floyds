@@ -27,6 +27,20 @@ Building Documentation
     # Install pandoc via apt-get or equivalent
     sphinx-build -W -b html docs docs/_build/html
 
+
+Publish Changes to PyPI
+-----------------------
+
+#. Update Change log in ``CHANGES.md``.
+#. ``uv version --bump [major/minor/patch]`` # use UV to bump version, sync, and update lock file.
+#. Commit changes and merge into ``main``.
+#. ``git checkout main`` # checkout main branch (be sure to pull/push as need to be in sync)
+#. ``git tag -m '[message]' x.x.x`` # tag main to the new version
+#. ``git push --tags`` # Push tags up to github
+#. Go to tags on github, select new tag and generate a release.
+#. Publish release.
+
+
 License
 -------
 
