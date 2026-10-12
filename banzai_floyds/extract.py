@@ -192,10 +192,10 @@ class CombinedExtractor(Stage):
         in_extracted_overlap = np.logical_and(image.extracted['wavelength'] > overlap_region[0],
                                               image.extracted['wavelength'] < overlap_region[1])
         to_interp_1 = np.logical_and(extracted_order1, in_extracted_overlap)
-        to_interp_1 = np.logical_and(to_interp_1, np.isfinite(image.extracted['flux_optimal']))
+        to_interp_1 = np.logical_and(to_interp_1, image.extracted['mask'] == 0)
         waves_to_interp = image.extracted['wavelength'][to_interp_1]
         overlap_order2 = np.logical_and(extracted_order2, in_extracted_overlap)
-        to_interp_2 = np.logical_and(overlap_order2, np.isfinite(image.extracted['flux_optimal']))
+        to_interp_2 = np.logical_and(overlap_order2, image.extracted['mask'] == 0)
         flux2_for_ratio = np.interp(waves_to_interp, image.extracted['wavelength'][to_interp_2],
                                     image.extracted['flux_optimal'][to_interp_2])
         order_ratio = image.extracted['flux_optimal'][to_interp_1]

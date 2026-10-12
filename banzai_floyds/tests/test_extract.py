@@ -115,7 +115,7 @@ def test_combined_extraction():
     flux = np.ones(len(extracted_waves) * 2)
     orders = np.hstack([np.ones(len(extracted_waves)), np.ones(len(extracted_waves)) * 2])
     frame.extracted = Table({'wavelength': np.hstack([extracted_waves, extracted_waves]), 'flux_optimal': flux,
-                             'order': orders})
+                             'order': orders, 'mask': np.zeros(len(flux), dtype=int)})
     stage = CombinedExtractor(input_context)
     frame = stage.do_stage(frame)
     expected = np.interp(frame['SPECTRUM'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
