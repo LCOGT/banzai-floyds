@@ -2,18 +2,28 @@ from banzai.stages import Stage
 from banzai_floyds.calibrations import FLOYDSCalibrationUser
 from banzai_floyds.dbs import get_standard
 from banzai_floyds.utils.flux_utils import flux_calibrate
-from banzai_floyds.utils import telluric_utils
 import numpy as np
-from scipy.signal import savgol_filter
-from banzai_floyds.utils.flux_utils import airmass_extinction
+from banzai_floyds.utils.flux_utils import expected_standard_flux, fit_sensitivity, evaluate_sensitivity
 from astropy.table import Table
 from banzai.utils import import_utils
 
 
 class FluxSensitivity(Stage):
-    AIRMASS_COEFFICIENT = 1.0
-    SENSITIVITY_POLY_DEGREE = {1: 3, 2: 3}
-    WAVELENGTH_DOMAIN = [3000, 11000]
+    """
+    Fit the sensitivity, S = f / c, of each order from a flux standard.
+
+    The knot spacing is what separates the instrument from the fringing. The blue order has
+    instrumental notches 50-150 A wide (at ~3750, 3850, 4430 and 4600 A, deepest on floyds01) that
+    the sensitivity has to follow, but the fringe residuals redward of FRINGE_ONSET have periods of
+    50-100 A, too close to the notches to be told apart by scale alone. Fringing is told apart by
+    wavelength instead: knots every KNOT_SPACING blueward of it and every FRINGE_KNOT_SPACING
+    redward. Both were chosen by transferring sensitivities between standards on different nights
+    (characterization_testing/flux_calibration_results.py).
+    """
+    # Fringing in the red order only starts around 6500-6900 A
+    FRINGE_ONSET = 6500.0
+    KNOT_SPACING = 20.0
+    FRINGE_KNOT_SPACING = 600.0
 
     def do_stage(self, image):
         flux_standard = get_standard(image.ra, image.dec, self.runtime_context)
@@ -23,35 +33,20 @@ class FluxSensitivity(Stage):
         sensitivity = np.zeros_like(image.extracted['wavelength'].data)
         sensitivity_order = np.zeros_like(sensitivity, dtype=np.uint8)
 
-        # Model the telluric extinction due to airmass so that we only save the instrument sensitivity
-        flux_standard['flux'] *= airmass_extinction(flux_standard['wavelength'], image.elevation, image.airmass)
         # Red and blue respectively
         for order_id in [1, 2]:
             in_order = image.extracted['order'] == order_id
-            in_order = np.logical_and(in_order, np.isfinite(image.extracted['fluxraw_optimal']))
-            data_to_fit = image.extracted[in_order]
-
-            # Fit the telluric coefficients using data in the red
-            expected_flux = np.interp(data_to_fit['wavelength'],
-                                      flux_standard['wavelength'],
-                                      flux_standard['flux'])
-            # Only correct the red order for telluric. It causes significant problems in the blue
-            if order_id == 1:
-                telluric_model = telluric_utils.estimate_telluric(data_to_fit['wavelength'],
-                                                                  image.airmass, image.elevation,
-                                                                  telluric_model=image.telluric)
-            else:
-                telluric_model = np.ones_like(data_to_fit['wavelength'])
-            # Divide the data by the flux standard in the blue
-            # We choose a window size of 17 a polynomial order of 3
-            # The results should not depend strongly on these choices as long as the window size is larger than the
-            # resolution element and the polynomial order isn't so high we overfit
-            window_size = 17
-            smoothing_order = 3
-            this_sensitivity = savgol_filter(expected_flux * telluric_model / data_to_fit['fluxraw_optimal'],
-                                             window_size, smoothing_order)
-            # We have to use this temp sensitivity variable because of how python does numpy array copying
-            sensitivity[in_order] = this_sensitivity
+            data = image.extracted[in_order]
+            expected_flux = expected_standard_flux(data, order_id, flux_standard, image.wavelengths, image.elevation,
+                                                   image.airmass, telluric_model=image.telluric)
+            to_fit = np.logical_and(data['mask'] == 0, np.isfinite(data['fluxraw_optimal']))
+            to_fit = np.logical_and(to_fit, data['fluxraw_optimal'] > 0.0)
+            log_sensitivity = fit_sensitivity(data['wavelength'][to_fit],
+                                              data['fluxraw_optimal'][to_fit] / image.exptime,
+                                              data['fluxrawerr_optimal'][to_fit] / image.exptime,
+                                              expected_flux[to_fit], self.KNOT_SPACING, self.FRINGE_KNOT_SPACING,
+                                              self.FRINGE_ONSET)
+            sensitivity[in_order] = evaluate_sensitivity(log_sensitivity, data['wavelength'])
             sensitivity_order[in_order] = order_id
 
         # Save the flux normalization to the db
@@ -94,6 +89,7 @@ class FluxCalibrator(Stage):
     def do_stage(self, image):
         for weighting in ['optimal', 'unweighted']:
             image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass,
-                                             raw_key=f'fluxraw_{weighting}', error_key=f'fluxrawerr_{weighting}',
-                                             flux_key=f'flux_{weighting}', flux_error_key=f'fluxerror_{weighting}')
+                                             image.exptime, raw_key=f'fluxraw_{weighting}',
+                                             error_key=f'fluxrawerr_{weighting}', flux_key=f'flux_{weighting}',
+                                             flux_error_key=f'fluxerror_{weighting}')
         return image

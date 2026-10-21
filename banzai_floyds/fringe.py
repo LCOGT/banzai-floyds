@@ -702,6 +702,21 @@ def extract_fringe_pattern(image, continuum: np.ndarray, fringe_correction: np.n
     return pattern
 
 
+def divide_binned_data(image, correction: np.ndarray, to_correct: np.ndarray) -> None:
+    """Divide a 2D correction out of image.binned_data too.
+
+    Binner copies the pixels out of the frame before the fringe stages run, and the profile,
+    background and extraction all read that copy, so a correction made only to image.data never
+    reaches the 1D spectrum.
+    """
+    if image.binned_data is None:
+        return
+    x, y = image.binned_data['x'].astype(int), image.binned_data['y'].astype(int)
+    corrected = to_correct[y, x]
+    image.binned_data['data'][corrected] /= correction[y, x][corrected]
+    image.binned_data['uncertainty'][corrected] /= correction[y, x][corrected]
+
+
 class FringeCorrector(Stage):
     """
     Stage that divides out the fringe pattern measured from the flat, shifted to match this frame
@@ -766,6 +781,7 @@ class FringeCorrector(Stage):
         to_correct = fringe_correction > MIN_FRINGE_VALUE
         image.data[to_correct] /= fringe_correction[to_correct]
         image.uncertainty[to_correct] /= fringe_correction[to_correct]
+        divide_binned_data(image, fringe_correction, to_correct)
         image.meta['L1FRNGSN'] = (fringe_snr, 'Per-pixel S/N of the fringe pattern')
         image.meta['L1FRNGOX'] = (x_offset, 'Fringe pattern x offset (pixels)')
         image.meta['L1FRNGOY'] = (y_offset, 'Fringe pattern y offset (pixels)')
