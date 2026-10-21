@@ -5,7 +5,7 @@ from banzai_floyds.telluric import TelluricCorrector, TelluricMaker
 from astropy.table import Table
 import mock
 
-from banzai_floyds.utils.telluric_utils import scale_transmission
+from banzai_floyds.utils.telluric_utils import scale_transmission, elevation_to_airmass_ratio
 
 
 def test_telluric_corrector():
@@ -36,3 +36,9 @@ def test_telluric_maker(mock_standard):
 def test_null_airmass_correction():
     correction = scale_transmission(np.ones(1024), 1)
     np.testing.assert_allclose(correction, np.ones_like(correction))
+
+
+def test_lower_site_has_more_air():
+    # Siding Spring is 1658 m below APO, under exp(1658 / 10400) = 1.17 times the column of air
+    np.testing.assert_allclose(elevation_to_airmass_ratio(1130.0, 2788.0), np.exp(1658.0 / 10400.0))
+    np.testing.assert_allclose(elevation_to_airmass_ratio(2788.0, 2788.0), 1.0)

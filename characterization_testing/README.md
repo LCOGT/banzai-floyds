@@ -11,6 +11,7 @@ python fringe_correction_results.py --workers 8
 python single_flat_fringe_comparison.py --workers 8
 python profile_results.py --workers 8 --skip-download
 python background_results.py --workers 8 --skip-download
+python flux_calibration_results.py --workers 8
 ```
 
 `profile_results.py` writes both `trace_overlay_results.pdf` and
@@ -19,6 +20,9 @@ python background_results.py --workers 8 --skip-download
 `background_results.py` writes `background_results.pdf` and a CSV of the sky
 subtraction metrics defined in its module docstring. Pass `--output` and `--csv`
 to keep a baseline and score a change to the background fit against it.
+
+`flux_calibration_results.py` writes `sensitivity_results.pdf`, the sensitivity
+fit to every flux standard, and `flux_calibration_results.pdf`.
 
 Note that you will need to export your archive token
 `export ARCHIVE_AUTH_TOKEN=your_token` to get all of the most recent data.

@@ -179,7 +179,7 @@ class CombinedExtractor(Stage):
         telluric_model = np.interp(image.binned_data['wavelength'], image.telluric['wavelength'],
                                    image.telluric['telluric'], left=1.0, right=1.0)
         calibration = sensitivity_correction(image.binned_data['wavelength'], image.binned_data['order'],
-                                             image.sensitivity, image.elevation, image.airmass)
+                                             image.sensitivity, image.elevation, image.airmass, image.exptime)
         calibration /= telluric_model
         for raw_key, flux_key in [('data', 'flux'), ('uncertainty', 'fluxerror'), ('background', 'flux_background'),
                                   ('model_uncertainty', 'model_fluxerror')]:

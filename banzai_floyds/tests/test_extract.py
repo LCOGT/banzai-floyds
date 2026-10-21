@@ -8,6 +8,7 @@ from banzai_floyds.utils.binning_utils import bin_data
 from collections import namedtuple
 from astropy.table import Table
 from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, gauss
+from banzai_floyds.utils.flux_utils import airmass_extinction
 from numpy.polynomial.legendre import Legendre
 
 
@@ -109,7 +110,12 @@ def test_combined_extraction():
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(frame, Extractor.DEFAULT_EXTRACT_WINDOW)
     frame.binned_data['model_uncertainty'] = horne_model_uncertainty(frame.binned_data)
-    frame.sensitivity = Table({'wavelength': [0, 1e6, 0, 1e6], 'sensitivity': [1, 1, 1, 1], 'order': [1, 1, 2, 2]})
+    # A sensitivity that only cancels the atmosphere, so the combined spectrum stays in electrons
+    sensitivity_waves = np.arange(3000.0, 11000.0)
+    atmosphere = airmass_extinction(sensitivity_waves, frame.elevation, frame.airmass)
+    frame.sensitivity = Table({'wavelength': np.hstack([sensitivity_waves, sensitivity_waves]),
+                               'sensitivity': np.hstack([atmosphere, atmosphere]),
+                               'order': np.repeat([1, 2], len(sensitivity_waves))})
     frame.telluric = Table({'wavelength': [0, 1e6], 'telluric': [1, 1]})
     extracted_waves = np.arange(3000.0, 10000.0)
     flux = np.ones(len(extracted_waves) * 2)

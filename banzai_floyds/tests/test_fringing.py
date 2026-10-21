@@ -21,6 +21,7 @@ from datetime import datetime
 from numpy.polynomial.legendre import Legendre
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.utils.order_utils import get_order_2d_region
+from banzai_floyds.utils.binning_utils import bin_data
 
 
 def as_processed_lamp_flat(frame, filename=None):
@@ -348,6 +349,21 @@ def test_correct_fringe():
     # the same array the FRINGE extension holds
     np.testing.assert_allclose(output_frame.fringe, output_frame['FRINGE'].data, rtol=1e-6)
     np.testing.assert_allclose(output_frame.fringe[corrected], frame.input_fringe[corrected], atol=0.03)
+
+
+def test_fringe_correction_reaches_the_binned_data():
+    np.random.seed(981435)
+    frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True,
+                                        fringe=True, fringe_offset=3.5, fringe_offset_x=1.5,
+                                        include_super_fringe=True)
+    frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
+    output_frame = FringeCorrector(context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0})).do_stage(frame)
+    x = output_frame.binned_data['x'].astype(int)
+    y = output_frame.binned_data['y'].astype(int)
+    # The extraction reads the binned copy, so it has to carry the correction made to the frame
+    assert np.any(output_frame['FRINGE'].data[y, x] > 0.1)
+    np.testing.assert_allclose(output_frame.binned_data['data'], output_frame.data[y, x])
+    np.testing.assert_allclose(output_frame.binned_data['uncertainty'], output_frame.uncertainty[y, x])
 
 
 def test_fringe_correction_is_invertible_from_the_2d_output():
