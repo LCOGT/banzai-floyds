@@ -22,6 +22,7 @@ from numpy.polynomial.legendre import Legendre
 from scipy.interpolate import CloughTocher2DInterpolator
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.utils.binning_utils import bin_data
+from banzai_floyds.utils.fitting_utils import poisson_model_uncertainty
 
 
 def as_processed_lamp_flat(frame, filename=None):

@@ -63,15 +63,25 @@ def expected_standard_flux(data, order_id: int, flux_standard, wavelengths, elev
     return expected_flux
 
 
-def sensitivity_knots(wavelength_min: float, wavelength_max: float, knot_spacing: float, fringe_knot_spacing: float,
+def sensitivity_knots(wavelength: np.ndarray, knot_spacing: float, fringe_knot_spacing: float,
                       fringe_onset: float) -> np.ndarray:
     """Full knot vector of the cubic B-spline the sensitivity is fit with: knots every `knot_spacing` blueward of
-    `fringe_onset` and every `fringe_knot_spacing` redward."""
+    `fringe_onset` and every `fringe_knot_spacing` redward.
+
+    An interval with no points in it (a masked gap) is merged into the next one, so the spline bridges the gap
+    from the data on either side. Otherwise its basis functions are unconstrained and the ridge in
+    `sparse_least_squares` pulls them to ln S = 0.
+    """
+    wavelength_min, wavelength_max = np.min(wavelength), np.max(wavelength)
     interior = np.arange(wavelength_min, min(fringe_onset, wavelength_max), knot_spacing)
     if wavelength_max > fringe_onset:
         n_fringe_intervals = max(int(np.ceil((wavelength_max - fringe_onset) / fringe_knot_spacing)), 1)
         interior = np.concatenate([interior, np.linspace(fringe_onset, wavelength_max, n_fringe_intervals + 1)])
     interior = np.unique(np.concatenate([interior, [wavelength_min, wavelength_max]]))
+    n_in_interval, _ = np.histogram(wavelength, interior)
+    # The last interval holds wavelength_max, so the end knot is never dropped
+    keep = np.concatenate([[True], n_in_interval > 0])
+    interior = interior[keep]
     return np.concatenate([[wavelength_min] * 3, interior, [wavelength_max] * 3])
 
 
@@ -99,8 +109,7 @@ def fit_sensitivity(wavelength: np.ndarray, observed: np.ndarray, observed_error
     -------
     BSpline in ln S over the measured range, and the points used if return_used.
     """
-    knots = sensitivity_knots(np.min(wavelength), np.max(wavelength), knot_spacing, fringe_knot_spacing,
-                              fringe_onset)
+    knots = sensitivity_knots(wavelength, knot_spacing, fringe_knot_spacing, fringe_onset)
     design = BSpline.design_matrix(wavelength, knots, 3)
     coefficients, used = robust_linear_fit(design, np.log(expected / observed), observed_error / observed,
                                            clip_sigma=np.inf)

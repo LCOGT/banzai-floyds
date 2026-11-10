@@ -74,7 +74,7 @@ from reduction_utils import reduce_to_stage, frame_metadata
 from report_utils import Report, raw_frame_paths, write_reports
 from trace_overlay_results import (trace_in_pixels, straighten_order, ORDER_NAMES, ORDER_COLORS, COLORMAP,
                                    DARK_BLUE, TRACE_COLOR)
-from banzai_floyds.background import mark_order_interior, model_uncertainty, BackgroundFitter
+from banzai_floyds.background import mark_order_interior, poisson_model_uncertainty, BackgroundFitter
 from banzai_floyds.extract import Extractor
 
 OUTPUT_PDF = 'background_results.pdf'
@@ -142,7 +142,7 @@ def object_model(binned: Table, extracted: Table) -> np.ndarray:
     return model
 
 
-def normalized_residuals(binned: Table, model: np.ndarray) -> np.ndarray:
+def normalized_residuals(binned: Table, model: np.ndarray, read_noise: float) -> np.ndarray:
     """(d - B - F w) / σ with σ from the model, NaN for pixels that are masked, have no uncertainty, or no
     object model.
     """
@@ -150,7 +150,7 @@ def normalized_residuals(binned: Table, model: np.ndarray) -> np.ndarray:
     good = np.logical_and(good, np.isfinite(model))
     total = np.array(binned['background']) + np.where(good, model, 0.0)
     residuals = np.full(len(binned), np.nan)
-    residuals[good] = ((binned['data'][good] - total[good]) / model_uncertainty(binned, total)[good])
+    residuals[good] = ((binned['data'][good] - total[good]) / poisson_model_uncertainty(total, read_noise)[good])
     return residuals
 
 
@@ -366,7 +366,7 @@ def background_record(image) -> dict:
     binned = image.binned_data
     mark_order_interior(binned, ORDER_EDGE_MARGIN)
     model = object_model(binned, image.extracted)
-    residuals = normalized_residuals(binned, model)
+    residuals = normalized_residuals(binned, model, float(image.meta['RDNOISE']))
     # An order the background stage did not fit has L1BKMW = 0, which would make the whole slit sky
     mask_widths = {order_id: float(image.meta.get(f'L1BKMW{order_id}', 0.0)) or np.nan
                    for order_id in image.orders.order_ids}

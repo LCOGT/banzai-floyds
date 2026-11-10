@@ -55,3 +55,21 @@ def test_sensitivity_follows_notch_not_fringes():
     # Except in the last couple of fringe periods, which are all that pin the free end of the spline
     away_from_edge = wavelength < 9800.0
     np.testing.assert_allclose(sensitivity[away_from_edge], true_sensitivity[away_from_edge], rtol=0.02)
+
+
+def test_sensitivity_bridges_masked_gap():
+    np.random.seed(20261110)
+    wavelength = np.arange(3300.0, 10000.0, 2.0)
+    true_sensitivity = 1e-15 * np.exp(0.5 * ((wavelength - 6000.0) / 3000.0) ** 2.0)
+    expected = 1e-13 * (wavelength / 5000.0) ** -2.0
+    observed = expected / true_sensitivity
+    observed_error = observed / 200.0
+    observed += np.random.normal(0.0, observed_error)
+    in_gap = np.logical_and(wavelength > 5000.0, wavelength < 5200.0)
+
+    log_sensitivity = fit_sensitivity(wavelength[~in_gap], observed[~in_gap], observed_error[~in_gap],
+                                      expected[~in_gap], FluxSensitivity.KNOT_SPACING,
+                                      FluxSensitivity.FRINGE_KNOT_SPACING, FluxSensitivity.FRINGE_ONSET)
+    sensitivity = evaluate_sensitivity(log_sensitivity, wavelength)
+    # The sensitivity across the gap is interpolated from the data on either side, not pulled to ln S = 0
+    np.testing.assert_allclose(sensitivity[in_gap], true_sensitivity[in_gap], rtol=0.01)

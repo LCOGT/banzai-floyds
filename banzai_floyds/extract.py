@@ -4,7 +4,7 @@ from astropy.table import Table
 from banzai.logs import get_logger
 from banzai_floyds.utils.binning_utils import rebin_data_combined
 from banzai_floyds.utils.flux_utils import sensitivity_correction
-from banzai_floyds.utils.fitting_utils import model_uncertainty
+from banzai_floyds.utils.fitting_utils import poisson_model_uncertainty
 
 
 logger = get_logger()
@@ -55,7 +55,7 @@ def _linear_extraction(coefficients: np.ndarray, signal: np.ndarray, background:
 
 
 def _extract_bins(binned_data: Table, bin_key: str, data_keyword: str, background_key: str, uncertainty_key: str,
-                  model_uncertainty_key: str | None, weights_key: str) -> tuple[np.ndarray, dict]:
+                  weights_key: str, optimal: bool = True) -> tuple[np.ndarray, dict]:
     indices = binned_data.groups.indices
     in_window = np.asarray(binned_data['extraction_window'], dtype=bool)
     weights = np.asarray(binned_data[weights_key], dtype=float)
@@ -71,10 +71,9 @@ def _extract_bins(binned_data: Table, bin_key: str, data_keyword: str, backgroun
     uncertainty = np.where(use, binned_data[uncertainty_key], 0.0)
     profile = np.where(use, weights, 0.0)
     coefficients = {'unweighted': use.astype(float)}
-    if model_uncertainty_key is not None:
-        model_variance = np.asarray(binned_data[model_uncertainty_key], dtype=float) ** 2
+    if optimal:
         coefficients['optimal'] = np.zeros(len(use))
-        coefficients['optimal'][use] = profile[use] / model_variance[use]
+        coefficients['optimal'][use] = profile[use] / uncertainty[use] ** 2
     extractions = {weighting: _linear_extraction(a, signal, background, uncertainty, profile, indices)
                    for weighting, a in coefficients.items()}
     return hits_profile, extractions
@@ -82,24 +81,26 @@ def _extract_bins(binned_data: Table, bin_key: str, data_keyword: str, backgroun
 
 def extract(binned_data: Table, bin_key: str = 'order_wavelength_bin', data_keyword: str = 'data',
             background_key: str = 'background', background_out_key: str = 'background',
-            uncertainty_key: str = 'uncertainty', model_uncertainty_key: str = 'model_uncertainty',
+            uncertainty_key: str = 'uncertainty',
             flux_keyword: str = 'fluxraw', flux_error_key: str = 'fluxrawerr', weights_key: str = 'weights',
             include_order: bool = True) -> Table:
     """
     Optimal and unweighted extractions of each wavelength bin.
 
-    f = Σ a (d - b) / Σ a P,  σ_f² = Σ a² σ² / (Σ a P)²
+    f = Σ a (d - b) / Σ a P,  σ_f² = Σ a² V / (Σ a P)²
 
-    summed over the unmasked pixels in the extraction window. The optimal extraction (Horne 1986) uses a = P / V,
-    with V the variance of the model rather than of the data. The unweighted extraction has a = 1; dividing by Σ P
-    normalizes the flux making the weighted and unweighted extractions comparable.
+    summed over the unmasked pixels in the extraction window, with V the variance of the model rather than of
+    the data. The optimal extraction (Horne 1986) uses a = P / V, so σ_f² = 1 / Σ P² / V. The unweighted
+    extraction has a = 1; dividing by Σ P normalizes the flux making the weighted and unweighted extractions
+    comparable.
 
     Parameters
     ----------
     binned_data : Table
         Pixels grouped by wavelength bin with 'order', 'mask', and 'extraction_window' columns
-    model_uncertainty_key : str
-        Column of the uncertainties that set the optimal weights, V = σ_model²
+    uncertainty_key : str
+        Column of the uncertainties from the model (`horne_uncertainty`), V = σ², which set the optimal weights
+        and the errors
     flux_keyword, flux_error_key, background_out_key : str
         Output column names, each written with an '_optimal' and an '_unweighted' suffix
 
@@ -114,7 +115,7 @@ def extract(binned_data: Table, bin_key: str = 'order_wavelength_bin', data_keyw
     # Apparently if you integrate over a pixel, the integral and the average are the same,
     #   so we can treat the pixel value as being the average at the center of the pixel to first order.
     hits_profile, extractions = _extract_bins(binned_data, bin_key, data_keyword, background_key, uncertainty_key,
-                                              model_uncertainty_key, weights_key)
+                                              weights_key)
     first_rows = binned_data.groups.indices[:-1]
     wavelength_bins = np.asarray(binned_data[bin_key])[first_rows]
     orders = np.asarray(binned_data['order'])[first_rows]
@@ -139,7 +140,8 @@ def extract(binned_data: Table, bin_key: str = 'order_wavelength_bin', data_keyw
     return results
 
 
-def horne_model_uncertainty(binned_data: Table) -> np.ndarray:
+def horne_uncertainty(binned_data: Table, read_noise: float,
+                      fringe_correction: np.ndarray | float = 1.0) -> np.ndarray:
     """
     The uncertainty of each pixel from the model f P + b rather than from its own counts (Horne 1986).
 
@@ -147,13 +149,14 @@ def horne_model_uncertainty(binned_data: Table) -> np.ndarray:
     unweighted extraction, which does not depend on the weights.
     """
     hits_profile, extractions = _extract_bins(binned_data, 'order_wavelength_bin', 'data', 'background',
-                                              'uncertainty', None, 'weights')
+                                              'uncertainty', 'weights', optimal=False)
     flux = extractions['unweighted']['flux']
     bin_flux = np.zeros(len(flux))
     good = np.logical_and(hits_profile, np.isfinite(flux))
     bin_flux[good] = flux[good]
     pixel_flux = np.repeat(bin_flux, np.diff(binned_data.groups.indices))
-    return model_uncertainty(binned_data, pixel_flux * binned_data['weights'] + binned_data['background'])
+    return poisson_model_uncertainty(pixel_flux * binned_data['weights'] + binned_data['background'], read_noise,
+                                     fringe_correction)
 
 
 class Extractor(Stage):
@@ -167,7 +170,9 @@ class Extractor(Stage):
             logger.warning('No object was detected, so there is nothing to extract.', image=image)
             return image
         set_extraction_region(image, self.DEFAULT_EXTRACT_WINDOW)
-        image.binned_data['model_uncertainty'] = horne_model_uncertainty(image.binned_data)
+        fringe_correction = image.fringe_correction[image.binned_data['y'], image.binned_data['x']]
+        image.binned_data['uncertainty'] = horne_uncertainty(image.binned_data, image.primary_hdu.read_noise,
+                                                             fringe_correction)
         image.extracted = extract(image.binned_data)
         return image
 
@@ -181,8 +186,7 @@ class CombinedExtractor(Stage):
         calibration = sensitivity_correction(image.binned_data['wavelength'], image.binned_data['order'],
                                              image.sensitivity, image.elevation, image.airmass, image.exptime)
         calibration /= telluric_model
-        for raw_key, flux_key in [('data', 'flux'), ('uncertainty', 'fluxerror'), ('background', 'flux_background'),
-                                  ('model_uncertainty', 'model_fluxerror')]:
+        for raw_key, flux_key in [('data', 'flux'), ('uncertainty', 'fluxerror'), ('background', 'flux_background')]:
             image.binned_data[flux_key] = image.binned_data[raw_key] * calibration
         overlap_region = [max([domain[0] for domain in image.wavelengths.wavelength_domains]),
                           min([domain[1] for domain in image.wavelengths.wavelength_domains])]
@@ -202,10 +206,9 @@ class CombinedExtractor(Stage):
         order_ratio /= flux2_for_ratio
         normalization = np.median(order_ratio)
         order_2 = image.binned_data['order'] == 2
-        for key in ['flux', 'fluxerror', 'flux_background', 'model_fluxerror']:
+        for key in ['flux', 'fluxerror', 'flux_background']:
             image.binned_data[key][order_2] *= normalization
         image.spectrum = extract(image.binned_data, bin_key='wavelength_bin', data_keyword='flux',
                                  background_key='flux_background', uncertainty_key='fluxerror',
-                                 model_uncertainty_key='model_fluxerror', flux_keyword='flux',
-                                 flux_error_key='fluxerror', include_order=False)
+                                 flux_keyword='flux', flux_error_key='fluxerror', include_order=False)
         return image

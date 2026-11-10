@@ -41,6 +41,8 @@ class FluxSensitivity(Stage):
                                                    image.airmass, telluric_model=image.telluric)
             to_fit = np.logical_and(data['mask'] == 0, np.isfinite(data['fluxraw_optimal']))
             to_fit = np.logical_and(to_fit, data['fluxraw_optimal'] > 0.0)
+            to_fit = np.logical_and(to_fit, np.isfinite(expected_flux))
+            to_fit = np.logical_and(to_fit, expected_flux > 0.0)
             log_sensitivity = fit_sensitivity(data['wavelength'][to_fit],
                                               data['fluxraw_optimal'][to_fit] / image.exptime,
                                               data['fluxrawerr_optimal'][to_fit] / image.exptime,

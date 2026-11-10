@@ -32,7 +32,7 @@ def detect_cosmic_rays(image, sigclip: float, sigfrac: float, objlim: float,
 
     Parameters
     ----------
-    image: FLOYDSObservationFrame with orders set, in electrons
+    image: FLOYDSObservationFrame with orders set
     sigclip: float, how many sigma above the noise a cosmic ray has to be
     sigfrac: float, the fraction of sigclip a pixel touching a detection has to reach
     objlim: float, how far above the fine structure of the image a cosmic ray has to be, which is
@@ -47,9 +47,13 @@ def detect_cosmic_rays(image, sigclip: float, sigfrac: float, objlim: float,
     """
     mask = np.logical_or.reduce([image.mask > 0, order_edge_guard_band(image.orders, order_edge_buffer),
                                  image.orders.data == 0])
-    cr_mask, _ = detect_cosmics(image.data.astype(np.float32),
+    data, poisson_background = image.data, None
+    if background is not None:
+        poisson_background = background / image.fringe_correction
+        data = image.data - background + poisson_background
+    cr_mask, _ = detect_cosmics(data.astype(np.float32),
                                 inmask=mask,
-                                inbkg=None if background is None else background.astype(np.float32),
+                                inbkg=None if poisson_background is None else poisson_background.astype(np.float32),
                                 invar=(image.uncertainty ** 2).astype(np.float32),
                                 sigclip=sigclip, sigfrac=sigfrac, objlim=objlim, gain=1.0,
                                 readnoise=float(image.meta['RDNOISE']),
@@ -85,7 +89,6 @@ class CosmicRayDetector(Stage):
     ORDER_EDGE_BUFFER = 2
 
     def do_stage(self, image):
-        # This stage runs after gain normalization so everything is in electrons.
         # BackgroundFitter runs immediately before us, so image.background is the fitted sky, or None
         # when no object was detected to fit it around.
         cr_mask = detect_cosmic_rays(image, self.SIGCLIP, self.SIGFRAC, self.OBJLIM,

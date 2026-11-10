@@ -76,7 +76,7 @@ def test_background_fitting():
     set_up_profile(fake_frame)
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
-    fitted_background, _ = fit_background(binned_data, spatial_background_order=3)
+    fitted_background, _ = fit_background(binned_data, fake_frame.meta['RDNOISE'], spatial_background_order=3)
     fake_frame.background = fitted_background
     # If we are fitting to the noise, I think the residuals / uncertainty per pixel should
     # follow a Gaussian distribution with sigma=1. So check cuts of the residual
@@ -154,7 +154,7 @@ def test_background_fitting_is_robust_to_an_unflagged_cosmic_ray():
     binned_data['data'][spike_row] += 50000.0
 
     set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
-    fitted_background, _ = fit_background(binned_data, spatial_background_order=3)
+    fitted_background, _ = fit_background(binned_data, fake_frame.meta['RDNOISE'], spatial_background_order=3)
     fake_frame.background = fitted_background
     residuals, interior = sky_residuals(fake_frame)
     assert (np.abs(residuals) < 3).sum() > 0.99 * interior.sum()

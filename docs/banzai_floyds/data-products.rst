@@ -7,7 +7,11 @@ issues.
 Extracted spectra
 -----------------
 Extracted spectra are in files with the '1d' suffix and 'SPECTRUM' OBSTYPE, following a naming convention like
-"ogg2m001-en06-20250111-0056-e91-1d.fits.fz". The extracted files are multi-extension fits files.
+"ogg2m001-en06-20250111-0056-e91-1d.fits.fz". The extracted files are multi-extension fits files. If no object was
+detected in the slit (L1OBJDET = False), no 1d file is written, only the 2d file.
+
+Throughout, "electrons" means gain-corrected detector counts with the fringing divided out: redward of 6200 Angstroms
+in the red order, each pixel has been divided by the fringe pattern in the ***FRINGE*** extension of the 2d file.
 
 - ***SPECTRUM*** Extension: This extension includes what is considered the final reduction of the spectrum.
   The data is stored in a fits binary table with one row per wavelength bin and two extractions side by side
@@ -21,19 +25,26 @@ Extracted spectra are in files with the '1d' suffix and 'SPECTRUM' OBSTYPE, foll
   - 'mask': 1 if the bin had no unmasked pixels to extract (the fluxes are then NaN), 0 otherwise.
 
   The flux, error, and background columns are flux and telluric corrected and have units of ergs/s/cm^2/Angstrom.
-  The errors are estimated using formal error propagation, starting with a Gaussian read noise and a Poisson model
-  for the detector.
+  The blue order is scaled to match the red order where the two overlap before they are combined. The errors are
+  propagated from the uncertainty of the model of each pixel, the extracted flux times the profile plus the
+  background, with the read noise and photon noise of that model rather than of each pixel's own counts (see
+  `Optimal and unweighted extractions`_).
 
 - ***EXTRACTED*** Extension: This extension has the same columns as the SPECTRUM extension, but the orders have not been
   combined. As such, an extra column for 'order' is included. Order 1 is by convention the red order and order 2 is the
   blue order. This extension also includes 'fluxraw_optimal', 'fluxrawerr_optimal', 'fluxraw_unweighted', and
   'fluxrawerr_unweighted' that have the extracted values in electrons and have not been flux or telluric corrected.
-  The 'background_optimal' and 'background_unweighted' columns in this extension are in electrons.
+  The 'background_optimal' and 'background_unweighted' columns in this extension are in electrons. The telluric
+  correction is only applied to the red order.
 
 - ***SENSITIVITY*** Extension: This extension is a fits binary table that has 'wavelength', 'sensitivity', and 'order' columns.
-  The 'sensitivity' column is in units of ergs/s/cm^2/Angstrom/electron. 
+  The 'sensitivity' column converts a count rate to the flux that reaches the telescope, in units of
+  (ergs/s/cm^2/Angstrom) / (electrons/s). Dividing by the atmospheric extinction then gives the flux above the
+  atmosphere.
 
-- ***TELLURIC*** Extension: This extension is a fits binary table that has 'wavelength' and 'telluric' columns. The telluric column is absorption fraction (unitless).
+- ***TELLURIC*** Extension: This extension is a fits binary table that has 'wavelength' and 'telluric' columns. The
+  telluric column is the fraction of the light transmitted through the telluric absorption (unitless, 1 is no
+  absorption); the spectra are divided by it.
 
 Optimal and unweighted extractions
 ----------------------------------
@@ -44,9 +55,15 @@ subtracting the background b, given the profile P (normalized to sum to one alon
 
     f = \frac{\sum a (d - b)}{\sum a P}, \qquad \sigma_f^2 = \frac{\sum a^2 \sigma^2}{\left(\sum a P\right)^2}
 
-- The optimal extraction (Horne 1986, PASP, 98, 609) uses :math:`a = P / V`, where V is the variance of the model
-  :math:`f P + b` plus the read noise rather than the variance of each pixel's own counts, which would bias faint
-  fluxes low. This gives the highest signal-to-noise but depends on the profile model being right.
+Here :math:`\sigma^2 = R^2 + |f P + b|` is the variance of the model of each pixel, from the read noise R and the
+photon noise of the model rather than of the pixel's own counts (Horne 1986, PASP, 98, 609). Variances from each
+pixel's own counts give more weight to the pixels that fluctuated low, which biases faint fluxes low, and overstate
+the errors of read noise limited spectra. In the fringe corrected region the variance is
+:math:`R^2 / F^2 + |f P + b| / F`, with F the fringe pattern the counts were divided by. f in the model is the
+unweighted extraction, which does not depend on the variances.
+
+- The optimal extraction uses :math:`a = P / \sigma^2`, so that :math:`\sigma_f^2 = 1 / \sum P^2 / \sigma^2`. This
+  gives the highest signal-to-noise but depends on the profile model being right.
 - The unweighted extraction uses :math:`a = 1`, which is the sum of the pixels in the window divided by the fraction
   of the profile they cover. It does not depend on the shape of the profile beyond that fraction, so it is the more
   robust choice for extended sources or sources whose profile is poorly modeled, at the cost of more noise.
@@ -89,20 +106,21 @@ Spectroscopic Images
 The non-extracted 2-D frames are in files with the '2d' suffix and 'SPECTRUM' OBSTYPE, following a naming convention like
 "ogg2m001-en06-20250111-0056-e91-2d.fits.fz". The 2-D files are again multi-extension fits files.
 
-- ***SCI*** Extension: The 'SCI' extension has the original 2-D image data after bias subtraction in units of
-  electrons (gain-corrected).
+- ***SCI*** Extension: The 'SCI' extension has the 2-D image data after bias subtraction in units of electrons
+  (gain-corrected), with the fringe pattern in the ***FRINGE*** extension divided out.
 
 - ***BPM*** Extension: This extension holds the bad pixel mask. The mask is represented as a bitwise mask.
    1 is a known bad pixel. 2 is saturated. 4 is a low quantum efficiency pixel (QE < 0.2). 8 is a cosmic ray.
 
 - ***ERR*** Extension: The 'ERR' extension carries the uncertainty array in electrons (the same units as the data). The
    uncertainties are estimated using formal error propagation, starting with a Gaussian read noise and a Poisson model
-   for the detector counts in the standard way.
+   for each pixel's own counts in the standard way, and are divided by the fringe pattern along with the data. These
+   are not the uncertainties the extraction uses; see the 'uncertainty' column of the ***BINNED2D*** extension.
 
 - ***ORDER_COEFFS*** Extension: This extension is a fits binary table with the coefficients for the center of the orders. 
-   Each row has the Legendre coefficients for the order center (c1, c2,...), the domainmin and domainmax for the Legendre
-   polynomial, and the height of the order in pixels. From this extension, a user can select only pixels that fall in
-   their order of choice. 
+   Each row has the 'order' id, the Legendre coefficients for the order center (c0, c1,...), the 'domainmin' and
+   'domainmax' for the Legendre polynomial, and the 'height' of the order in pixels. From this extension, a user can
+   select only pixels that fall in their order of choice.
 
 - ***WAVELENGTH*** Extension: 2-D image of the wavelengths per pixel in Angstroms. This extension can be used if users would
   like to re-extract a spectrum or re-fit the data using a different technique. It is always accompanied by the ***LSF***
@@ -110,43 +128,72 @@ The non-extracted 2-D frames are in files with the '2d' suffix and 'SPECTRUM' OB
 
 - ***BINNED2D*** Extension: This extension is a binary fits table that is broken down into wavelength bins. This pre-binned
   data is provided as a convenience for users to re-extract their data to meet their specific science needs. The following
-  columns are provided in the table:
+  columns are provided in the table, one row per pixel inside the orders:
+
+  - 'data': The pixel value in electrons.
+  - 'uncertainty': Uncertainty in electrons from the model of the pixel (flux x profile + background) rather than
+    its own counts (Horne 1986). These are the uncertainties the extraction uses for its weights and errors. If no
+    object was detected the frame is not extracted, and this is the uncertainty from each pixel's own counts, as in
+    the ERR extension.
+  - 'mask': Bad Pixel Mask value (see BPM extension for values).
+  - 'x', 'y': Pixel position in the original image (0-indexed).
   - 'wavelength': The wavelength of the pixel in Angstroms.
-  - 'flux': Flux corrected value of the pixel in ergs/s/cm^2/Angstrom.
-  - 'fluxerror': Flux error in ergs/s/cm^2/Angstrom.
-  - 'flux_background': Background value in units of flux in ergs/s/cm^2/Angstrom.
-  - 'model_fluxerror': 'model_uncertainty' in units of flux in ergs/s/cm^2/Angstrom.
-  - 'data': The pixel value in electrons
-  - 'uncertainty': The uncertainty in the pixel value in electrons 
-  - 'mask': Bad Pixel Mask value (see BPM extension for values)
-  - 'x': x pixel position in the original image (0-indexed)
-  - 'y': y pixel position in the original image (0-indexed)
-  - 'order': The order id (int) of the pixel
-  - 'order_wavelength_bin': The wavelength bin (Angstrom) from the per order extraction
-  - 'order_wavelength_bin_width': The wavelength bin width (Angstrom) from the per order extraction
-  - 'wavelength_bin': The wavelength bin (Angstrom) from the extraction combining orders
-  - 'wavelength_bin_width': The wavelength bin width (Angstrom) from the extraction combining orders
-  - 'y_order': The y-position of the pixel relative to the center of the order
-  - 'y_profile': The y-position relative to the center of the profile (profile center is at 0)
-  - 'profile_sigma': The profile width (sigma) in pixels
-  - 'extraction_window': Boolean flag if the pixel is in the extraction region
-  - 'weights': The profile, normalized to sum to one along each column of the order
-  - 'background': Background value of the pixel in units of electrons
-  - 'model_uncertainty': Uncertainty in electrons from the model of the pixel (flux x profile + background), not its counts
-  - 'in_background': Boolean flag if the pixel is in the background fitting region
+  - 'order': The order id (int) of the pixel, 1 for red and 2 for blue.
+  - 'y_order': The y-position of the pixel relative to the center of the order.
+  - 'order_wavelength_bin', 'order_wavelength_bin_width': The wavelength bin center and width (Angstroms) of the per
+    order extraction (the EXTRACTED extension). 0 for pixels outside every bin.
+  - 'wavelength_bin', 'wavelength_bin_width': The wavelength bin center and width (Angstroms) of the extraction
+    combining the orders (the SPECTRUM extension).
+  - 'y_profile': The y-position relative to the center of the profile (profile center is at 0).
+  - 'profile_sigma': The Gaussian width (sigma) of the profile in pixels at the pixel's wavelength.
+  - 'profile_gamma_ratio': The ratio of the Lorentzian to the Gaussian width of the (Voigt) profile.
+  - 'weights': The profile, normalized to sum to one along each column of the order.
+  - 'background': Background value of the pixel in electrons.
+  - 'extraction_window': Boolean flag if the pixel is in the extraction region.
+  - 'flux', 'fluxerror', 'flux_background': 'data', 'uncertainty', and 'background' in units of flux,
+    ergs/s/cm^2/Angstrom, telluric corrected and with the blue order scaled to the red order as in the SPECTRUM
+    extension.
 
-- ***PROFILEFITS*** Extension: This extension holds a binary table of the data used to fit the profile variation. The columns
-  are 'order', 'wavelength', 'center', 'center_error', 'sigma', and 'sigma_error'. These points are estimated by taking
-  slices in the y-direction and stepping along the dispersion direction.
+- ***PROFILEFITS*** Extension: This extension holds a binary table of the trace centers the profile was fit through,
+  with the columns 'order', 'wavelength', 'center', 'center_error', and 'used' (whether the point survived the fit).
+  These points are measured in chunks stepping along the dispersion direction. The header holds the fitted profile:
+  the Legendre polynomials in wavelength of the center (O<order>CTR<i>), FWHM (O<order>FWH<i>), and gamma ratio
+  (O<order>GAM<i>), each with its degree (O<order><name>O) and domain (O<order><name>DM0, DM1). PROFFWHM and PROFGAM
+  give the red order's FWHM in pixels and gamma ratio at a reference wavelength.
 
-- ***PROFILE*** Extension: This extension has a 2-D image of the profile weights. This is for convenience so the user can
-  re-extract their data directly without having to recalculate the profile but can just do array multiplication.
+- ***PROFILE*** Extension: This extension has a 2-D image of the profile weights (a Voigt profile). This is for
+  convenience so the user can re-extract their data directly without having to recalculate the profile but can just
+  do array multiplication.
 
 - ***BACKGROUND*** Extension: This extension has a 2-D image of the pixel-by-pixel background value in electrons. This
   array can be used directly by the user to subtract the background from the data.
 
-- ***FRINGE*** Extension: This extension has a 2-D image of the fringe pattern used to correct the data. 
-  This data is shifted and interpolated from the stacked super fringe that was used.
+- ***FRINGE*** Extension: This extension has a 2-D image of the fringe pattern the data were divided by, redward of
+  6200 Angstroms in the red order. It is the stacked fringe frame (or the lamp flats taken in the same block), shifted
+  and interpolated to match the data. Pixels that were not corrected are 0. Multiplying the SCI data (or the 'data'
+  column of BINNED2D) by the pattern where it is nonzero recovers the uncorrected electrons.
+
+- ***FRINGE_MEASURED*** Extension: The fringe pattern measured on this frame, the uncorrected data divided by a smooth
+  model of the sky and trace. This is what the shift of the FRINGE pattern was fit against, provided for checking the
+  correction.
+
+The 2-D files also carry these header keywords from the reduction:
+
+  - L1OBJDET: Whether an object was detected in the slit. L1PNPEAK is the most sources found in either order and
+    L1PROFSN the matched filter signal-to-noise of the detected object.
+  - L1FWHSRC, L1SHPSRC: Where the profile width (fit, star, line, or guess) and shape (fit, star, or gaussian) of each
+    order came from. L1ISOSTR is whether the target is an isolated star in Gaia. L1PROFDG is the effective number of
+    free parameters in the trace center fit.
+  - XTRTW<order>0, XTRTW<order>1: The extraction window in units of the profile sigma.
+  - L1BKDG<order>, L1BKNK<order>, L1BKMW<order>: The degree of the sky polynomial across the slit, the number of knots
+    of the sky spline in wavelength, and the half width (in profile sigma) of the region around the object left out of
+    the sky fit.
+  - L1STATFR: 1 if the fringe correction was applied. L1FRNGSN is the per-pixel signal-to-noise of the fringe pattern
+    on this frame; below 2 the pattern is applied unshifted. L1FRNGOX and L1FRNGOY are the x and y shifts of the
+    pattern in pixels.
+  - L1IDFRNG (and L1IDFR02, ...): The fringe frame, or the lamp flats from the same block, used for the correction.
+  - L1IDARC, L1ORDRID, L1STNDRD: The arc, order (sky flat), and standard star frames used.
+  - L1ID1D: The matching 1d file. The 1d file has L1ID2D pointing back to this one.
 
 Lamp Flats
 ----------
@@ -154,18 +201,23 @@ Lamp flat observations of a Tungsten Halogen source are taken primarily to corre
 useful for the red order. The blue order has a dichroic that blocks lines from the lamp, but also renders the blue order
 of the flat unusable. In the future, different lamps may be installed to flat field in the blue.
 
-The individual lamp flats have the 'SCI', 'BPM', 'ERR', 'ORDER_COEFFS', 'WAVELENGTH', and 'LSF' extensions. The 'SCI' extension
-contains the raw image data (bias subtracted and gain-corrected to electrons). The other extensions are the same structure
-as the 2-D spectroscopic images.
+The individual lamp flats have the 'SCI', 'BPM', 'ERR', 'ORDER_COEFFS', 'WAVELENGTH', 'LSF', 'BINNED2D', and 'FRINGE'
+extensions. The flat is split into the smooth lamp illumination, in the 'SCI' extension (bias subtracted and
+gain-corrected to electrons), and the fringe pattern, in the 'FRINGE' extension, normalized to a median of one
+redward of 6200 Angstroms in the red order. The two multiply back to the flat at every unmasked pixel. The other
+extensions are the same structure as the 2-D spectroscopic images.
 
 Fringe Frames
 -------------
 Combined (stacked) lamp flat exposures are used to correct for fringing and have the '-lampflat' filename suffix.
-The 'FRINGE' extension has the combined fringe pattern. This is the derived from a series of lamp flats (which frames were combined can be found using the IMCOM header keywords). The fringe patterns from indivdual frames are shifted and
-interpolated to be on a common grid. When correcting the science frames, the fringe pattern is shifted and interpolated
-to match the data. Users can identify which fringe frame using the L1IDFRNG header keyword. The shift applied to the
-fringe pattern is stored in the L1FRNGOF keyword. The FRINGEBPM and FRINGEERR extensions are currently not used but can
-store the combined bad pixel mask and the combined error array in the future.
+The 'FRINGE' extension has the combined fringe pattern. This is derived from a series of lamp flats (which frames were
+combined can be found using the IMCOM header keywords). The fringe patterns from individual frames are shifted onto the
+first one's grid and averaged; the shift applied to each is in the 'FRINGE_OFFSETS' table ('image', 'offset_x',
+'offset_y', and the telescope 'altitude'). When correcting the science frames, the fringe pattern is shifted and
+interpolated to match the data. Lamp flats taken in the same block as a science frame are used in place of the
+stacked frame when they are available. Users can identify which fringe frame was used with the L1IDFRNG header keyword
+and the shift applied with the L1FRNGOX and L1FRNGOY keywords. The FRINGEBPM extension flags (with 32) the pixels with
+no usable pattern. The FRINGEERR extension is currently not used.
 
 Arc Frames
 ----------
@@ -174,7 +226,7 @@ The only difference from the 2-D spectroscopic frames described above is that th
 this frame rather than being copied in. Science frames reference the arc that provided the WAVELENGTH extension via the 
 L1IDARC header keyword. The ***EXTRACTED*** extension provides binned sums down the columns of the arc frame, typically for
 diagnostic purposes. The 'fluxraw_unweighted' and 'fluxrawerr_unweighted' columns are the sums and their
-uncertainties in electrons; the '_optimal' columns weight the rows by their variance. The 'wavelength' and 'binwidth' columns 
+uncertainties in electrons; the '_optimal' columns weight the rows by the variance of their model. The 'wavelength' and 'binwidth' columns 
 give the wavelength bin center and width respectively in Angstroms.
 The ***FEATURES2D*** extension is a data table with the row-by-row fits
 to the centroids of the arc lines. The columns are 'order', 'wavelength', 'x', 'y', 'x_err', and 'order_y'.
@@ -210,4 +262,4 @@ Sky Flats and Order Positions
 -----------------------------
 The order positions are detected by using twilight sky flats. These frames have the f91 filename suffix and the OBSTYPE
 of SKYFLAT. The raw (bias subtracted and gain-corrected) data is in the ***SCI*** extension. The ***BPM***, ***ERR***, and ***ORDER_COEFFS*** extensions are the same as the 2-D spectroscopic images. These files also include an array of the order IDs
-for conveience in the 'ORDERS' extension. 
+for convenience in the 'ORDERS' extension.

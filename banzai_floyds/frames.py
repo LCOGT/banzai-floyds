@@ -279,6 +279,16 @@ class FLOYDSObservationFrame(LCOObservationFrame):
             self.add_or_update(ArrayData(fringe.astype(np.float32), name='FRINGE', meta=fits.Header({})))
 
     @property
+    def fringe_correction(self) -> np.ndarray:
+        """What each pixel has been divided by to take out the fringing: the FRINGE pattern once FringeCorrector
+        has applied it, and 1 everywhere else."""
+        correction = np.ones(self.data.shape)
+        if self.fringe is not None and self.meta.get('L1STATFR') == 1:
+            applied = self.fringe > 0
+            correction[applied] = self.fringe[applied]
+        return correction
+
+    @property
     def wavelengths(self):
         return self._wavelengths
 

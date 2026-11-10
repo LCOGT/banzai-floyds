@@ -1,5 +1,4 @@
 import numpy as np
-from astropy.table import Table
 from collections.abc import Callable, Sequence
 from numpy.polynomial.legendre import Legendre, legder, legval, leggauss
 from scipy import sparse
@@ -550,10 +549,13 @@ def weighted_linear_fit(t, x, x_err):
     return a, b, var_a, var_b
 
 
-def model_uncertainty(data: Table, model: np.ndarray) -> np.ndarray:
-    """The uncertainty of each pixel from a model of its counts rather than the counts themselves
-    (Horne 1986): σ² = σ_d² - |d| + |model|.
+def poisson_model_uncertainty(model: np.ndarray, read_noise: float,
+                              correction: np.ndarray | float = 1.0) -> np.ndarray:
+    """The uncertainty of each pixel from it's expected flux
+    instead of the pixel value which is only one draw from the
+    Poisson distribution.
+    (Horne 1986): σ² = R² / F² + |model| / F.
+
+    R is the read noise in electrons. F is what each pixel was divided by to correct it (the fringing).
     """
-    read_variance = np.maximum(np.asarray(data['uncertainty']) ** 2 - np.abs(data['data']), 0.0)
-    uncertainty = np.sqrt(read_variance + np.abs(model))
-    return np.where(uncertainty > 0, uncertainty, data['uncertainty'])
+    return np.sqrt((read_noise / correction) ** 2 + np.abs(model) / correction)
