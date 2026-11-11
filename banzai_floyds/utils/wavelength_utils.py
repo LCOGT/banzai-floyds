@@ -31,6 +31,11 @@ class WavelengthSolution:
         """Line FWHM (pixels) per order, indexed by order_id - 1."""
         return [sigma_to_fwhm(params['sigma']) for params in self.lsf_params]
 
+    def lsf_sigma_angstroms(self, order_id: int) -> float:
+        """Gaussian sigma of an order's line spread function in Angstroms, at the dispersion at the order center."""
+        polynomial = self._wavelength_polynomials[order_id - 1]
+        return float(self.lsf_params[order_id - 1]['sigma'] * polynomial.deriv()(np.mean(polynomial.domain)))
+
     def line_spread_function(self, order_id, x=None):
         """
         Sample the (unit-amplitude) Gauss-Hermite LSF for an order at pixel positions x (centroid at zero).

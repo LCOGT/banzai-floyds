@@ -1,5 +1,5 @@
 from banzai_floyds.frames import FLOYDSObservationFrame, FLOYDSCalibrationFrame
-from banzai_floyds.orders import Orders, order_region, smooth_order_weights
+from banzai_floyds.orders import Orders, order_region, smooth_order_weights, order_coefficients_table
 from banzai_floyds.utils.fitting_utils import fwhm_to_sigma, gauss
 from banzai_floyds.utils.profile_utils import profile_sigmas
 from banzai_floyds.utils.wavelength_utils import WavelengthSolution
@@ -18,7 +18,6 @@ from astropy.io import ascii
 import importlib.resources
 from types import SimpleNamespace
 from astropy.table import Table
-from banzai.data import HeaderOnly
 from astropy.modeling.models import Polynomial1D
 import json
 import os
@@ -315,6 +314,7 @@ def generate_fake_science_frame(include_sky=False, flat_spectrum=True, fringe=Fa
                                                          'DATE-OBS': '2023-01-01 12:41:56.11',
                                                          'HEIGHT': 0,
                                                          'AIRMASS': 1.0,
+                                                         'EXPTIME': 1.0,
                                                          'APERWID': 2.0,
                                                          'RDNOISE': read_noise,
                                                          'SATURATE': 1e6}),
@@ -349,12 +349,21 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
                                  domain=(0, 1541))
     wavelength_model2 = Legendre((4573.5, 1294.6, 15.), domain=(475, 1975))
     read_noise = 4.0
+    exptime = 600.0
+    orders = Orders([Legendre((135.4, 81.8, 45.2, -11.4), domain=(0, 1541)),
+                     Legendre((380, 17, 63, -12), domain=(475, 1975))], (512, 2048), [93, 93])
+    line_fwhms_angstroms = [15.6, 8.6]
+    lsf_params = [{'sigma': fwhm_to_sigma(fwhm / model.deriv()(np.mean(model.domain))), 'h3': 0.0, 'h4': 0.0}
+                  for fwhm, model in zip(line_fwhms_angstroms, [wavelength_model1, wavelength_model2])]
+    wavelength_solution = WavelengthSolution([wavelength_model1, wavelength_model2],
+                                             [Legendre([8.0], domain=domain) for domain in orders.domains],
+                                             orders, lsf_params)
 
     # Let's use a parabola for the flux and linear sensitivity
     order_pixels1 = np.arange(wavelength_model1.domain[0], wavelength_model1.domain[1] + 1, 1)
     order_piexels2 = np.arange(wavelength_model2.domain[0], wavelength_model2.domain[1] + 1, 1)
     wavelengths = np.hstack([wavelength_model1(order_pixels1), wavelength_model2(order_piexels2)])
-    orders = np.hstack([np.ones_like(order_pixels1), 2 * np.ones_like(order_piexels2)])
+    order_ids = np.hstack([np.ones_like(order_pixels1), 2 * np.ones_like(order_piexels2)])
     sensitivity_domain = (3000.0, 12000.0)
     input_flux = Polynomial1D(2, domain=sensitivity_domain, c0=3, c2=-2)(wavelengths) * 3000.0
 
@@ -369,19 +378,24 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
                                                        2 * np.ones_like(sensitivity_wavelengths, dtype=int)])})
 
     # Add the A and B bands
-    telluric = estimate_telluric(wavelengths, 1.0, 2198.0)
-    telluric_model = estimate_telluric(sensitivity_wavelengths, 1.0, 2198.0)
+    telluric = estimate_telluric(wavelengths, 1.0, 2198.0, wavelength_solution.lsf_sigma_angstroms(1))
+    telluric_model = estimate_telluric(sensitivity_wavelengths, 1.0, 2198.0,
+                                       wavelength_solution.lsf_sigma_angstroms(1))
 
     telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
     flux = input_flux.copy()
     if do_sensitivity:
         flux /= sensitivity
+        flux *= exptime
         airmass_correction = airmass_extinction(wavelengths, 2198.0, 1.0)
         flux *= airmass_correction
     if do_telluric:
         flux *= telluric
 
-    data = Table({'wavelength': wavelengths, 'order': orders, 'mask': np.zeros_like(flux, dtype=int)})
+    binwidth = np.hstack([np.gradient(wavelength_model1(order_pixels1)),
+                          np.gradient(wavelength_model2(order_piexels2))])
+    data = Table({'wavelength': wavelengths, 'binwidth': binwidth, 'order': order_ids,
+                  'mask': np.zeros_like(flux, dtype=int)})
     for weighting in ['optimal', 'unweighted']:
         noisy_flux = np.random.poisson(flux.astype(int)).astype(float)
         noisy_flux += np.random.normal(read_noise, size=flux.shape)
@@ -391,10 +405,14 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
         data[f'fluxraw_{weighting}'] = noisy_flux
         data[f'fluxrawerr_{weighting}'] = flux_error
 
-    frame = FLOYDSObservationFrame([HeaderOnly(fits.Header({'AIRMASS': 1.0}), name='foo')], file_path='foo.fits')
+    header = fits.Header({'AIRMASS': 1.0, 'EXPTIME': exptime})
+    frame = FLOYDSObservationFrame([CCDData(np.zeros(orders.data.shape), header, name='SCI')], file_path='foo.fits')
+    frame.orders = orders
+    frame.add_or_update(order_coefficients_table(orders, len(orders.coeffs[0]) - 1))
+    frame.wavelengths = wavelength_solution
     frame.telluric = telluric_data
     frame.sensitivity = sensitivity_data
-    frame.input_telluric = telluric[orders == 1]
+    frame.input_telluric = telluric[order_ids == 1]
     frame.input_sensitivity = sensitivity
     frame.input_flux = input_flux
     frame.extracted = data   # Use the elevation of CTIO which is what the telluric correction is scaled to

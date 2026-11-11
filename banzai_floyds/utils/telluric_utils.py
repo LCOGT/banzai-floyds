@@ -2,7 +2,6 @@ import numpy as np
 import importlib.resources
 from astropy.io import ascii
 from banzai.logs import get_logger
-from banzai_floyds.utils.fitting_utils import fwhm_to_sigma
 from scipy.ndimage import gaussian_filter1d
 import os
 
@@ -44,15 +43,16 @@ def scale_transmission(transmission, airmass_scale):
     return transmission ** airmass_scale
 
 
-def estimate_telluric(wavelength, airmass, elevation, telluric_model=None, resolution_fwhm=17.5):
+def estimate_telluric(wavelength, airmass, elevation, lsf_sigma: float, telluric_model=None):
+    """Telluric transmission at `wavelength`, from `telluric_model` or else the default model at the
+    instrument resolution, `lsf_sigma` (Angstroms)."""
     if telluric_model is None:
         # Load the default telluric absorption model from Matheson 2000
         telluric_model = ascii.read(os.path.join(importlib.resources.files('banzai_floyds'), 'data', 'telluric.dat'))
         # Convolve with the resolution of FLOYDS
-        # The default value of 5 pixels is picked for the 2" slit. This only needs to be roughly correct.
-        # The telluric model from Matheson 2000 is sampled at 1 Angstrom per pixel so use a resolution of 17.5
-        sigma = fwhm_to_sigma(resolution_fwhm)
-        telluric_model['telluric'] = gaussian_filter1d(telluric_model['telluric'], sigma, mode='constant', cval=1.0)
+        sampling = np.median(np.diff(telluric_model['wavelength']))
+        telluric_model['telluric'] = gaussian_filter1d(telluric_model['telluric'], lsf_sigma / sampling,
+                                                       mode='constant', cval=1.0)
 
         # TODO: Rescaling the telluric correction currently makes things worse so we need to revist.
         # We adopt the elevation of KPNO for which this was measured on the McMath-Pierce Solar Telescope
@@ -69,6 +69,7 @@ def elevation_to_airmass_ratio(elevation1, elevation2):
     # To estimate the delta airmass, we assume a very basic exponential model for the atmosphere
     # rho = rho0 * exp(-h/H) where H is 10.4 km from the ideal gas law
     # see https://en.wikipedia.org/wiki/Density_of_air#Exponential_approximation
-    # So the ratio of the airmass (total air column) is (1 - exp(-h1 / H)) / (1 - exp(-h2 / H))
-    airmass_ratio = (1.0 - np.exp(-elevation1 / 10400.0)) / (1.0 - np.exp(-elevation2 / 10400.0))
+    # The column above a site is the integral of rho from h to infinity, rho0 * H * exp(-h/H),
+    # so the ratio of the airmass (total air column) is exp(-(h1 - h2) / H)
+    airmass_ratio = np.exp(-(elevation1 - elevation2) / 10400.0)
     return airmass_ratio

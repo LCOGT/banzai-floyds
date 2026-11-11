@@ -489,30 +489,31 @@ class OrderSolver(Stage):
 
         image.orders = Orders(order_curves, image.data.shape, order_heights)
         image.add_or_update(ArrayData(image.orders.data, name='ORDERS'))
-        coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(coeffs)}
-                       for coeffs in image.orders.coeffs]
-        for i, row in enumerate(coeff_table):
-            row['order'] = i + 1
-            row['domainmin'], row['domainmax'] = image.orders.domains[i]
-            row['height'] = order_heights[i]
-        coeff_table = Table(coeff_table)
-        coeff_table['order'].description = 'ID of order'
-        coeff_table['domainmin'].description = 'Domain minimum for the order curve'
-        coeff_table['domainmax'].description = 'Domain maximum for the order curve'
-        coeff_table['height'].description = 'Order height'
-        for i in range(self.POLYNOMIAL_ORDER + 1):
-            coeff_table[f'c{i}'].description = f'Coefficient for P_{i}'
-
-        image.add_or_update(
-            DataTable(coeff_table, name='ORDER_COEFFS',
-                      meta=fits.Header({'POLYORD': self.POLYNOMIAL_ORDER, 'ORDHGHT': order_heights[0]}))
-        )
+        image.add_or_update(order_coefficients_table(image.orders, self.POLYNOMIAL_ORDER))
         image.is_master = True
         # Skyflats are automatically public. Some engineering data we collected
         # previously still were "proprietary" so we explicitly set the public date.
         image.public_date = image.dateobs
 
         return image
+
+
+def order_coefficients_table(orders: Orders, polynomial_order: int) -> DataTable:
+    """The ORDER_COEFFS extension that `orders_from_fits` reads the orders back from."""
+    coeff_table = [{f'c{i}': coeff for i, coeff in enumerate(coeffs)} for coeffs in orders.coeffs]
+    for i, row in enumerate(coeff_table):
+        row['order'] = i + 1
+        row['domainmin'], row['domainmax'] = orders.domains[i]
+        row['height'] = orders.order_heights[i]
+    coeff_table = Table(coeff_table)
+    coeff_table['order'].description = 'ID of order'
+    coeff_table['domainmin'].description = 'Domain minimum for the order curve'
+    coeff_table['domainmax'].description = 'Domain maximum for the order curve'
+    coeff_table['height'].description = 'Order height'
+    for i in range(polynomial_order + 1):
+        coeff_table[f'c{i}'].description = f'Coefficient for P_{i}'
+    return DataTable(coeff_table, name='ORDER_COEFFS',
+                     meta=fits.Header({'POLYORD': polynomial_order, 'ORDHGHT': orders.order_heights[0]}))
 
 
 def orders_from_fits(orders_data, orders_meta, data_shape, y_order_shift=0):

@@ -7,7 +7,7 @@ from scipy.ndimage import median_filter, binary_dilation
 from banzai.stages import Stage
 from banzai.logs import get_logger
 from banzai_floyds.utils.fitting_utils import robust_linear_fit, resolvable_background_degree, ClampedLegendre
-from banzai_floyds.utils.fitting_utils import model_uncertainty
+from banzai_floyds.utils.fitting_utils import poisson_model_uncertainty
 from banzai_floyds.extract import set_extraction_region, Extractor
 
 logger = get_logger()
@@ -169,7 +169,7 @@ def fit_order_background(data: Table, uncertainty: np.ndarray, to_fit: np.ndarra
     return background, BSpline(knots, spline_coefficients, wavelength_spline_degree), degree
 
 
-def fit_background(data: Table, spatial_background_order: int = 3,
+def fit_background(data: Table, read_noise: float, spatial_background_order: int = 3,
                    line_knot_spacing: float = 1.0, wavelength_spline_degree: int = 3,
                    continuum_knot_spacing: float = 3.0,
                    window_key: str = 'extraction_window',
@@ -178,7 +178,8 @@ def fit_background(data: Table, spatial_background_order: int = 3,
                    edge_margin: int = 5,
                    continuum_filter_width: int = 31,
                    line_contrast: float = 0.15,
-                   line_search_iterations: int = 4) -> tuple[Table, dict[int, dict]]:
+                   line_search_iterations: int = 4,
+                   fringe_correction: np.ndarray | None = None) -> tuple[Table, dict[int, dict]]:
     """
     Fit the background in each order as one 2d model excluding the mask around and the extraction window.
     A first pass with uniform knots places the knots of the second and gives the model its uncertainties are taken from.
@@ -187,6 +188,8 @@ def fit_background(data: Table, spatial_background_order: int = 3,
     ----------
     data : Table
         Binned data with the profile width in `profile_sigma` and the extraction window in `window_key`.
+    read_noise : float
+        Read noise of the frame in electrons.
     spatial_background_order : int
         Requested degree of the Legendre along the slit. The degree actually used is reduced per order
         by `background_degree` when the object is wide.
@@ -200,6 +203,8 @@ def fit_background(data: Table, spatial_background_order: int = 3,
         Half width of the mask around the object, in profile sigma.
     min_background_fraction : float
         Minimum fraction of usable pixels required to fit the background.
+    fringe_correction : array, optional
+        What each row of `data` was divided by to take out the fringing. See `poisson_model_uncertainty`.
 
     Returns
     -------
@@ -210,9 +215,12 @@ def fit_background(data: Table, spatial_background_order: int = 3,
         sigma `mask_width` used in each fitted order.
     """
     mark_order_interior(data, edge_margin)
+    if fringe_correction is None:
+        fringe_correction = np.ones(len(data))
     results, fits = [], {}
     for order in [1, 2]:
-        order_data = data[data['order'] == order]
+        in_order = data['order'] == order
+        order_data = data[in_order]
         binned = order_data['order_wavelength_bin'] != 0
         usable = np.logical_and.reduce([binned, order_data['in_order_interior'], order_data['mask'] == 0,
                                         order_data['uncertainty'] > 0])
@@ -234,7 +242,7 @@ def fit_background(data: Table, spatial_background_order: int = 3,
                                continuum_filter_width, line_contrast,
                                line_search_iterations)
         background, _, degree = fit_order_background(
-            order_data, model_uncertainty(order_data, background), to_fit,
+            order_data, poisson_model_uncertainty(background, read_noise, fringe_correction[in_order]), to_fit,
             knots, wavelength_spline_degree, spatial_background_order, mask_width)
         fits[order] = {'degree': degree,
                        'n_knots': len(knots) - 2 * wavelength_spline_degree, 'mask_width': mask_width}
@@ -280,7 +288,7 @@ class BackgroundFitter(Stage):
             return image
         set_extraction_region(image, Extractor.DEFAULT_EXTRACT_WINDOW)
         background, fits = fit_background(
-            image.binned_data,
+            image.binned_data, image.primary_hdu.read_noise,
             spatial_background_order=self.SPATIAL_BACKGROUND_ORDER,
             line_knot_spacing=self.SKY_LINE_KNOT_SPACING,
             continuum_knot_spacing=self.CONTINUUM_KNOT_SPACING,
@@ -290,7 +298,8 @@ class BackgroundFitter(Stage):
             edge_margin=self.ORDER_EDGE_MARGIN,
             continuum_filter_width=self.CONTINUUM_FILTER_PIXELS,
             line_contrast=self.LINE_CONTRAST,
-            line_search_iterations=self.LINE_SEARCH_ITERATIONS
+            line_search_iterations=self.LINE_SEARCH_ITERATIONS,
+            fringe_correction=image.fringe_correction[image.binned_data['y'], image.binned_data['x']]
         )
         image.background = background
         for order in [1, 2]:

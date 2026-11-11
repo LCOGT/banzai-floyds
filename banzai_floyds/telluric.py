@@ -2,6 +2,7 @@ from banzai.stages import Stage
 from banzai_floyds.dbs import get_standard
 import numpy as np
 from banzai_floyds.utils import telluric_utils
+from banzai_floyds.utils.flux_utils import standard_at_resolution
 from astropy.table import Table
 
 
@@ -18,13 +19,14 @@ class TelluricMaker(Stage):
         to_fit = np.logical_and(in_order, image.extracted['mask'] == 0)
         data = image.extracted[to_fit]
         correction = np.ones_like(data['wavelength'])
+        reference_flux = standard_at_resolution(data['wavelength'], flux_standard['wavelength'], flux_standard['flux'],
+                                                image.wavelengths.lsf_sigma_angstroms(1))
 
         for region in telluric_utils.TELLURIC_REGIONS:
             telluric_wavelengths = np.logical_and(data['wavelength'] >= region['wavelength_min'],
                                                   data['wavelength'] <= region['wavelength_max'])
-            reference_flux = np.interp(data[telluric_wavelengths]['wavelength'],
-                                       flux_standard['wavelength'], flux_standard['flux'])
-            correction[telluric_wavelengths] = data[telluric_wavelengths]['flux_optimal'] / reference_flux
+            correction[telluric_wavelengths] = (data[telluric_wavelengths]['flux_optimal'] /
+                                                reference_flux[telluric_wavelengths])
 
         correction[correction < 0.0] = 0.0
         correction[correction > 1.0] = 1.0

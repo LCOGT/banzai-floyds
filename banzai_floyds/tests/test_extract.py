@@ -3,12 +3,15 @@ import numpy as np
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.extract import Extractor, extract, set_extraction_region, CombinedExtractor
-from banzai_floyds.extract import horne_model_uncertainty
+from banzai_floyds.extract import horne_uncertainty
 from banzai_floyds.utils.binning_utils import bin_data
 from collections import namedtuple
 from astropy.table import Table
 from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, gauss
+from banzai_floyds.utils.flux_utils import airmass_extinction
 from numpy.polynomial.legendre import Legendre
+
+READ_NOISE = 6.5
 
 
 def set_up_profile(frame, gamma_ratio=0.0):
@@ -20,7 +23,7 @@ def set_up_profile(frame, gamma_ratio=0.0):
 
 
 def make_binned_spectrum(flux: float, background: float, seed: int, n_bins: int = 2000, n_rows: int = 41,
-                         sigma: float = 3.0, read_noise: float = 6.5) -> Table:
+                         sigma: float = 3.0, read_noise: float = READ_NOISE) -> Table:
     """Binned pixels of a constant spectrum with exact Poisson noise, one pixel per row in each bin."""
     rng = np.random.default_rng(seed)
     y = np.tile(np.arange(n_rows) - n_rows // 2, n_bins).astype(float)
@@ -73,7 +76,7 @@ def test_extraction():
 
     fake_frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(fake_frame, Extractor.DEFAULT_EXTRACT_WINDOW)
-    fake_frame.binned_data['model_uncertainty'] = horne_model_uncertainty(fake_frame.binned_data)
+    fake_frame.binned_data['uncertainty'] = horne_uncertainty(fake_frame.binned_data, fake_frame.meta['RDNOISE'])
     extracted = extract(fake_frame.binned_data)
     for weighting in ['optimal', 'unweighted']:
         residuals = extracted[f'fluxraw_{weighting}'] - input_brightness
@@ -108,8 +111,13 @@ def test_combined_extraction():
                                                       frame.binned_data['x'].astype(int)]
     frame.extraction_windows = [[-5.0, 5.0], [-5.0, 5.0]]
     set_extraction_region(frame, Extractor.DEFAULT_EXTRACT_WINDOW)
-    frame.binned_data['model_uncertainty'] = horne_model_uncertainty(frame.binned_data)
-    frame.sensitivity = Table({'wavelength': [0, 1e6, 0, 1e6], 'sensitivity': [1, 1, 1, 1], 'order': [1, 1, 2, 2]})
+    frame.binned_data['uncertainty'] = horne_uncertainty(frame.binned_data, frame.meta['RDNOISE'])
+    # A sensitivity that only cancels the atmosphere, so the combined spectrum stays in electrons
+    sensitivity_waves = np.arange(3000.0, 11000.0)
+    atmosphere = airmass_extinction(sensitivity_waves, frame.elevation, frame.airmass)
+    frame.sensitivity = Table({'wavelength': np.hstack([sensitivity_waves, sensitivity_waves]),
+                               'sensitivity': np.hstack([atmosphere, atmosphere]),
+                               'order': np.repeat([1, 2], len(sensitivity_waves))})
     frame.telluric = Table({'wavelength': [0, 1e6], 'telluric': [1, 1]})
     extracted_waves = np.arange(3000.0, 10000.0)
     flux = np.ones(len(extracted_waves) * 2)
@@ -128,7 +136,7 @@ def test_combined_extraction():
 def test_faint_extraction_is_unbiased():
     flux = 100.0
     binned_data = make_binned_spectrum(flux, 20.0, seed=8123)
-    binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
+    binned_data['uncertainty'] = horne_uncertainty(binned_data, READ_NOISE)
     extracted = extract(binned_data)
     for weighting in ['optimal', 'unweighted']:
         # Weights from each pixel's own counts read 0.4 sigma low here
@@ -141,7 +149,7 @@ def test_extraction_errors_with_masked_pixels():
     binned_data = make_binned_spectrum(flux, 20.0, seed=5521)
     masked_core = np.logical_and(np.abs(binned_data['y']) <= 1, binned_data['order_wavelength_bin'] % 2 == 0)
     binned_data['mask'][masked_core] = 8
-    binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
+    binned_data['uncertainty'] = horne_uncertainty(binned_data, READ_NOISE)
     extracted = extract(binned_data)
     for weighting in ['optimal', 'unweighted']:
         pulls = (extracted[f'fluxraw_{weighting}'] - flux) / extracted[f'fluxrawerr_{weighting}']
@@ -154,7 +162,7 @@ def test_fully_masked_window_is_flagged():
     binned_data = make_binned_spectrum(1000.0, 20.0, seed=1, n_bins=3)
     in_middle_bin = binned_data['order_wavelength_bin'] == 2
     binned_data['mask'][np.logical_and(in_middle_bin, binned_data['extraction_window'])] = 8
-    binned_data['model_uncertainty'] = horne_model_uncertainty(binned_data)
+    binned_data['uncertainty'] = horne_uncertainty(binned_data, READ_NOISE)
     with warnings.catch_warnings():
         warnings.simplefilter('error')
         extracted = extract(binned_data)
@@ -163,3 +171,14 @@ def test_fully_masked_window_is_flagged():
     for weighting in ['optimal', 'unweighted']:
         assert np.isnan(extracted[f'fluxraw_{weighting}'][1])
         assert np.all(np.isfinite(extracted[f'fluxraw_{weighting}'][[0, 2]]))
+
+
+def test_read_noise_limited_errors_match_the_scatter():
+    flux = 10.0
+    binned_data = make_binned_spectrum(flux, 0.5, seed=4417, n_bins=10000)
+    binned_data['uncertainty'] = horne_uncertainty(binned_data, READ_NOISE)
+    extracted = extract(binned_data)
+    for weighting in ['optimal', 'unweighted']:
+        pulls = (extracted[f'fluxraw_{weighting}'] - flux) / extracted[f'fluxrawerr_{weighting}']
+        # Errors from each pixel's own |d| come out ~4% too large here, where many pixels read negative
+        assert 0.97 < np.std(pulls) < 1.03
