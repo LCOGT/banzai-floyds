@@ -450,7 +450,8 @@ class FLOYDSFrameFactory(LCOFrameFactory):
     def is_empty_coordinate(coordinate):
         return 'nan' in str(coordinate).lower() or 'n/a' in str(coordinate).lower()
 
-    def open(self, file_info, runtime_context) -> Optional[ObservationFrame]:
+    def open(self, file_info, runtime_context, sectioned=False) -> Optional[ObservationFrame]:
+        # Always open in memory: FringeMaker.stack_fringe_patterns (fringe.py) reads every input's data and uncertainty
         frame = super(FLOYDSFrameFactory, self).open(file_info, runtime_context)
         if frame is None:
             return None
