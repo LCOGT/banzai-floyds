@@ -27,6 +27,25 @@ class NoUsableFringePattern(Exception):
     """Raised when a fringe pattern has no pixels we could correct a frame with."""
 
 
+# CAT-RA/CAT-DEC come first since that is the object requested by the user
+RA_KEYWORDS = [('CAT-RA', 'hourangle'), ('RA', 'hourangle'), ('CRVAL1', 'degree')]
+DEC_KEYWORDS = [('CAT-DEC', 'degree'), ('DEC', 'degree'), ('CRVAL2', 'degree')]
+
+
+def header_coordinate(meta, keywords: list[tuple[str, str]]) -> float:
+    """The first of the (keyword, unit) pairs that parses as an angle, in degrees, or NaN if none does.
+
+    A keyword can be present but unusable (e.g. 'N/A'), so each one is tried in turn rather than only
+    falling back when it is missing.
+    """
+    for keyword, unit in keywords:
+        try:
+            return Angle(meta.get(keyword), unit=unit).deg
+        except (ValueError, TypeError):
+            continue
+    return np.nan
+
+
 def valid_fringe_pixels(fringe: np.ndarray) -> np.ndarray:
     """Pixels of a fringe pattern that carry real fringing rather than slit edges or division artifacts."""
     return np.logical_and(fringe > MIN_FRINGE_VALUE, fringe < MAX_FRINGE_VALUE)
@@ -322,20 +341,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @property
     def ra(self):
-        # We use CAT-RA as the default since that is the object requested by the user
-        try:
-            coord = Angle(self.meta.get('CAT-RA'), unit='hourangle').deg
-        except (ValueError, TypeError):
-            # Fallback to RA and DEC
-            try:
-                coord = Angle(self.meta.get('RA'), unit='hourangle').deg
-            except (ValueError, TypeError):
-                # Fallback to CRVAL1 and CRVAL2
-                try:
-                    coord = Angle(self.meta.get('CRVAL1'), unit='degree').deg
-                except (ValueError, TypeError):
-                    coord = np.nan
-        return coord
+        return header_coordinate(self.meta, RA_KEYWORDS)
 
     @ra.setter
     def ra(self, value):
@@ -352,20 +358,7 @@ class FLOYDSObservationFrame(LCOObservationFrame):
 
     @property
     def dec(self):
-        # We use CAT-DEC as the default since that is the object requested by the user
-        try:
-            coord = Angle(self.meta.get('CAT-DEC'), unit='degree').deg
-        except (ValueError, TypeError):
-            # Fallback to RA and DEC
-            try:
-                coord = Angle(self.meta.get('DEC'), unit='degree').deg
-            except (ValueError, TypeError):
-                # Fallback to CRVAL1 and CRVAL2
-                try:
-                    coord = Angle(self.meta.get('CRVAL2'), unit='degree').deg
-                except (ValueError, TypeError):
-                    coord = np.nan
-        return coord
+        return header_coordinate(self.meta, DEC_KEYWORDS)
 
     @dec.setter
     def dec(self, value):

@@ -75,8 +75,9 @@ def sensitivity_knots(wavelength: np.ndarray, knot_spacing: float, fringe_knot_s
     wavelength_min, wavelength_max = np.min(wavelength), np.max(wavelength)
     interior = np.arange(wavelength_min, min(fringe_onset, wavelength_max), knot_spacing)
     if wavelength_max > fringe_onset:
-        n_fringe_intervals = max(int(np.ceil((wavelength_max - fringe_onset) / fringe_knot_spacing)), 1)
-        interior = np.concatenate([interior, np.linspace(fringe_onset, wavelength_max, n_fringe_intervals + 1)])
+        fringe_start = max(fringe_onset, wavelength_min)
+        n_fringe_intervals = max(int(np.ceil((wavelength_max - fringe_start) / fringe_knot_spacing)), 1)
+        interior = np.concatenate([interior, np.linspace(fringe_start, wavelength_max, n_fringe_intervals + 1)])
     interior = np.unique(np.concatenate([interior, [wavelength_min, wavelength_max]]))
     n_in_interval, _ = np.histogram(wavelength, interior)
     # The last interval holds wavelength_max, so the end knot is never dropped

@@ -142,7 +142,8 @@ def object_model(binned: Table, extracted: Table) -> np.ndarray:
     return model
 
 
-def normalized_residuals(binned: Table, model: np.ndarray, read_noise: float) -> np.ndarray:
+def normalized_residuals(binned: Table, model: np.ndarray, read_noise: float,
+                         fringe_correction: np.ndarray) -> np.ndarray:
     """(d - B - F w) / σ with σ from the model, NaN for pixels that are masked, have no uncertainty, or no
     object model.
     """
@@ -150,7 +151,8 @@ def normalized_residuals(binned: Table, model: np.ndarray, read_noise: float) ->
     good = np.logical_and(good, np.isfinite(model))
     total = np.array(binned['background']) + np.where(good, model, 0.0)
     residuals = np.full(len(binned), np.nan)
-    residuals[good] = ((binned['data'][good] - total[good]) / poisson_model_uncertainty(total, read_noise)[good])
+    sigma = poisson_model_uncertainty(total, read_noise, fringe_correction)
+    residuals[good] = (binned['data'][good] - total[good]) / sigma[good]
     return residuals
 
 
@@ -366,7 +368,8 @@ def background_record(image) -> dict:
     binned = image.binned_data
     mark_order_interior(binned, ORDER_EDGE_MARGIN)
     model = object_model(binned, image.extracted)
-    residuals = normalized_residuals(binned, model, float(image.meta['RDNOISE']))
+    residuals = normalized_residuals(binned, model, image.primary_hdu.read_noise,
+                                     image.fringe_correction[binned['y'], binned['x']])
     # An order the background stage did not fit has L1BKMW = 0, which would make the whole slit sky
     mask_widths = {order_id: float(image.meta.get(f'L1BKMW{order_id}', 0.0)) or np.nan
                    for order_id in image.orders.order_ids}

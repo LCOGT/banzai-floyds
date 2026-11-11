@@ -24,7 +24,7 @@ import requests
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from astropy import units
-from astropy.coordinates import Angle, SkyCoord
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.table import Table
 from astropy.time import Time
@@ -40,6 +40,7 @@ from banzai_floyds.utils.fitting_utils import MAD_TO_SIGMA, voigt_gaussian_sigma
 from banzai_floyds.utils.profile_utils import profile_sigmas, profile_gamma_ratios
 from banzai_floyds.utils.flux_utils import expected_standard_flux, standard_at_resolution
 from banzai_floyds.flux import FluxSensitivity
+from banzai_floyds.frames import header_coordinate, RA_KEYWORDS, DEC_KEYWORDS
 
 CALSPEC_DIRECTORY = 'test_data/calspec'
 CALSPEC_URL = 'https://archive.stsci.edu/hlsps/reference-atlases/cdbs/current_calspec/'
@@ -125,14 +126,9 @@ def reference_spectrum(ra: float, dec: float, context) -> Table | None:
 
 
 def header_pointing(path: str) -> tuple:
-    """Where a raw frame points, preferring CAT-RA/CAT-DEC the way FLOYDSObservationFrame.ra does."""
+    """Where a raw frame points, read with the same keyword fallbacks as FLOYDSObservationFrame.ra and .dec."""
     header = fits.getheader(path, 1)
-    ra = header.get('CAT-RA', header.get('RA'))
-    dec = header.get('CAT-DEC', header.get('DEC'))
-    try:
-        return Angle(ra, unit='hourangle').deg, Angle(dec, unit='degree').deg
-    except (TypeError, ValueError):
-        return np.nan, np.nan
+    return header_coordinate(header, RA_KEYWORDS), header_coordinate(header, DEC_KEYWORDS)
 
 
 def select_frames(pattern: str, db_address: str) -> tuple:
@@ -140,7 +136,7 @@ def select_frames(pattern: str, db_address: str) -> tuple:
     standards, targets = [], []
     for path in sorted(glob(pattern), key=os.path.basename):
         ra, dec = header_pointing(path)
-        if not np.isfinite(ra):
+        if not (np.isfinite(ra) and np.isfinite(dec)):
             continue
         if dbs.find_flux_standard(ra, dec, db_address) is not None:
             standards.append(path)
