@@ -18,12 +18,18 @@ from skimage.restoration import inpaint_biharmonic
 from banzai_floyds.matched_filter import optimize_match_filter, matched_filter_metric
 from banzai_floyds.matched_filter import matched_filter_normalization
 from banzai.logs import get_logger, format_exception
+import os
 import numpy as np
 from banzai.data import ArrayData
 from astropy.io import fits
 import pywt
 from astropy.table import Table
 from banzai.data import DataTable
+from banzai_floyds.utils.harmonic_fringe_utils import (blended_fringe_phase, harmonic_maps, fit_fringe_harmonic,
+                                                      apply_fringe_1d, TELLURIC_1D_MASK, TELLURIC_CORRECTED_MASK,
+                                                      JOINT_TELLURIC_MASK, telluric_template_columns,
+                                                      apply_residual_template, bin_columns)
+from banzai_floyds.dbs import get_calibration_path
 
 
 logger = get_logger()
@@ -730,6 +736,11 @@ class FringeCorrector(Stage):
     MIN_FRINGE_SNR = 2.0
 
     def do_stage(self, image):
+        if getattr(self.runtime_context, 'FRINGE_METHOD', '2d') == 'harmonic':
+            # The fringes are fitted on the extracted spectrum (HarmonicFringeCorrector); the lamp pattern only
+            # provides their phase, so the 2-d frame is not divided by it.
+            image.meta['L1FRGMET'] = ('harmonic', 'Fringe correction: 2d division or harmonic (1d)')
+            return image
         cutoff = self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
         fringe_valid = image.fringe > MIN_FRINGE_VALUE
         fringe_coefficients, fringe_samplable = fringe_interpolation_coefficients(image.fringe, fringe_valid)
@@ -819,6 +830,16 @@ class FringeLoader(FLOYDSCalibrationUser):
         return 'LAMPFLAT'
 
     def do_stage(self, image):
+        # The harmonic fringe model takes only the phase from the lamp, and the phase of a single wide-slit flat
+        # is noisy where the lamp fringes are weak (6500-7500 A); the stacked master is preferred there.
+        use_stacked = getattr(self.runtime_context, 'FRINGE_METHOD', '2d') == 'harmonic' and \
+            getattr(self.runtime_context, 'FRINGE_PHASE_SOURCE', 'same_block') == 'stacked'
+        if image.obstype != 'LAMPFLAT' and use_stacked:
+            stacked = super(FringeLoader, self).do_stage(image)
+            if stacked is not None and getattr(stacked, 'fringe', None) is not None:
+                return stacked
+            logger.warning('No stacked lamp flat; using the flats of this block for the fringe phase.',
+                           image=image)
         if image.obstype != 'LAMPFLAT':
             flats = self.open_same_block_flats(image)
             if flats:
@@ -871,3 +892,105 @@ class FringeLoader(FLOYDSCalibrationUser):
         image.fringe = master_calibration_image.fringe
         image.meta['L1IDFRNG'] = (master_calibration_image.filename, 'ID of Fringe frame')
         return image
+
+
+class HarmonicFringeCorrector(Stage):
+    """Fit and divide out the fringes of the extracted red order with the harmonic model
+    (banzai_floyds.utils.harmonic_fringe_utils): the phase comes from the lamp pattern loaded by FringeLoader (the
+    stacked master with FRINGE_PHASE_SOURCE = 'stacked', else the flats of the block); the amplitude, shape and
+    phase offset are fitted to this spectrum with all telluric bands masked. If the frame has a telluric
+    transmission (science frames, from the standard), a second fit on the spectrum divided by it is blended in
+    redward of FRINGE_TELLURIC_BLEND, where no telluric-free stretch is left. Runs only with
+    FRINGE_METHOD = 'harmonic'."""
+    MIN_TRANSMISSION = 0.3
+
+    def do_stage(self, image):
+        if getattr(self.runtime_context, 'FRINGE_METHOD', '2d') != 'harmonic':
+            return image
+        if getattr(image, 'fringe', None) is None or image.extracted is None:
+            logger.warning('No fringe pattern or extraction; harmonic fringe correction skipped.', image=image)
+            return image
+        delta = np.where(image.fringe > MIN_FRINGE_VALUE, image.fringe - 1.0, 0.0)
+        phase = blended_fringe_phase(delta, image.orders.data, image.wavelengths.data,
+                                     highpass=self.runtime_context.FRINGE_PHASE_HIGHPASS,
+                                     blend=self.runtime_context.FRINGE_PHASE_HIGHPASS_BLEND)
+        maps = harmonic_maps(phase, image.orders.data, image.wavelengths.data,
+                             n_harmonics=self.runtime_context.FRINGE_N_HARMONICS,
+                             fringe_onset=getattr(self.runtime_context, 'FRINGE_HARMONIC_ONSET', 6500.0),
+                             taper=getattr(self.runtime_context, 'FRINGE_HARMONIC_TAPER', 300.0))
+        extracted = image.extracted
+        nodes = tuple(self.runtime_context.FRINGE_HARMONIC_NODES)
+        if getattr(self.runtime_context, 'FRINGE_JOINT_TELLURIC', False):
+            # Main fit: fringes jointly with a smooth telluric template (one depth per band), so the fringes
+            # inside the water bands are fitted rather than interpolated; otherwise they end up in the standards'
+            # telluric transmissions and from there in every science spectrum.
+            columns = telluric_template_columns(extracted['wavelength'], extracted['order'],
+                                                sigma=self.runtime_context.FRINGE_TELLURIC_TEMPLATE_SIGMA)
+            fit = fit_fringe_harmonic(image.binned_data, extracted, maps, nodes=nodes, mask=JOINT_TELLURIC_MASK,
+                                      extra_columns=columns)
+        else:
+            # Main fit: all telluric bands masked
+            fit = fit_fringe_harmonic(image.binned_data, extracted, maps, nodes=nodes, mask=TELLURIC_1D_MASK)
+        if fit['coefficients'] is None:
+            logger.warning('Too few good pixels for the harmonic fringe fit; skipped.', image=image)
+            return image
+        fringe1d = fit['fringe1d']
+        try:
+            telluric = image.telluric
+        except AttributeError:
+            telluric = None
+        used_telluric = False
+        if telluric is not None and len(telluric) > 0:
+            # Beyond the 8900 A water band there is no telluric-free stretch to fit: there, fit the spectrum
+            # divided by the telluric transmission and blend it in.
+            wavelength = np.asarray(extracted['wavelength'], float)
+            transmission = np.interp(wavelength, np.asarray(telluric['wavelength'], float),
+                                     np.asarray(telluric['telluric'], float), left=1.0, right=1.0)
+            transmission[np.asarray(extracted['order']) != 1] = 1.0
+            usable = transmission > self.MIN_TRANSMISSION
+            work = Table({'order': np.asarray(extracted['order']), 'wavelength': wavelength,
+                          'fluxraw_optimal': np.where(usable, np.asarray(extracted['fluxraw_optimal'], float) /
+                                                      np.where(usable, transmission, 1.0), np.nan)})
+            red = fit_fringe_harmonic(image.binned_data, work, maps, nodes=nodes, mask=TELLURIC_CORRECTED_MASK)
+            if red['coefficients'] is not None:
+                lo, hi = self.runtime_context.FRINGE_TELLURIC_BLEND
+                weight = np.clip((wavelength - lo) / (hi - lo), 0.0, 1.0)
+                fringe1d = np.exp((1 - weight) * np.log1p(fit['fringe1d']) + weight * np.log1p(red['fringe1d'])) - 1
+                used_telluric = True
+        used_template = False
+        if getattr(self.runtime_context, 'FRINGE_RESIDUAL_TEMPLATE', False):
+            template = self.load_residual_template(image)
+            if template is not None:
+                keys, columns = bin_columns(image.binned_data)
+                good = np.isfinite(columns)
+                wavelength_key = 'wavelength_arc' if 'wavelength_arc' in extracted.colnames else 'wavelength'
+                x = np.interp(np.asarray(extracted[wavelength_key], float), keys[good], columns[good])
+                factor = apply_residual_template(extracted['wavelength'], x, extracted['order'], *template)
+                fringe1d = (1.0 + fringe1d) * factor - 1.0
+                used_template = True
+        image.extracted = apply_fringe_1d(extracted, fringe1d,
+                                          keys=('fluxraw_optimal', 'fluxrawerr_optimal', 'fluxraw_unweighted',
+                                                'fluxrawerr_unweighted'))
+        image.meta['L1FRGMET'] = ('harmonic', 'Fringe correction: 2d division or harmonic (1d)')
+        image.meta['L1FRGTEL'] = (used_telluric, 'Telluric-corrected fit blended in beyond 8850 A')
+        image.meta['L1FRGRES'] = (round(float(fit['residual_ratio']), 4),
+                                  'Fringe-scale rms after/before the harmonic fit')
+        image.meta['L1FRGJNT'] = (bool(getattr(self.runtime_context, 'FRINGE_JOINT_TELLURIC', False)),
+                                  'Fringes fitted jointly with a telluric template')
+        image.meta['L1FRGTPL'] = (used_template, 'Static residual fringe template of the slit applied')
+        return image
+
+    def load_residual_template(self, image):
+        """(x, residual) from the FRINGE_RESIDUAL extension of the phase master (make_master_phase.py --residual),
+        or None."""
+        name = image.meta.get('L1IDFRNG')
+        if not name:
+            return None
+        path = get_calibration_path(name, self.runtime_context.db_address)
+        if path is None or not os.path.exists(path):
+            return None
+        with fits.open(path) as hdul:
+            if 'FRINGE_RESIDUAL' not in hdul:
+                return None
+            table = hdul['FRINGE_RESIDUAL'].data
+            return np.asarray(table['x'], float), np.asarray(table['residual'], float)
