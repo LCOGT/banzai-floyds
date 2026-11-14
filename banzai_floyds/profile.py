@@ -17,6 +17,7 @@ from banzai_floyds.dbs import add_profile_shape, get_star_profile_shape
 from banzai_floyds.utils.profile_utils import seeing_scaling
 from banzai_floyds.utils.gaia_utils import is_isolated_star
 from numpy.polynomial.legendre import Legendre
+from banzai_floyds.utils.trace_model_utils import load_trace_template, fit_trace_model, adr_from_header
 
 
 logger = get_logger()
@@ -1236,6 +1237,27 @@ class ProfileFitter(Stage):
             max_chunk_shift=self.MAX_CHUNK_SHIFT, error_floor=self.CENTER_ERROR_FLOOR,
             degree=self.runtime_context.PROFILE_TRACE_POLYNOMIAL_DEGREE
         )
+        image.meta['L1TRCMOD'] = ('polynomial', 'Object trace model: polynomial or adr')
+        if getattr(self.runtime_context, 'PROFILE_TRACE_MODEL', 'polynomial') == 'adr':
+            template = load_trace_template(image.meta.get('SITEID'))
+            n_points = len(trace_points)
+            if template is not None and n_points >= self.runtime_context.PROFILE_TRACE_MODEL_MIN_POINTS:
+                priors = self.runtime_context.PROFILE_TRACE_MODEL_PRIORS.get(
+                    image.meta.get('SITEID'), {'order_offset': None, 'adr_scale': (0.5, 0.3)})
+                model_traces, parameters, used = fit_trace_model(
+                    trace_points, image.orders.order_ids, wavelength_domains, adr_from_header(image.meta), template,
+                    order_offset_prior=priors['order_offset'], adr_scale_prior=priors['adr_scale'])
+                if model_traces is not None:
+                    profile_center = model_traces
+                    trace_points['used'] = used
+                    image.meta['L1TRCMOD'] = 'adr'
+                    image.meta['L1TRCADR'] = (round(float(parameters[-1]), 3), 'Fitted scale of the ADR trace term')
+                    for order_id, value in zip(image.orders.order_ids, parameters[:-1]):
+                        image.meta[f'L1TRCC{order_id}'] = (round(float(value), 3),
+                                                           f'Trace offset in order {order_id} (pixels)')
+            else:
+                logger.warning('ADR trace model requested but no template or too few chunks; using polynomial.',
+                               image=image)
         if any(trace is None for trace in profile_center):
             return no_object(image, 'The object was not traced in every order, so no profile was fit.')
 
