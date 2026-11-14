@@ -1,6 +1,27 @@
 Versions
 ========
 
+rm-improvements (unreleased; fork Alymantara/banzai-floyds)
+------------------------------------------------------------
+
+Improved reduction for reverberation mapping (see docs/INSTALL_RM.md; all on by default):
+
+- Harmonic fringe model fitted to each extracted spectrum (`HarmonicFringeCorrector`, `FRINGE_METHOD='harmonic'`),
+  with the phase from a lamp-flat master per slit and window, fitted jointly with a telluric template (non-negative
+  depths), nodes every 200 A from 6200 A, and a static residual fringe template per slit measured on the standards.
+  No 2-d division by the lamp flat.
+- Physical object-trace model: offset + atmospheric differential refraction along the slit + instrumental template
+  + penalised correction (`PROFILE_TRACE_MODEL='adr'`; COJ template and priors).
+- Telluric transmission applied only inside the absorption bands (1 % depth limits), from the median of the nine
+  nearest standards scaled to the airmass; the O2 A band is flagged in science spectra (mask bit 2).
+- Ensemble flux calibration: median of the grey-normalised sensitivities of the nine nearest standards, grey level
+  from the clearest of them.
+- Object wavelength zero point from the telluric bands (`ObjectWavelengthCorrector`).
+- New commands: `banzai_floyds_offline` (local database, sky flats, offline reduction in the right order),
+  `banzai_floyds_make_phase_master`, `banzai_floyds_make_residual_template`, `banzai_floyds_correct_wavelengths`.
+- Diagnostics and archive-product tools in `banzai_floyds.diagnostics` (re-extraction, flux recalibration, QA).
+- Test data are now packaged.
+
 1.1.0 (2026-06-03)
 ------------------
 

@@ -53,7 +53,7 @@ include = ["banzai_floyds*"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-banzai_floyds = ["data/**/*", ]
+banzai_floyds = ["data/**/*", "tests/data/*"]
 
 [tool.uv.sources]
 torch = [
@@ -68,6 +68,7 @@ explicit = true
 [project.scripts]
 banzai_floyds_run_realtime_pipeline = "banzai_floyds.main:floyds_run_realtime_pipeline"
 banzai_floyds_create_db = "banzai_floyds.main:create_db"
+banzai_floyds_correct_wavelengths = "banzai_floyds.diagnostics.correct_archive_wavelengths:main"
 banzai_floyds_populate_standards = "banzai_floyds.main:populate_photometric_standards"
 banzai_floyds_stack_flats = "banzai_floyds.main:banzai_floyds_stack_flats"
 banzai_floyds_add_order_location = "banzai_floyds.main:add_order_location"
@@ -75,3 +76,6 @@ banzai_floyds_add_order_height = "banzai_floyds.main:add_order_height"
 banzai_floyds_populate_order_heights_locations = "banzai_floyds.main:populate_order_heights_locations"
 banzai_floyds_populate_lsf_params = "banzai_floyds.main:populate_lsf_params"
 banzai_floyds_bound_skyflats = "banzai_floyds.main:bound_skyflats_to_windows"
+banzai_floyds_make_phase_master = "banzai_floyds.fringe_masters:phase_master_main"
+banzai_floyds_make_residual_template = "banzai_floyds.fringe_masters:residual_template_main"
+banzai_floyds_offline = "banzai_floyds.offline:main"
