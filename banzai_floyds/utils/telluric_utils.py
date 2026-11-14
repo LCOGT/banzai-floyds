@@ -73,3 +73,30 @@ def elevation_to_airmass_ratio(elevation1, elevation2):
     # so the ratio of the airmass (total air column) is exp(-(h1 - h2) / H)
     airmass_ratio = np.exp(-(elevation1 - elevation2) / 10400.0)
     return airmass_ratio
+
+
+def restrict_to_bands(wavelength, transmission, bands):
+    """Transmission set to 1 outside the given (min, max) wavelength bands. Outside the real absorption bands a
+    transmission measured on a standard is only that standard's noise and residual structure."""
+    transmission = np.array(transmission, dtype=float, copy=True)
+    wavelength = np.asarray(wavelength, dtype=float)
+    in_band = np.zeros(len(transmission), dtype=bool)
+    for lo, hi in bands:
+        in_band |= (wavelength >= lo) & (wavelength <= hi)
+    transmission[~in_band] = 1.0
+    return transmission
+
+
+def ensemble_transmission(wavelength, transmissions, airmasses, target_airmass, min_members=3):
+    """Median telluric transmission of several standards, each first reduced to unit airmass (t ** (1 / X)), then
+    scaled to the target airmass. Averaging over standards removes each standard's own residual structure inside
+    the bands. `transmissions` is a list of (wavelength, transmission) pairs. Returns None with too few members."""
+    reduced = []
+    for (w, t), airmass in zip(transmissions, airmasses):
+        if airmass is None or not np.isfinite(airmass) or airmass <= 0:
+            continue
+        t = np.clip(np.interp(wavelength, np.asarray(w, float), np.asarray(t, float), left=1.0, right=1.0), 1e-3, 1.0)
+        reduced.append(t ** (1.0 / airmass))
+    if len(reduced) < min_members:
+        return None
+    return np.clip(np.median(np.array(reduced), axis=0), 1e-3, 1.0) ** target_airmass

@@ -147,3 +147,49 @@ def flux_calibrate(data, sensitivity, elevation, airmass, exptime, raw_key='flux
     data[flux_key][finite] = data[raw_key][finite] * correction[finite]
     data[flux_error_key][finite] = data[error_key][finite] * correction[finite]
     return data
+
+
+def ensemble_sensitivity(sensitivities, grey_window=(5500.0, 6500.0), clear_fraction=0.5, min_members=3):
+    """Median sensitivity of several standards after removing each one's grey (cloud) level.
+
+    `sensitivities` is a list of tables (wavelength, sensitivity, order). Each standard keeps its shape; its level
+    is set to the median level of the clearest `clear_fraction` of them (clouds lower the counts, so S = f / c of
+    a cloudy standard is too high and the clearest standards have the lowest S), measured in the red order over
+    `grey_window`, and the same factor is applied to both orders. The median is taken on the wavelength grid of
+    the first standard. Returns (table, grey factors), or (None, None) with fewer than `min_members` standards."""
+    from astropy.table import Table
+    if len(sensitivities) < min_members:
+        return None, None
+    levels = []
+    for table in sensitivities:
+        red = (np.asarray(table['order']) == 1)
+        w = np.asarray(table['wavelength'], float)
+        window = red & (w > grey_window[0]) & (w < grey_window[1]) & (np.asarray(table['sensitivity']) > 0)
+        levels.append(np.median(np.log(np.asarray(table['sensitivity'], float)[window])) if window.any() else np.nan)
+    levels = np.array(levels)
+    keep = np.isfinite(levels)
+    if keep.sum() < min_members:
+        return None, None
+    n_clear = max(int(np.ceil(clear_fraction * keep.sum())), 1)
+    reference = np.median(np.sort(levels[keep])[:n_clear])
+    factors = np.exp(reference - levels)
+    grid = sensitivities[int(np.flatnonzero(keep)[0])]
+    columns = {'wavelength': [], 'sensitivity': [], 'order': []}
+    for order_id in [1, 2]:
+        sel = np.asarray(grid['order']) == order_id
+        w = np.asarray(grid['wavelength'], float)[sel]
+        w = np.sort(w)
+        stack = []
+        for table, factor, ok in zip(sensitivities, factors, keep):
+            if not ok:
+                continue
+            o = np.asarray(table['order']) == order_id
+            tw = np.asarray(table['wavelength'], float)[o]
+            ts = np.asarray(table['sensitivity'], float)[o]
+            idx = np.argsort(tw)
+            stack.append(np.interp(w, tw[idx], ts[idx]) * factor)
+        columns['wavelength'].append(w)
+        columns['sensitivity'].append(np.median(np.array(stack), axis=0))
+        columns['order'].append(np.full(len(w), order_id, dtype=np.uint8))
+    table = Table({k: np.concatenate(v) for k, v in columns.items()})
+    return table, factors[keep]

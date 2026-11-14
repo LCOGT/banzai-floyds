@@ -591,3 +591,23 @@ def populate_lsf_params(db_address):
                                  {'filename': lsf['filename'], 'order_id': int(lsf['order_id'])},
                                  record_attributes)
         db_session.commit()
+
+
+def get_standards_in_window(instrument_id: int, dateobs, days: float, db_address: str) -> list:
+    """All (non-bad) flux-standard calibration records of an instrument within +- `days` of `dateobs`."""
+    start = dateobs - datetime.timedelta(days=days)
+    end = dateobs + datetime.timedelta(days=days)
+    criteria = FLOYDSCalibrationImage.type == 'STANDARD'
+    criteria &= FLOYDSCalibrationImage.instrument_id == instrument_id
+    criteria &= FLOYDSCalibrationImage.is_bad.is_(False)
+    criteria &= FLOYDSCalibrationImage.dateobs >= start
+    criteria &= FLOYDSCalibrationImage.dateobs <= end
+    with get_session(db_address=db_address) as db_session:
+        return db_session.query(FLOYDSCalibrationImage).filter(criteria).order_by(FLOYDSCalibrationImage.dateobs).all()
+
+
+def get_calibration_path(filename: str, db_address: str):
+    """Full path of a calibration file registered in the database, or None."""
+    with get_session(db_address=db_address) as db_session:
+        record = db_session.query(FLOYDSCalibrationImage).filter(FLOYDSCalibrationImage.filename == filename).first()
+        return None if record is None else os.path.join(record.filepath, record.filename)

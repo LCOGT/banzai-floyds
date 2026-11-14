@@ -1,6 +1,9 @@
 from banzai.stages import Stage
 from banzai_floyds.calibrations import FLOYDSCalibrationUser
-from banzai_floyds.dbs import get_standard
+from banzai_floyds.dbs import get_standard, get_standards_in_window
+import os
+from astropy.io import fits
+from banzai_floyds.utils.flux_utils import ensemble_sensitivity
 from banzai_floyds.utils.flux_utils import flux_calibrate
 import numpy as np
 from banzai_floyds.utils.flux_utils import expected_standard_flux, fit_sensitivity, evaluate_sensitivity
@@ -88,10 +91,42 @@ class StandardLoader(FLOYDSCalibrationUser):
 
 
 class FluxCalibrator(Stage):
+    """Electrons to flux with the sensitivity of the standard. With FLUX_ENSEMBLE_DAYS set, science frames use the
+    median of the grey-normalised sensitivities of the FLUX_ENSEMBLE_N standards nearest in time instead of the
+    single nearest standard: each standard keeps its shape, and the level comes from the clearest half of them, so
+    clouds during a 300 s standard are not transferred to the science (cf. the RM report, flux chapter)."""
     def do_stage(self, image):
+        days = getattr(self.runtime_context, 'FLUX_ENSEMBLE_DAYS', None)
+        if days and image.obstype != 'STANDARD':
+            ensemble = self.ensemble_sensitivity(image, days)
+            if ensemble is not None:
+                image.sensitivity = ensemble
         for weighting in ['optimal', 'unweighted']:
             image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass,
                                              image.exptime, raw_key=f'fluxraw_{weighting}',
                                              error_key=f'fluxrawerr_{weighting}', flux_key=f'flux_{weighting}',
                                              flux_error_key=f'fluxerror_{weighting}')
         return image
+
+    def ensemble_sensitivity(self, image, days):
+        records = get_standards_in_window(image.instrument.id, image.dateobs, days, self.runtime_context.db_address)
+        n_nearest = getattr(self.runtime_context, 'FLUX_ENSEMBLE_N', 9)
+        records = sorted(records, key=lambda r: abs((r.dateobs - image.dateobs).total_seconds()))[:n_nearest]
+        tables = []
+        for record in records:
+            try:
+                with fits.open(os.path.join(record.filepath, record.filename)) as hdul:
+                    tables.append(Table(hdul['SENSITIVITY'].data))
+            except Exception:
+                continue
+        table, factors = ensemble_sensitivity(tables,
+                                              grey_window=getattr(self.runtime_context, 'FLUX_GREY_WINDOW',
+                                                                  (5500.0, 6500.0)),
+                                              clear_fraction=getattr(self.runtime_context, 'FLUX_GREY_CLEAR_FRACTION',
+                                                                     0.5))
+        if table is None:
+            return None
+        image.meta['L1FLXNST'] = (len(factors), 'Standards in the ensemble sensitivity')
+        image.meta['L1FLXGRY'] = (round(float(np.max(factors) / np.min(factors)), 3),
+                                  'Max/min grey factor among the ensemble standards')
+        return table
