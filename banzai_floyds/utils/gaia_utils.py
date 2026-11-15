@@ -21,13 +21,18 @@ ESA_TABLE = 'gaiadr3.gaia_source'
 ESA_COLUMN_NAMES = {'RA_ICRS': 'ra', 'DE_ICRS': 'dec', 'pmRA': 'pmra', 'pmDE': 'pmdec', 'Plx': 'parallax',
                     'e_Plx': 'parallax_error', 'Gmag': 'phot_g_mean_mag', 'QSO': 'in_qso_candidates',
                     'Gal': 'in_galaxy_candidates'}
+# VizieR mirrors, asked in turn: the main CDS server has gone down on its own (HTTP 404 on every query, November
+# 2026) while the Harvard mirror kept serving Gaia DR3
+VIZIER_SERVERS = ('vizier.cds.unistra.fr', 'vizier.cfa.harvard.edu')
 GAIA_EPOCH = 2016.0
 MAS_PER_DEGREE = 3.6e6
 
 
-def query_vizier(ra: float, dec: float, radius: float, timeout: float = 30.0) -> Table:
-    """Gaia DR3 sources within `radius` arcseconds of a position, from VizieR."""
+def query_vizier(ra: float, dec: float, radius: float, timeout: float = 30.0,
+                 server: str = VIZIER_SERVERS[0]) -> Table:
+    """Gaia DR3 sources within `radius` arcseconds of a position, from the VizieR mirror `server`."""
     vizier = Vizier(catalog=GAIA_CATALOG, columns=GAIA_COLUMNS, row_limit=-1, timeout=timeout)
+    vizier.VIZIER_SERVER = server
     result = vizier.query_region(SkyCoord(ra, dec, unit=(units.deg, units.deg)), radius=radius * units.arcsec)
     if len(result) == 0:
         return Table(names=GAIA_COLUMNS)
@@ -70,14 +75,17 @@ def query_gaia(ra: float, dec: float, radius: float, timeout: float = 30.0) -> T
 
     Notes
     -----
-    VizieR is asked first because it takes a timeout directly and serves only the columns we use. The
-    ESA archive holds the same catalog, so falling back to it when VizieR is down costs the frames
-    taken during the outage nothing; both archives being unreachable at once is rare enough that
-    giving up then is not worth guarding against further.
+    VizieR is asked first because it takes a timeout directly and serves only the columns we use, each
+    of its mirrors in turn (they hold the same Gaia DR3 table). The ESA archive holds the same catalog,
+    so falling back to it when VizieR is down costs the frames taken during the outage nothing. The
+    answer then does not depend on which archive happened to be up, only on whether any was.
     """
-    for archive, query in [('VizieR', query_vizier), ('the ESA archive', query_esa)]:
+    archives = [(f'VizieR ({server})', lambda server=server: query_vizier(ra, dec, radius, timeout, server))
+                for server in VIZIER_SERVERS]
+    archives.append(('the ESA archive', lambda: query_esa(ra, dec, radius, timeout)))
+    for archive, query in archives:
         try:
-            return query(ra, dec, radius, timeout)
+            return query()
         except Exception as exception:
             logger.warning(f'Could not reach Gaia through {archive}: {exception}')
     logger.warning('No Gaia archive could be reached, so the target is not treated as a star')

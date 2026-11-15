@@ -50,6 +50,24 @@ def test_the_esa_archive_is_queried_when_vizier_is_down(monkeypatch):
     assert gaia_utils.query_gaia(RA, DEC, 30.0) is None
 
 
+def test_the_vizier_mirrors_are_tried_in_turn(monkeypatch):
+    # The main VizieR server down (HTTP 404 in November 2026) and the next mirror up: the field comes from the
+    # mirror and the ESA archive is never asked
+    field = fake_gaia_field(source())
+    asked = []
+
+    def vizier(ra, dec, radius, timeout, server):
+        asked.append(server)
+        if server == gaia_utils.VIZIER_SERVERS[0]:
+            raise ConnectionError('404 Client Error: Not Found')
+        return field
+
+    monkeypatch.setattr(gaia_utils, 'query_vizier', vizier)
+    monkeypatch.setattr(gaia_utils, 'query_esa', unreachable)
+    assert gaia_utils.query_gaia(RA, DEC, 30.0) is field
+    assert asked == list(gaia_utils.VIZIER_SERVERS[:2])
+
+
 def test_the_esa_archive_asks_for_the_columns_the_catalog_is_read_with():
     # Every column is_isolated_star_in reads has a name in the archive to ask for it by
     assert set(gaia_utils.ESA_COLUMN_NAMES) == set(gaia_utils.GAIA_COLUMNS)

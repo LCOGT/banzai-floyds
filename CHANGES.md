@@ -39,6 +39,8 @@ Improved reduction for reverberation mapping (see docs/INSTALL_RM.md; all on by 
   (standards) keep LA Cosmic with the object model. Header: L1CRMETH, L1CRPART, L1CRNLA, L1CRKEEP, L1CRDROP,
   L1CRUNCH, L1CRADD, L1CRNPX, L1CRMISM, L1CRSHAR, L1CRDX1/2. Known limits: the dispersion offset is unreliable in the
   faint blue order (Fairall 9 at COJ), and additions are not guarded at the ends of the orders.
+- Gaia lookup (isolated-star test for the profile wings) tries the VizieR mirrors in turn (CDS, then Harvard) before
+  the ESA archive; with CDS down the standards were treated as non-stars.
 - Extraction: bins where cosmic-ray flags removed more than half of the profile weight are masked (EXTRACTED mask
   bit 4, column `cr_masked_weight`) instead of being scaled up from the rest of the bin, which made a clipped
   Halpha 2.6 times too bright.
