@@ -29,6 +29,16 @@ Improved reduction for reverberation mapping (see docs/INSTALL_RM.md; all on by 
   (up to 46 % of it was, for BD+28 4211 at OGG) and the Halpha of NGC 4151 is flagged far less (67 -> 15 pixels in
   the worst frame). A model from the fitted continuum profile was tried and rejected: it flagged the resolved
   [O III] of NGC 4151.
+- Cosmic rays, same visit (`visit_cosmics.SameVisitCosmicRays`, after LA Cosmic): the other exposure of the visit
+  (same MOLUID and type, within 1 h) is reduced up to LA Cosmic, aligned along the slit, scaled, shifted along the
+  dispersion and matched by a kernel along the slit, and compared pixel by pixel. LA groups the partner shows to be
+  real structure are unflagged, confirmed groups are trimmed to their significant pixels, compact strong hits LA
+  Cosmic missed are added, and where the two cannot be matched (extended differences, order edges, pixels masked in
+  the partner) LA Cosmic stands. On the trace a pixel flagged in both exposures is judged against the partner's own
+  value (the same line peak flagged twice); off the trace it stays flagged (warm pixels). Frames without a partner
+  (standards) keep LA Cosmic with the object model. Header: L1CRMETH, L1CRPART, L1CRNLA, L1CRKEEP, L1CRDROP,
+  L1CRUNCH, L1CRADD, L1CRNPX, L1CRMISM, L1CRSHAR, L1CRDX1/2. Known limits: the dispersion offset is unreliable in the
+  faint blue order (Fairall 9 at COJ), and additions are not guarded at the ends of the orders.
 - Extraction: bins where cosmic-ray flags removed more than half of the profile weight are masked (EXTRACTED mask
   bit 4, column `cr_masked_weight`) instead of being scaled up from the rest of the bin, which made a clipped
   Halpha 2.6 times too bright.

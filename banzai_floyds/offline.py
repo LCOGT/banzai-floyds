@@ -67,6 +67,9 @@ def _init(db_address, processed_dir):
 def _process(path):
     from banzai.utils.stage_utils import run_pipeline_stages
     start = time.time()
+    # where SameVisitCosmicRays looks for the other exposures of the visit (banzai keeps only the file name)
+    from banzai_floyds import visit_cosmics
+    visit_cosmics.RAW_DIRECTORY = os.path.dirname(os.path.abspath(path))
     for attempt in range(3):
         try:
             run_pipeline_stages([{'path': path}], _context)

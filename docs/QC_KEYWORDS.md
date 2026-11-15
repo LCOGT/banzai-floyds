@@ -36,6 +36,21 @@ a definition or threshold increases it.
 | `L1WZP1/2` | Telluric wavelength zero point applied (A) |
 | `L1OBJDET` | Object detected |
 
+## Cosmic rays checked against the other exposure (`visit_cosmics`)
+
+| Keyword | Meaning | Normal range (OGG / COJ, 106 frames) |
+|---|---|---|
+| `L1CRMETH` | `pair` (checked against the partner) or `lacosmic` (no partner: LA Cosmic with the object model) | standards `lacosmic` |
+| `L1CRPART` | File name of the partner exposure | |
+| `L1CRNLA` | Pixels flagged by LA Cosmic | 115-715 / 175-1755 |
+| `L1CRNPX` | Pixels flagged at the end | 80 % / 90 % of `L1CRNLA` |
+| `L1CRKEEP`, `L1CRDROP` | LA groups confirmed / unflagged by the partner | 1-35, 4-28 / 6-86, 4-32 |
+| `L1CRUNCH` | LA groups kept because the partner cannot check them (masked, order edges, extended difference, flagged in both exposures off the trace: warm pixels) | 5-62 / 10-76 |
+| `L1CRADD` | Groups added (compact strong hits LA Cosmic missed) | 0-6 / 0-3 |
+| `L1CRMISM` | Fraction of the orders where the matched partner differs over an extended area (partner cannot judge) | < 0.06 / < 0.025 |
+| `L1CRSHAR` | LA pixels on the trace also flagged in the partner, judged against the partner's own values | |
+| `L1CRDX1`, `L1CRDX2` | Offset of the partner along the dispersion per order (px) | < 0.6; COJ blue order unreliable (up to 3.4) |
+
 ## L1Q keywords
 
 | Keyword | Meaning | Normal range (COJ/OGG final v3) |

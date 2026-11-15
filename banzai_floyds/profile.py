@@ -1292,7 +1292,10 @@ class ProfileFitter(Stage):
             wing_sigma=self.SHAPE_SIGMA, wing_snr=self.SHAPE_SNR,
             degree=self.runtime_context.PROFILE_SHAPE_POLYNOMIAL_DEGREE
         )
-        if isolated_star and all(source == 'fit' for source in width_sources + shape_sources):
+        # not when the frame is only reduced as the partner of another exposure (visit_cosmics)
+        from banzai_floyds import visit_cosmics
+        if isolated_star and all(source == 'fit' for source in width_sources + shape_sources) \
+                and not visit_cosmics.in_partner_pass():
             record_star_profile(image, profile_fwhm, profile_shape, self.runtime_context.db_address)
 
         image.meta['L1ISOSTR'] = (isolated_star, 'Is the target an isolated star in Gaia?')

@@ -21,6 +21,8 @@ ORDERED_STAGES = [
     'banzai_floyds.background.BackgroundFitter',
     # background goes into the cosmic ray rejection
     'banzai_floyds.cosmics.CosmicRayDetector',
+    # check the LA Cosmic flags against the other exposure of the visit and add the cosmic rays it shows
+    'banzai_floyds.visit_cosmics.SameVisitCosmicRays',
     # This works now as an iterative background fitter with cosmic ray rejection.
     'banzai_floyds.background.BackgroundFitter',
     'banzai_floyds.extract.Extractor',
