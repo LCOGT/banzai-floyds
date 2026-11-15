@@ -78,8 +78,37 @@ def _process(path):
             return path, 'ERROR ' + ''.join(traceback.format_exception_only(error)).strip()[:300], time.time() - start
 
 
+def _register_processed_skyflat(path, db_address, processed_dir):
+    """Copy an archive-processed sky flat (-f91, with ORDERS and ORDER_COEFFS) into the processed tree and register
+    it as an order solution, as if it had been processed here."""
+    import shutil
+    from astropy.io import fits
+    from banzai.dbs import get_session, get_instruments_at_site
+    from banzai_floyds.dbs import FLOYDSCalibrationImage
+    header = fits.getheader(path, 'SCI')
+    site, camera = header['SITEID'].strip(), header['INSTRUME'].strip()
+    dateobs = datetime.datetime.fromisoformat(header['DATE-OBS'])
+    out_dir = os.path.join(processed_dir, site, camera, os.path.basename(path).split('-')[2], 'processed')
+    os.makedirs(out_dir, exist_ok=True)
+    name = os.path.basename(path)
+    shutil.copy(path, os.path.join(out_dir, name))
+    instrument = [i for i in get_instruments_at_site(site, db_address) if i.camera == camera][0]
+    with get_session(db_address=db_address) as session:
+        session.query(FLOYDSCalibrationImage).filter(FLOYDSCalibrationImage.filename == name).delete()
+        session.add(FLOYDSCalibrationImage(type='SKYFLAT', filename=name, filepath=out_dir, dateobs=dateobs,
+                                           datecreated=datetime.datetime.now(), instrument_id=instrument.id,
+                                           is_master=True, is_bad=False,
+                                           good_until=datetime.datetime(3000, 1, 1),
+                                           good_after=datetime.datetime(1000, 1, 1),
+                                           attributes={'slit_width': str(header['APERWID'])},
+                                           proposal=header.get('PROPID'), public_date=dateobs))
+        session.commit()
+
+
 def process_skyflats(db_address, raw_dir, processed_dir):
-    """Relabel raw sky flats as SKYFLAT, process them, and bound their validity windows (data/orders/skyflats.dat)."""
+    """Relabel raw sky flats as SKYFLAT, process them, and bound their validity windows (data/orders/skyflats.dat).
+    Sky flats already processed by the archive (-f91 files with an ORDER_COEFFS extension) are registered as they
+    are."""
     from astropy.io import fits
     from banzai.utils.stage_utils import run_pipeline_stages
     from banzai_floyds.dbs import bound_skyflats_to_windows
@@ -87,6 +116,12 @@ def process_skyflats(db_address, raw_dir, processed_dir):
     staging = os.path.join(processed_dir, 'input')
     os.makedirs(staging, exist_ok=True)
     for path in sorted(glob.glob(os.path.join(raw_dir, '*.fits*'))):
+        with fits.open(path) as hdul:
+            processed = 'ORDER_COEFFS' in hdul
+        if processed:
+            _register_processed_skyflat(path, db_address, processed_dir)
+            print('registered', path, flush=True)
+            continue
         with fits.open(path) as hdul:
             hdul['SCI'].header['OBSTYPE'] = 'SKYFLAT'
             out = os.path.join(staging, os.path.basename(path).replace('x00.fits', 'f00.fits'))

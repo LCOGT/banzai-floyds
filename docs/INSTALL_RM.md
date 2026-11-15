@@ -98,9 +98,17 @@ EXTRACTED table use `mask == 0`; bit 2 marks the O2 A band in science spectra) a
   the temporary directory; keep > 10 GB free.
 * **Time.** On an 8-core laptop: arc ~48 s, lamp flat ~4 s, standard ~12 s (processed twice), science ~10 s per
   frame; a science visit (arc, lamp flat, two exposures) ~72 s with one worker.
-* **Other sites.** The object-trace template and its priors exist for COJ only; at OGG the trace falls back to the
-  1.1.0 polynomial (with a warning) until a template is built from OGG standards. The residual fringe template is
-  built per slit from the standards of that slit; without 6" standards there is none for the 6" slit.
+* **Sites.** The object-trace template and its priors exist for COJ and OGG (built from each site's standards with
+  `work/scripts/build_trace_template.py`; without a template the trace falls back to the 1.1.0 polynomial). The
+  residual fringe template is built per slit from the standards of that slit; without 6" standards there is none for
+  the 6" slit.
+* **Sky flats.** `skyflats` takes raw sky flats or the archive-processed `-f91` files (which carry `ORDER_COEFFS`).
+  For OGG the only listed set is 2019-03-29; it works for the 2024-25 data.
+* **Flux standards.** Only stars in `banzai_floyds/data/standards` are used as standards (BD+28 4211, EG 274,
+  Feige 34, Feige 67, Feige 110, GD 108, GD 153); other standards are reduced as science. Make sure every campaign has
+  standards before and after any change of the telescope throughput.
+* **Disk.** After a run, `work/banzai_run/lean_2d.py --drop-binned <processed>` drops the diagnostic images and the
+  BINNED2D table from finished -2d spectra (examples kept): ~2 GB per site-season.
 * **Stock behaviour.** Setting `FRINGE_METHOD='2d'`, `PROFILE_TRACE_MODEL='polynomial'`, `TELLURIC_MODEL_BANDS=None`,
   `TELLURIC_ENSEMBLE_DAYS=None`, `FLUX_ENSEMBLE_DAYS=None`, `TELLURIC_FLAG_BANDS=None` in `banzai_floyds/settings.py`
   restores 1.1.0.

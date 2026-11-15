@@ -142,7 +142,8 @@ TELLURIC_MODEL_BANDS = ((6850.0, 7090.0), (7135.0, 7400.0), (7560.0, 7720.0), (7
 PROFILE_TRACE_MODEL_MIN_POINTS = 3
 # Priors of the ADR trace model per site: (mean, sigma) of the order offset c_1 - c_2 (pixels) and of the ADR scale,
 # measured on standards reduced from raw (work/scripts/build_trace_template.py)
-PROFILE_TRACE_MODEL_PRIORS = {'coj': {'order_offset': (-0.87, 0.29), 'adr_scale': (0.58, 0.14)}}
+PROFILE_TRACE_MODEL_PRIORS = {'coj': {'order_offset': (-0.87, 0.29), 'adr_scale': (0.58, 0.14)},
+                              'ogg': {'order_offset': (-0.18, 0.18), 'adr_scale': (0.24, 0.51)}}
 PROFILE_WIDTH_POLYNOMIAL_DEGREE = 1
 # For cases that we have FWHM measurements of the profile for many points across the dispersion direction
 # we fit a higher degree polynomial

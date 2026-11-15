@@ -39,6 +39,12 @@ used_lines = [
         'line_notes': ''
     },
     {
+        'wavelength': 4916.068,
+        'line_strength': 0.0029,
+        'line_source': 'Hg',
+        'line_notes': 'Weak line; faint; strength vs Hg 5460.75 from 158 arcs (arc_line_strengths.py)'
+    },
+    {
         'wavelength': 5460.75,
         'line_strength': 1.0,
         'line_source': 'Hg',
@@ -55,6 +61,30 @@ used_lines = [
         'line_strength': 0.02664,
         'line_source': 'Hg',
         'line_notes': 'Blend?'
+    },
+    {
+        'wavelength': 6416.307,
+        'line_strength': 0.00376,
+        'line_source': 'ArI',
+        'line_notes': 'faint; strength vs Hg 5460.75 from 158 arcs (arc_line_strengths.py)'
+    },
+    {
+        'wavelength': 6677.282,
+        'line_strength': 0.00543,
+        'line_source': 'ArI',
+        'line_notes': 'faint; strength vs Hg 5460.75 from 158 arcs (arc_line_strengths.py)'
+    },
+    {
+        'wavelength': 6752.8335,
+        'line_strength': 0.00368,
+        'line_source': 'ArI',
+        'line_notes': 'faint; strength vs Hg 5460.75 from 158 arcs (arc_line_strengths.py)'
+    },
+    {
+        'wavelength': 6766.6117,
+        'line_strength': 0.0002,
+        'line_source': 'ArI',
+        'line_notes': 'faint; strength vs Hg 5460.75 from 158 arcs (arc_line_strengths.py)'
     },
     {
         'wavelength': 6965.4307,
@@ -206,7 +236,7 @@ used_lines = [
         'line_strength': 0.020,
         'line_source': 'ArI',
         'line_notes': ''
-    },
+    }
 ]
 
 unused_lines = [
@@ -281,12 +311,6 @@ unused_lines = [
         'line_notes': 'Removed until we start turning on the Zn lamp again.'
     },
     {
-        'wavelength': 4916.068,
-        'line_strength': 'nan',
-        'line_source': 'Hg',
-        'line_notes': 'Weak line'
-    },
-    {
         'wavelength': 5181.9819,
         'line_strength': 'nan',
         'line_source': 'Zn',
@@ -308,24 +332,6 @@ unused_lines = [
         'wavelength': 6114.9232,
         'line_strength': 'nan',
         'line_source': 'ArII',
-        'line_notes': ''
-    },
-    {
-        'wavelength': 6677.282,
-        'line_strength': 0.00105,
-        'line_source': 'ArI',
-        'line_notes': ''
-    },
-    {
-        'wavelength': 6752.8335,
-        'line_strength': 0.00078,
-        'line_source': 'ArI',
-        'line_notes': ''
-    },
-    {
-        'wavelength': 6766.6117,
-        'line_strength': 'nan',
-        'line_source': 'ArI',
         'line_notes': ''
     },
     {
@@ -426,7 +432,7 @@ unused_lines = [
         'line_strength': 'nan',
         'line_source': 'ArI',
         'line_notes': 'No flux in FLOYDS'
-    },
+    }
 ]
 
 

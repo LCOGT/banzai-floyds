@@ -11,7 +11,11 @@ Improved reduction for reverberation mapping (see docs/INSTALL_RM.md; all on by 
   depths), nodes every 200 A from 6200 A, and a static residual fringe template per slit measured on the standards.
   No 2-d division by the lamp flat.
 - Physical object-trace model: offset + atmospheric differential refraction along the slit + instrumental template
-  + penalised correction (`PROFILE_TRACE_MODEL='adr'`; COJ template and priors).
+  + penalised correction (`PROFILE_TRACE_MODEL='adr'`; templates and priors for COJ and OGG).
+- Hg 4916 and Ar 6416, 6677, 6753, 6767 added to the used arc lines (strengths measured on 158 arcs).
+- Feige 67 (Oke 1990, extended beyond 9200 A with a fitted power law) and GD 153 (ESO X-shooter) added to the flux
+  standards.
+- `banzai_floyds_offline skyflats` accepts archive-processed sky flats (`-f91` with `ORDER_COEFFS`).
 - Telluric transmission applied only inside the absorption bands (1 % depth limits), from the median of the nine
   nearest standards scaled to the airmass; the O2 A band is flagged in science spectra (mask bit 2).
 - Ensemble flux calibration: median of the grey-normalised sensitivities of the nine nearest standards, grey level

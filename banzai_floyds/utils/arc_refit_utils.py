@@ -101,7 +101,7 @@ def fit_line_group(wavelength, flux, lines, width_guess, sigma_guess, max_shift=
         margin = 0.5 * width_guess + 4 * sigma_guess + 15.0
     window = (wavelength > lines.min() - margin) & (wavelength < lines.max() + margin)
     failed = {'shift': np.nan, 'shift_err': np.nan, 'width': np.nan, 'sigma': np.nan, 'peak': np.nan,
-              'success': False}
+              'amplitudes': [np.nan] * len(lines), 'success': False}
     if window.sum() < 8 + len(lines):
         return failed
     x, y = wavelength[window], flux[window]
@@ -136,7 +136,7 @@ def fit_line_group(wavelength, flux, lines, width_guess, sigma_guess, max_shift=
     success = bool(fit.success and np.isfinite(shift_err) and abs(fit.x[0]) < max_shift - 0.5
                    and peak > 10 * noise)
     return {'shift': float(fit.x[0]), 'shift_err': shift_err, 'width': float(fit.x[1]), 'sigma': float(fit.x[2]),
-            'peak': peak, 'success': success}
+            'peak': peak, 'amplitudes': [float(a * scale) for a in fit.x[5:]], 'success': success}
 
 
 def _catalog_strengths():

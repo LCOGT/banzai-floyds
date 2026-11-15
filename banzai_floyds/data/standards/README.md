@@ -45,3 +45,8 @@ Calibration Source:
 | FEIGE110 | ftp://ftp.eso.org/pub/stecf/standards/hststan/ffeige110.dat |
 | FEIGE34 | ftp://ftp.eso.org/pub/stecf/standards/hststan/ffeige110.dat |
 | BD+28-4211 | ftp://ftp.eso.org/pub/stecf/standards/hststan/fbd28d4211.dat |
+| FEIGE67 | ftp://ftp.eso.org/pub/stecf/standards/okestan/ffeige67.dat (Oke 1990, 3200-9200 A; flux x 1e-16; extended to 11000 A with a power law fitted to 7500-9200 A, header EXTRAP/EXTRAPSL) |
+| GD153 | ftp://ftp.eso.org/pub/stecf/standards/Xshooter/fGD153.dat (X-shooter convention, flux x 1) |
+
+FEIGE67 and GD153 positions are the LCO catalogue positions (CAT-RA/CAT-DEC of the FLOYDS frames); GD153 is ~5" from
+its J2000 position because of its proper motion.
