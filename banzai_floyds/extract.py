@@ -9,6 +9,14 @@ from banzai_floyds.utils.fitting_utils import poisson_model_uncertainty
 
 logger = get_logger()
 
+# Mask bit set in the extracted spectrum where cosmic-ray flags removed more than MAX_CR_MASKED_WEIGHT of the
+# profile weight of a bin: the flux of the rest of the bin, scaled by the profile, is then not reliable. A bright
+# emission line that is resolved along the slit can be taken for cosmic rays (Halpha of NGC 4151, up to 2.6 times
+# too bright in one frame; RM report). Single real hits on the core removed at most 0.48 of the weight.
+CR_MASKED_BIT = 4
+MAX_CR_MASKED_WEIGHT = 0.5
+COSMIC_RAY_BIT = 8
+
 
 def set_extraction_region(image, default_window):
     if not image.extraction_windows:
@@ -76,6 +84,14 @@ def _extract_bins(binned_data: Table, bin_key: str, data_keyword: str, backgroun
         coefficients['optimal'][use] = profile[use] / uncertainty[use] ** 2
     extractions = {weighting: _linear_extraction(a, signal, background, uncertainty, profile, indices)
                    for weighting, a in coefficients.items()}
+    # Share of the profile weight in the window that cosmic-ray flags removed (other masked pixels, such as the
+    # trimmed ends of the orders, are left out of both sums)
+    mask = np.asarray(binned_data['mask']).astype(np.int64)
+    other_ok = np.logical_and(in_window, (mask & ~COSMIC_RAY_BIT) == 0)
+    window_weight = _group_sum(np.where(other_ok, weights, 0.0), indices)
+    cr_weight = _group_sum(np.where(np.logical_and(other_ok, (mask & COSMIC_RAY_BIT) != 0), weights, 0.0), indices)
+    extractions['cr_masked_weight'] = np.where(window_weight > 0, cr_weight / np.where(window_weight > 0,
+                                                                                       window_weight, 1.0), 0.0)
     return hits_profile, extractions
 
 
@@ -137,6 +153,9 @@ def extract(binned_data: Table, bin_key: str = 'order_wavelength_bin', data_keyw
         for quantity, key in [('flux', flux_keyword), ('error', flux_error_key), ('background', background_out_key)]:
             results[f'{key}_{weighting}'] = extractions[weighting][quantity][keep]
     results['mask'] = np.isnan(results[f'{flux_keyword}_optimal']).astype(int)
+    cr_masked = extractions['cr_masked_weight'][keep]
+    results['cr_masked_weight'] = cr_masked
+    results['mask'][cr_masked > MAX_CR_MASKED_WEIGHT] |= CR_MASKED_BIT
     return results
 
 

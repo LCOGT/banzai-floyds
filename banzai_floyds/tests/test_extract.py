@@ -166,11 +166,31 @@ def test_fully_masked_window_is_flagged():
     with warnings.catch_warnings():
         warnings.simplefilter('error')
         extracted = extract(binned_data)
-    # Unmasked pixels outside the window are not enough to extract a bin
-    np.testing.assert_array_equal(extracted['mask'], [0, 1, 0])
+    # Unmasked pixels outside the window are not enough to extract a bin (bit 1); the cosmic rays took all of its
+    # profile weight (bit 4)
+    np.testing.assert_array_equal(extracted['mask'] & 1, [0, 1, 0])
+    np.testing.assert_array_equal(extracted['mask'] & 4, [0, 4, 0])
     for weighting in ['optimal', 'unweighted']:
         assert np.isnan(extracted[f'fluxraw_{weighting}'][1])
         assert np.all(np.isfinite(extracted[f'fluxraw_{weighting}'][[0, 2]]))
+
+
+def test_bins_mostly_masked_by_cosmic_rays_are_flagged():
+    binned_data = make_binned_spectrum(1000.0, 20.0, seed=2, n_bins=3)
+    window = binned_data['extraction_window'].astype(bool)
+    weights = np.asarray(binned_data['weights'], float)
+    for bin_id, share in ((1, 0.6), (3, 0.2)):
+        in_bin = np.logical_and(binned_data['order_wavelength_bin'] == bin_id, window)
+        order = np.argsort(-weights[in_bin])
+        cumulative = np.cumsum(weights[in_bin][order]) / weights[in_bin].sum()
+        to_mask = np.flatnonzero(in_bin)[order[:np.searchsorted(cumulative, share) + 1]]
+        binned_data['mask'][to_mask] = 8
+    binned_data['uncertainty'] = horne_uncertainty(binned_data, READ_NOISE)
+    extracted = extract(binned_data)
+    assert extracted['cr_masked_weight'][0] > 0.5
+    assert 0.0 < extracted['cr_masked_weight'][2] < 0.5
+    np.testing.assert_array_equal(extracted['mask'] & 4, [4, 0, 0])
+    assert np.all(np.isfinite(extracted['fluxraw_optimal']))
 
 
 def test_read_noise_limited_errors_match_the_scatter():

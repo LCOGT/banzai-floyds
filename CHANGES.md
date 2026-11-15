@@ -21,6 +21,17 @@ Improved reduction for reverberation mapping (see docs/INSTALL_RM.md; all on by 
 - Ensemble flux calibration: median of the grey-normalised sensitivities of the nine nearest standards, grey level
   from the clearest of them.
 - Object wavelength zero point from the telluric bands (`ObjectWavelengthCorrector`).
+- Sky spline: a sky line must also exceed the continuum by 5 robust standard deviations of the first pass
+  (`adaptive_knots`, `line_sigma`). With little sky beside a wide object (bright moon, poor seeing) noise passed
+  the 15 % contrast test, every pixel got a knot and the extracted flux scattered 3-4 times its errors.
+- Cosmic rays: LA Cosmic is given a smooth object model (sky-subtracted frame median-filtered over 7 px along the
+  dispersion, within the orders) besides the sky, so the core of a bright star in good seeing is no longer flagged
+  (up to 46 % of it was, for BD+28 4211 at OGG) and the Halpha of NGC 4151 is flagged far less (67 -> 15 pixels in
+  the worst frame). A model from the fitted continuum profile was tried and rejected: it flagged the resolved
+  [O III] of NGC 4151.
+- Extraction: bins where cosmic-ray flags removed more than half of the profile weight are masked (EXTRACTED mask
+  bit 4, column `cr_masked_weight`) instead of being scaled up from the rest of the bin, which made a clipped
+  Halpha 2.6 times too bright.
 - New commands: `banzai_floyds_offline` (local database, sky flats, offline reduction in the right order),
   `banzai_floyds_make_phase_master`, `banzai_floyds_make_residual_template`, `banzai_floyds_correct_wavelengths`.
 - Diagnostics and archive-product tools in `banzai_floyds.diagnostics` (re-extraction, flux recalibration, QA).

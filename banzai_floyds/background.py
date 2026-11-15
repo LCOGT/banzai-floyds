@@ -56,7 +56,8 @@ def adaptive_knots(wavelength: np.ndarray, sky_spectrum: BSpline, dispersion: fl
                    continuum_spacing: float = 3.0,
                    continuum_filter_width: int = 31,
                    line_contrast: float = 0.15,
-                   line_search_iterations: int = 4) -> np.ndarray:
+                   line_search_iterations: int = 4,
+                   line_sigma: float = 5.0) -> np.ndarray:
     """Fine knots on the sky lines and coarse knots in the sky continuum.
 
     Parameters
@@ -79,12 +80,22 @@ def adaptive_knots(wavelength: np.ndarray, sky_spectrum: BSpline, dispersion: fl
         Minimum contrast of sky lines relative to the continuum to be considered for fine knot spacing.
     line_search_iterations : int
         Number of iterations for the binary dilation used to identify sky lines.
+    line_sigma : float
+        Minimum excess of a sky line over the continuum, in robust standard deviations of the first pass about its
+        continuum.
     """
     grid = np.arange(np.min(wavelength), np.max(wavelength) + dispersion, dispersion)
     sky = sky_spectrum(grid)
     continuum = median_filter(sky, continuum_filter_width, mode='nearest')
-    # Lines are identified as pixels where the sky spectrum exceeds the continuum by a certain contrast.
-    on_line = binary_dilation(sky > (1.0 + line_contrast) * continuum, iterations=line_search_iterations)
+    # Lines are identified as pixels where the sky spectrum exceeds the continuum by a certain contrast and also
+    # stands out from the scatter of the first pass. With little sky left beside a wide object (bright moon, poor
+    # seeing) the first pass is noisy and its noise passes the contrast test alone; the whole order then gets
+    # line knots, one per pixel, and the sky follows the noise of a few edge pixels, multiplied by every pixel of
+    # the extraction window (RM report, best/worst reductions).
+    excess = sky - continuum
+    scatter = 1.4826 * np.median(np.abs(excess - np.median(excess)))
+    is_line = np.logical_and(sky > (1.0 + line_contrast) * continuum, excess > line_sigma * scatter)
+    on_line = binary_dilation(is_line, iterations=line_search_iterations)
     knots = [np.min(wavelength)]
     while knots[-1] < np.max(wavelength):
         ahead = np.logical_and(grid >= knots[-1], grid <= knots[-1] + continuum_spacing * dispersion)

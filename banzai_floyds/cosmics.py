@@ -62,6 +62,32 @@ def detect_cosmic_rays(image, sigclip: float, sigfrac: float, objlim: float,
     return ndimage.binary_fill_holes(cr_mask)
 
 
+def object_model(image, background: np.ndarray, pixels: int = 7) -> np.ndarray:
+    """A smooth model of the object for the cosmic-ray detector, subtracted with the sky before LA Cosmic runs:
+    the sky-subtracted frame median-filtered over `pixels` along the dispersion, inside the orders only.
+
+    Without it the core of a bright star in good seeing (a few pixels across) is as sharp as a cosmic ray to
+    LA Cosmic, and up to half of it was flagged (BD+28 4211 at OGG; RM report, best/worst reductions). A point
+    source changes slowly along a row and a cosmic ray does not survive the filter. A narrow emission line is
+    flattened by the filter, but what is left of it is as wide as the object along the slit, so the fine-structure
+    test of LA Cosmic (objlim) keeps it: on 160 AGN frames no [O III] 5007 pixel was flagged. A model from the
+    fitted continuum profile, tried instead, flagged up to 80 pixels of [O III] in NGC 4151, whose narrow-line
+    region is resolved along the slit, and raised its flux by 10-16 per cent.
+    Pixels outside the orders are filled with the nearest in-order value of their row before filtering, so the
+    filter does not mix zeros into the ends of an order."""
+    in_order = image.orders.data > 0
+    filled = np.where(in_order, image.data - background, np.nan)
+    columns = np.arange(filled.shape[1])
+    for row in range(filled.shape[0]):
+        good = np.isfinite(filled[row])
+        if not good.any():
+            filled[row] = 0.0
+        elif not good.all():
+            filled[row, ~good] = np.interp(columns[~good], columns[good], filled[row, good])
+    smooth = ndimage.median_filter(filled, size=(1, pixels))
+    return np.where(in_order, np.clip(smooth, 0.0, None), 0.0)
+
+
 def flag_lampflat_cosmic_rays(image, sigclip: float = 8.0, sigfrac: float = 0.03,
                               objlim: float = 5.0, order_edge_buffer: int = 2) -> np.ndarray:
     """Flag cosmic rays in a lamp flat. Same detector as the science frames, higher threshold."""
@@ -87,12 +113,17 @@ class CosmicRayDetector(Stage):
     SIGFRAC = 0.03
     OBJLIM = 5.0
     ORDER_EDGE_BUFFER = 2
+    # Pixels along the dispersion of the median filter that models the object for the detector
+    OBJECT_MODEL_PIXELS = 7
 
     def do_stage(self, image):
         # BackgroundFitter runs immediately before us, so image.background is the fitted sky, or None
         # when no object was detected to fit it around.
+        smooth = image.background
+        if smooth is not None:
+            smooth = smooth + object_model(image, smooth, self.OBJECT_MODEL_PIXELS)
         cr_mask = detect_cosmic_rays(image, self.SIGCLIP, self.SIGFRAC, self.OBJLIM,
-                                     self.ORDER_EDGE_BUFFER, background=image.background)
+                                     self.ORDER_EDGE_BUFFER, background=smooth)
         image.mask[cr_mask] |= 8
         update_binned_mask(image, cr_mask)
         logger.info(f'Flagged {cr_mask.sum()} cosmic-ray pixels', image=image)
