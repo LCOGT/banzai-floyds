@@ -35,6 +35,8 @@ ORDERED_STAGES = [
     'banzai_floyds.telluric.TelluricMaker',
     'banzai_floyds.telluric.TelluricCorrector',
     'banzai_floyds.extract.CombinedExtractor',
+    # L1Q quality keywords (docs/QC_KEYWORDS.md)
+    'banzai_floyds.quality.QualityMetrics',
 ]
 
 FRAME_SELECTION_CRITERIA = [('type', 'contains', 'FLOYDS')]

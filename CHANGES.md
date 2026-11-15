@@ -32,6 +32,9 @@ Improved reduction for reverberation mapping (see docs/INSTALL_RM.md; all on by 
 - Extraction: bins where cosmic-ray flags removed more than half of the profile weight are masked (EXTRACTED mask
   bit 4, column `cr_masked_weight`) instead of being scaled up from the rest of the bin, which made a clipped
   Halpha 2.6 times too bright.
+- Quality keywords (L1Q*) in the science and standard products, a flag bitmask, and `banzai_floyds_qc` to add them
+  to products already reduced and write them all to a table (docs/QC_KEYWORDS.md). Standards get their light
+  relative to the ensemble of the other standards, science frames the distance to the standards used.
 - New commands: `banzai_floyds_offline` (local database, sky flats, offline reduction in the right order),
   `banzai_floyds_make_phase_master`, `banzai_floyds_make_residual_template`, `banzai_floyds_correct_wavelengths`.
 - Diagnostics and archive-product tools in `banzai_floyds.diagnostics` (re-extraction, flux recalibration, QA).

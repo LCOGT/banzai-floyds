@@ -4,6 +4,7 @@ from banzai_floyds.dbs import get_standard, get_standards_in_window
 import os
 from astropy.io import fits
 from banzai_floyds.utils.flux_utils import ensemble_sensitivity
+from banzai_floyds.quality import grey_vs_ensemble
 from banzai_floyds.utils.flux_utils import flux_calibrate
 import numpy as np
 from banzai_floyds.utils.flux_utils import expected_standard_flux, fit_sensitivity, evaluate_sensitivity
@@ -101,6 +102,14 @@ class FluxCalibrator(Stage):
             ensemble = self.ensemble_sensitivity(image, days)
             if ensemble is not None:
                 image.sensitivity = ensemble
+        elif days and image.sensitivity is not None:
+            # A standard is calibrated with its own sensitivity; for the quality keywords, measure how much light it
+            # collected against the ensemble of the other standards (clouds, a missed acquisition)
+            frame = str(image.meta.get('ORIGNAME', '')).split('-e00')[0]
+            ensemble = self.ensemble_sensitivity(image, days, exclude=frame, write_meta=False)
+            if ensemble is not None:
+                image.meta['L1QSTDGR'] = (round(grey_vs_ensemble(image.sensitivity, ensemble), 3),
+                                          'Light collected / clear ensemble of other standards')
         for weighting in ['optimal', 'unweighted']:
             image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass,
                                              image.exptime, raw_key=f'fluxraw_{weighting}',
@@ -108,8 +117,10 @@ class FluxCalibrator(Stage):
                                              flux_error_key=f'fluxerror_{weighting}')
         return image
 
-    def ensemble_sensitivity(self, image, days):
+    def ensemble_sensitivity(self, image, days, exclude=None, write_meta=True):
         records = get_standards_in_window(image.instrument.id, image.dateobs, days, self.runtime_context.db_address)
+        if exclude:
+            records = [r for r in records if not r.filename.startswith(exclude)]
         n_nearest = getattr(self.runtime_context, 'FLUX_ENSEMBLE_N', 9)
         records = sorted(records, key=lambda r: abs((r.dateobs - image.dateobs).total_seconds()))[:n_nearest]
         tables = []
@@ -126,6 +137,11 @@ class FluxCalibrator(Stage):
                                                                      0.5))
         if table is None:
             return None
+        if not write_meta:
+            return table
+        gaps = [abs((r.dateobs - image.dateobs).total_seconds()) / 86400.0 for r in records]
+        image.meta['L1QSTDDT'] = (round(min(gaps), 2), 'Days to the nearest standard in the flux ensemble')
+        image.meta['L1QSTDSP'] = (round(max(gaps), 2), 'Days to the farthest standard in the flux ensemble')
         image.meta['L1FLXNST'] = (len(factors), 'Standards in the ensemble sensitivity')
         image.meta['L1FLXGRY'] = (round(float(np.max(factors) / np.min(factors)), 3),
                                   'Max/min grey factor among the ensemble standards')
