@@ -1,39 +1,10 @@
 """
 Check the telluric correction on spectra corrected with another night's standard.
 
-Every frame is flux calibrated and telluric corrected with the standard nearest in time at the same
-site, never one of itself, as in flux_calibration_results.py. Each of the TELLURIC_REGIONS is then
-checked on the red order, where the correction is made. For the standards and the CALSPEC check
-star the spectrum is divided by the reference flux first, so what is left is the correction alone.
-Science targets keep their own lines (H-alpha sits in the 6400-6700 A region and the Ca triplet in
-7800-8690 A), so read their numbers with that in mind. Redward of 7500 A what is left of the
-fringing (5-15% on coj) is larger than what is left of the telluric absorption and is in every
-number here; the fit of telluric_bands.pdf is the one that tells them apart.
+Every frame is flux calibrated and telluric corrected with the standard nearest in time at the same site.
 
 telluric_smoothness.pdf: the corrected spectrum over a continuum fit only to the pixels where the
-atmosphere is transparent, T > CONTINUUM_TRANSMISSION in the Matheson et al. (2000) template, so the
-continuum is not pulled by the residuals being measured. Those pixels bracket a region rather than
-fill it, so the continuum is a line: a quadratic through two clumps of anchors bows, and in
-8730-9960 A, whose red anchors are at the end of the order, it made up a 20% dip. A good correction
-leaves no dips or peaks beyond the noise, and pulls, (ln f - P) / σ, that scatter no more inside a
-region than outside it.
-
-telluric_bands.pdf: each region on its own for the by-eye check, with the robust χ² fit
-
-    ln f = P(λ) + α ln T + β d ln T / dλ
-
-where T is the transmission that was divided out and P a Legendre continuum. α is the fractional
-error of the depth that was divided out: 0 when none of the telluric structure is left, α > 0 when
-some absorption is (under-corrected) and α < 0 when too much was taken out. The β term is the
-first order expansion of ln T(λ - δ), so the telluric lines of the target sit δ = -β Angstroms from
-where the model put them, which leaves a wiggle at each band head that α, being antisymmetric to
-it, cannot see. Where T is nearly flat (the O2 bands blueward of 5900 A are < 1% deep) neither is
-constrained.
-
-telluric_models.pdf: the telluric model TelluricMaker fits to each standard, per site, and its
-parameters: the O2 depth against airmass X, which should follow X^0.58 (AIRMASS_EXPONENTS), the
-H2O depth against the surface dew point, the only proxy for the water column in the header, and
-the shift and width of the lines, which are those of the star in the slit and not of the arcs.
+atmosphere is transparent.
 
 Run with cwd = characterization_testing/:
     python telluric_correction_results.py --workers 8
@@ -50,10 +21,6 @@ os.environ['OPENTSDB_PYTHON_METRICS_TEST_MODE'] = 'True'
 os.environ.setdefault('DB_ADDRESS', 'sqlite:///test_data/test.db')
 
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 from astropy.io import fits
 from astropy.table import Table
 from scipy.ndimage import uniform_filter1d
@@ -64,24 +31,19 @@ from flux_calibration_results import robust_rms, measure_standard, assign_calibr
 from flux_calibration_results import LAST_EXTRACTION_STAGE
 from reduction_utils import reduce_to_stage, frame_metadata
 from report_utils import Report, write_reports
-from banzai_floyds.utils.telluric_utils import TELLURIC_REGIONS, AIRMASS_EXPONENTS, estimate_telluric
+from banzai_floyds.utils.telluric_utils import TELLURIC_REGIONS, estimate_telluric
 from banzai_floyds.utils.flux_utils import standard_at_resolution
-from banzai_floyds.utils.fitting_utils import robust_legendre_fit, robust_linear_fit, legendre_design, sigma_to_fwhm
+from banzai_floyds.utils.fitting_utils import robust_legendre_fit, sigma_to_fwhm
 
 TELLURIC_STAGES = ['banzai_floyds.flux.FluxCalibrator', 'banzai_floyds.telluric.TelluricCorrector']
 RED_ORDER = 1
 # Angstroms of continuum either side of each region
 MARGIN = 40.0
 CONTINUUM_DEGREE = 1
-ALPHA_CONTINUUM_DEGREE = 2
 CONTINUUM_TRANSMISSION = 0.98
 # ln T diverges where the standard measured no light
 TRANSMISSION_FLOOR = 0.05
 MIN_PIXELS = 20
-# Plot range of α: beyond -1 the region is all noise or the target's own lines
-ALPHA_LIMIT = 1.5
-SHIFT_LIMIT = 10.0
-
 MOLECULE_COLORS = {'O2': 'C0', 'H2O': 'C2'}
 KIND_STYLES = {'standard': {'color': 'C0', 'marker': 'o', 'ms': 4},
                'check': {'color': 'C3', 'marker': 'o', 'ms': 4},
@@ -93,7 +55,6 @@ FRAME_FIELDS = ['filename', 'object', 'kind', 'site', 'dayobs', 'slit', 'exptime
                 'calibrator', 'calibrator_object', 'calibrator_airmass', 'calibrator_dewpoint', 'airmass_ratio',
                 'delta_dewpoint', 'region', 'molecule']
 SMOOTHNESS_FIELDS = FRAME_FIELDS + ['dip', 'peak', 'rms_in', 'noise', 'scatter_in', 'scatter_out', 'note', 'error']
-BAND_FIELDS = FRAME_FIELDS + ['depth', 'alpha', 'alpha_error', 'shift', 'shift_error', 'note', 'error']
 MODEL_FIELDS = ['filename', 'object', 'site', 'dayobs', 'slit', 'exptime', 'airmass', 'dewpoint', 'O2DEPTH',
                 'H2ODEPTH', 'TELSHIFT', 'TELSIGMA']
 
@@ -157,42 +118,14 @@ def red_order_spectrum(image, reference: Table | None) -> dict:
             'good': good, 'in_region': in_region, 'smoothing': max(int(round(resolution)), 1)}
 
 
-def telluric_residual_fit(x: np.ndarray, y: np.ndarray, sigma: np.ndarray, transmission: np.ndarray,
-                          domain: list) -> tuple[dict, np.ndarray]:
-    """Robust χ² fit of ln f = P(λ) + α ln T + β d ln T / dλ.
-
-    The residuals are not white (fringing, the standard's noise in T), so the formal uncertainties
-    are scaled up by the reduced χ² when that is above one.
-
-    Returns
-    -------
-    (metrics, telluric_term): α, the shift δ = -β and their uncertainties, and the fractional
-    residual the telluric terms of the fit leave, exp(α ln T + β d ln T / dλ) - 1.
-    """
-    log_transmission = np.log(transmission)
-    if np.ptp(log_transmission) == 0.0:
-        return {'alpha': np.nan, 'alpha_error': np.nan, 'shift': np.nan, 'shift_error': np.nan}, np.zeros_like(x)
-    telluric_design = np.column_stack([log_transmission, np.gradient(log_transmission, x)])
-    design = np.column_stack([legendre_design(x, ALPHA_CONTINUUM_DEGREE, domain), telluric_design])
-    coefficients, used = robust_linear_fit(design, y, sigma)
-    weighted = design[used] / sigma[used, np.newaxis]
-    pulls = (y[used] - design[used] @ coefficients) / sigma[used]
-    reduced_chi2 = np.sum(pulls ** 2.0) / max(used.sum() - design.shape[1], 1)
-    errors = np.sqrt(np.diag(np.linalg.inv(weighted.T @ weighted)) * max(reduced_chi2, 1.0))
-    metrics = {'alpha': float(coefficients[-2]), 'alpha_error': float(errors[-2]),
-               'shift': -float(coefficients[-1]), 'shift_error': float(errors[-1])}
-    return metrics, np.exp(telluric_design @ coefficients[-2:]) - 1.0
-
-
 def measure_region(spectrum: dict, region: dict) -> dict | None:
-    """Smoothness and α in one telluric region, or None if the order does not cover it with continuum both sides.
+    """Smoothness in one telluric region, or None if the order does not cover it with continuum both sides.
 
     Returns
     -------
     dict with the region's name, molecule and bounds, the arrays over its window (wavelength, the
-    fractional residual from the continuum and that smoothed over a resolution element, the
-    transmission divided out), the in-region selection, and the metrics written to the CSVs
-    (dip, peak, rms_in and noise in percent).
+    fractional residual from the continuum and that smoothed over a resolution element), the
+    in-region selection, and the metrics written to the CSV (dip, peak, rms_in and noise in percent).
     """
     wavelength = spectrum['wavelength']
     in_window = np.logical_and(wavelength >= region['wavelength_min'] - MARGIN,
@@ -209,24 +142,19 @@ def measure_region(spectrum: dict, region: dict) -> dict | None:
 
     y = np.log(spectrum['normalized'][in_window])
     sigma = spectrum['fractional_error'][in_window]
-    transmission = spectrum['applied'][in_window]
     domain = [float(x.min()), float(x.max())]
     continuum = robust_legendre_fit(x[anchor], y[anchor], sigma[anchor], CONTINUUM_DEGREE, domain)(x)
     residual = np.exp(y - continuum) - 1.0
     smoothed = uniform_filter1d(residual, spectrum['smoothing'], mode='nearest')
     pulls = (y - continuum) / sigma
     outside = np.logical_not(spectrum['in_region'][in_window])
-    fit_metrics, telluric_term = telluric_residual_fit(x, y, sigma, transmission, domain)
-    smoothed_transmission = uniform_filter1d(transmission, spectrum['smoothing'], mode='nearest')
     metrics = {'dip': 100.0 * float(np.min(smoothed[inside])), 'peak': 100.0 * float(np.max(smoothed[inside])),
                'rms_in': 100.0 * robust_rms(residual[inside]), 'noise': 100.0 * robust_rms(smoothed[anchor]),
                'scatter_in': robust_rms(pulls[inside]),
-               'scatter_out': robust_rms(pulls[outside]) if outside.sum() >= MIN_PIXELS else np.nan,
-               'depth': 1.0 - float(np.min(smoothed_transmission[inside])), **fit_metrics}
+               'scatter_out': robust_rms(pulls[outside]) if outside.sum() >= MIN_PIXELS else np.nan}
     return {'name': region_name(region), 'molecule': region['molecule'],
             'bounds': (region['wavelength_min'], region['wavelength_max']), 'wavelength': x, 'residual': residual,
-            'smoothed': smoothed, 'transmission': transmission, 'telluric_term': telluric_term, 'inside': inside,
-            'metrics': metrics}
+            'smoothed': smoothed, 'inside': inside, 'metrics': metrics}
 
 
 def correct_target(path: str, assignments: dict, kinds: dict) -> tuple:
@@ -257,7 +185,7 @@ def correct_target(path: str, assignments: dict, kinds: dict) -> tuple:
                        'airmass_ratio': metadata['airmass'] / calibrator['airmass'],
                        'delta_dewpoint': metadata['dewpoint'] - calibrator['dewpoint']}
         payload = {'spectrum': spectrum, 'regions': regions, 'calibrator': calibration}
-        return path, {'metadata': metadata, 'note': note, 'smoothness': payload, 'bands': payload}, None
+        return path, {'metadata': metadata, 'note': note, 'smoothness': payload}, None
     except Exception as e:
         return path, None, f'{type(e).__name__}: {e}'
 
@@ -321,45 +249,6 @@ def plot_smoothness_frame(fig, record: dict) -> None:
     flux_axis.set_xlim(wavelength.min(), wavelength.max())
 
 
-def plot_bands_frame(fig, record: dict) -> None:
-    regions = record['regions']
-    columns = 4
-    outer = fig.add_gridspec(int(np.ceil(len(regions) / columns)), columns, hspace=0.3, wspace=0.2, top=0.92)
-    fig.text(0.5, 0.945, calibrator_text(record['calibrator']), ha='center', fontsize=8)
-    for index, region in enumerate(regions):
-        inner = outer[index // columns, index % columns].subgridspec(2, 1, height_ratios=[2.0, 1.0], hspace=0.0)
-        top = fig.add_subplot(inner[0])
-        bottom = fig.add_subplot(inner[1], sharex=top)
-        corrected = 1.0 + region['residual']
-        uncorrected = corrected * region['transmission']
-        top.plot(region['wavelength'], uncorrected, color='0.6', lw=0.6, label='uncorrected')
-        top.plot(region['wavelength'], corrected, color='k', lw=0.6, label='corrected')
-        top.plot(region['wavelength'], region['transmission'], color='C0', lw=0.6, label='T divided out')
-        low = min(np.percentile(uncorrected, 0.5), np.percentile(corrected, 0.5), region['transmission'].min())
-        high = np.percentile(corrected, 99.5)
-        padding = 0.1 * (high - low)
-        top.set_ylim(max(low - padding, 0.0), high + padding)
-        top.set_title(region['name'], fontsize=8)
-        top.tick_params(labelbottom=False, labelsize=6)
-
-        metrics = region['metrics']
-        bottom.plot(region['wavelength'], 100.0 * region['smoothed'], color='k', lw=0.6)
-        bottom.plot(region['wavelength'], 100.0 * region['telluric_term'], color='C3', lw=0.8,
-                    label='α and shift terms')
-        bottom.axhline(0.0, color='0.5', lw=0.5)
-        bottom.text(0.02, 0.06, f'α = {metrics["alpha"]:.2f} ± {metrics["alpha_error"]:.2f}   '
-                    f'shift = {metrics["shift"]:.2f} ± {metrics["shift_error"]:.2f} A',
-                    transform=bottom.transAxes, fontsize=7)
-        bottom.tick_params(labelsize=6)
-        for axis in [top, bottom]:
-            axis.axvspan(*region['bounds'], color=MOLECULE_COLORS[region['molecule']], alpha=0.08, lw=0)
-        if index == 0:
-            top.legend(fontsize=6, loc='lower left')
-            top.set_ylabel('f / continuum', fontsize=7)
-            bottom.set_ylabel('residual (%)', fontsize=7)
-            bottom.legend(fontsize=6, loc='lower right')
-
-
 def kind_rows(rows: list) -> dict:
     rows = [row for row in rows if not row.get('error')]
     return {kind: [row for row in rows if row['kind'] == kind] for kind in KIND_STYLES}
@@ -405,142 +294,15 @@ def plot_smoothness_summary(fig, rows: list) -> None:
     region_axis(scatter_axis)
 
 
-def plot_bands_summary(fig, rows: list) -> None:
-    grid = fig.add_gridspec(3, 2, hspace=0.45, wspace=0.2)
-    region_alpha_axis = fig.add_subplot(grid[0, :])
-    region_shift_axis = fig.add_subplot(grid[1, :], sharex=region_alpha_axis)
-    axes = {'O2': fig.add_subplot(grid[2, 0]), 'H2O': fig.add_subplot(grid[2, 1])}
-    selected_rows = kind_rows(rows)
-    dewpoint_differences = np.concatenate([column(selected, 'delta_dewpoint') for selected in selected_rows.values()])
-    limit = np.nanmax(np.abs(dewpoint_differences)) if np.isfinite(dewpoint_differences).any() else 1.0
-    color_scale = Normalize(-limit, limit)
-    for kind, selected in selected_rows.items():
-        selected = [row for row in selected if np.isfinite(row['alpha'])]
-        if not selected:
-            continue
-        style = KIND_STYLES[kind]
-        region_alpha_axis.errorbar(region_positions(selected, kind), column(selected, 'alpha'),
-                                   yerr=column(selected, 'alpha_error'), ls='none', elinewidth=0.5,
-                                   label=KIND_LABELS[kind], **style)
-        region_shift_axis.errorbar(region_positions(selected, kind), column(selected, 'shift'),
-                                   yerr=column(selected, 'shift_error'), ls='none', elinewidth=0.5, **style)
-        for molecule, axis in axes.items():
-            in_molecule = [row for row in selected if row['molecule'] == molecule]
-            if not in_molecule:
-                continue
-            x = column(in_molecule, 'airmass_ratio') - 1.0
-            if molecule == 'O2':
-                axis.plot(x, column(in_molecule, 'alpha'), ls='none', label=KIND_LABELS[kind], **style)
-            else:
-                axis.scatter(x, column(in_molecule, 'alpha'), c=column(in_molecule, 'delta_dewpoint'),
-                             cmap='coolwarm', norm=color_scale, marker=style['marker'], s=4 * style['ms'],
-                             edgecolors='none', label=KIND_LABELS[kind])
-    for axis in [region_alpha_axis, *axes.values()]:
-        axis.set_ylim(-ALPHA_LIMIT, ALPHA_LIMIT)
-    region_alpha_axis.axhline(0.0, color='k', lw=0.5)
-    region_alpha_axis.axhline(-1.0, color='0.5', ls=':', lw=0.8)
-    region_alpha_axis.set_ylabel('α')
-    region_alpha_axis.legend(fontsize=7)
-    region_alpha_axis.tick_params(labelbottom=False)
-    region_shift_axis.set_ylim(-SHIFT_LIMIT, SHIFT_LIMIT)
-    region_shift_axis.axhline(0.0, color='k', lw=0.5)
-    region_shift_axis.set_ylabel('telluric shift (A)')
-    region_axis(region_shift_axis)
-    for molecule, axis in axes.items():
-        axis.axhline(0.0, color='k', lw=0.5)
-        axis.set_xlabel('airmass / standard airmass - 1')
-        axis.set_ylabel('α')
-        axis.set_title(f'{molecule} regions', fontsize=9)
-        axis.legend(fontsize=6)
-    colorbar = fig.colorbar(ScalarMappable(norm=color_scale, cmap='coolwarm'), ax=axes['H2O'])
-    colorbar.set_label('dew point - standard dew point (C)')
-
-
-def plot_site_models(fig, records: list) -> None:
-    grid = fig.add_gridspec(2, 1, height_ratios=[2.0, 1.0], hspace=0.08)
-    model_axis = fig.add_subplot(grid[0])
-    difference_axis = fig.add_subplot(grid[1], sharex=model_axis)
-    tellurics = []
-    for record in records:
-        telluric = record['calibration']['telluric']
-        order = np.argsort(np.array(telluric['wavelength']))
-        tellurics.append((np.array(telluric['wavelength'], dtype=float)[order],
-                          np.array(telluric['telluric'], dtype=float)[order]))
-    airmasses = np.array([record['calibration']['airmass'] for record in records])
-    color_scale = Normalize(airmasses.min(), max(airmasses.max(), airmasses.min() + 0.01))
-    grid_wavelength = np.linspace(max(wavelength.min() for wavelength, _ in tellurics),
-                                  min(wavelength.max() for wavelength, _ in tellurics), 3000)
-    curves = np.array([np.interp(grid_wavelength, wavelength, transmission) for wavelength, transmission in tellurics])
-    median_curve = np.median(curves, axis=0)
-    for record, curve, airmass in zip(records, curves, airmasses):
-        color = plt.cm.viridis(color_scale(airmass))
-        model_axis.plot(grid_wavelength, curve, color=color, lw=0.6,
-                        label=f'{record["metadata"]["dayobs"]} {record["metadata"]["object"]}')
-        difference_axis.plot(grid_wavelength, curve - median_curve, color=color, lw=0.6)
-    model_axis.set_ylim(0.0, 1.1)
-    model_axis.set_ylabel('T fit to the standard')
-    model_axis.legend(fontsize=5, ncol=2, loc='lower left')
-    model_axis.tick_params(labelbottom=False)
-    difference_axis.axhline(0.0, color='k', lw=0.5)
-    difference_axis.set_ylabel('T - site median')
-    difference_axis.set_xlabel('wavelength (A)')
-    for axis in [model_axis, difference_axis]:
-        shade_regions(axis)
-    model_axis.set_xlim(grid_wavelength.min(), grid_wavelength.max())
-    colorbar = fig.colorbar(ScalarMappable(norm=color_scale, cmap='viridis'), ax=[model_axis, difference_axis])
-    colorbar.set_label('airmass')
-
-
-def plot_models_summary(fig, rows: list) -> None:
-    grid = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.25)
-    oxygen_axis = fig.add_subplot(grid[0, 0])
-    water_axis = fig.add_subplot(grid[0, 1])
-    shift_axis = fig.add_subplot(grid[1, 0])
-    width_axis = fig.add_subplot(grid[1, 1])
-    for index, site in enumerate(sorted({row['site'] for row in rows})):
-        selected = [row for row in rows if row['site'] == site]
-        style = {'ls': 'none', 'marker': 'o', 'ms': 4, 'color': f'C{index}'}
-        airmass = column(selected, 'airmass')
-        oxygen_axis.plot(airmass, column(selected, 'O2DEPTH'), label=site, **style)
-        at_zenith = np.median(column(selected, 'O2DEPTH') / airmass ** AIRMASS_EXPONENTS['O2DEPTH'])
-        line = np.linspace(1.0, airmass.max(), 50)
-        oxygen_axis.plot(line, at_zenith * line ** AIRMASS_EXPONENTS['O2DEPTH'], color=f'C{index}', lw=0.8)
-        water_axis.plot(column(selected, 'dewpoint'), column(selected, 'H2ODEPTH'), label=site, **style)
-        shift_axis.plot(np.arange(len(selected)), column(selected, 'TELSHIFT'), **style)
-        width_axis.plot(np.arange(len(selected)), column(selected, 'TELSIGMA'), **style)
-    oxygen_axis.set_xlabel('airmass X')
-    oxygen_axis.set_ylabel('O2 depth / template')
-    oxygen_axis.set_title(f'lines: X^{AIRMASS_EXPONENTS["O2DEPTH"]} through the median of each site', fontsize=8)
-    oxygen_axis.legend(fontsize=7)
-    water_axis.set_xlabel('dew point (C)')
-    water_axis.set_ylabel('H2O depth / template')
-    shift_axis.axhline(0.0, color='k', lw=0.5)
-    shift_axis.set_ylabel('shift of the telluric lines (A)')
-    width_axis.set_ylabel('Gaussian sigma of the telluric lines (A)')
-    for axis in [shift_axis, width_axis]:
-        axis.set_xlabel('standard, in time order at each site')
-
-
-def write_models_report(standard_records: list, pdf_path: str, csv_path: str) -> None:
+def write_models_csv(standard_records: list, csv_path: str) -> None:
     standard_records = sorted(standard_records, key=lambda record: record['mjd'])
     rows = [{**record['metadata'], **record['calibration']['telluric'].meta,
              'dewpoint': record['calibration']['dewpoint']} for record in standard_records]
-    with open(csv_path, 'w', newline='') as handle, PdfPages(pdf_path) as pdf:
+    with open(csv_path, 'w', newline='') as handle:
         writer = csv.DictWriter(handle, MODEL_FIELDS, restval='', extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
-        for site in sorted({record['metadata']['site'] for record in standard_records}):
-            fig = plt.figure(figsize=(11, 8.5))
-            fig.suptitle(f'{site}: telluric model fit to each standard', fontsize=10)
-            plot_site_models(fig, [record for record in standard_records if record['metadata']['site'] == site])
-            pdf.savefig(fig)
-            plt.close(fig)
-        fig = plt.figure(figsize=(11, 8.5))
-        fig.suptitle('Parameters of the telluric model of every standard', fontsize=10)
-        plot_models_summary(fig, rows)
-        pdf.savefig(fig)
-        plt.close(fig)
-    print(f'Wrote {pdf_path} ({len(standard_records)} standards, summary on the last page) and {csv_path}')
+    print(f'Wrote {csv_path} ({len(standard_records)} standards)')
 
 
 if __name__ == '__main__':
@@ -551,9 +313,6 @@ if __name__ == '__main__':
                         help='Only correct the standards and the check star, which have reference fluxes')
     parser.add_argument('--smoothness-pdf', default='telluric_smoothness.pdf')
     parser.add_argument('--smoothness-csv', default='telluric_smoothness.csv')
-    parser.add_argument('--bands-pdf', default='telluric_bands.pdf')
-    parser.add_argument('--bands-csv', default='telluric_bands.csv')
-    parser.add_argument('--models-pdf', default='telluric_models.pdf')
     parser.add_argument('--models-csv', default='telluric_models.csv')
     args = parser.parse_args()
 
@@ -583,16 +342,12 @@ if __name__ == '__main__':
         standard_records.append(record)
     if not standard_records:
         raise SystemExit('No standards were reduced.')
-    write_models_report(standard_records, args.models_pdf, args.models_csv)
+    write_models_csv(standard_records, args.models_csv)
 
     target_paths = standard_paths + check_paths + science_paths
     assignments = assign_calibrators(standard_records, target_paths)
     reports = [Report(key='smoothness', pdf=args.smoothness_pdf, csv=args.smoothness_csv, fields=SMOOTHNESS_FIELDS,
                       csv_rows=region_rows, plot_frame=plot_smoothness_frame, plot_summary=plot_smoothness_summary,
-                      summary_title='Telluric corrected spectra over a continuum fit to the transparent pixels'),
-               Report(key='bands', pdf=args.bands_pdf, csv=args.bands_csv, fields=BAND_FIELDS, csv_rows=region_rows,
-                      plot_frame=plot_bands_frame, plot_summary=plot_bands_summary,
-                      summary_title='Telluric structure left after the correction, ln f = P + α ln T + β d ln T / dλ',
-                      figsize=(17, 11))]
+                      summary_title='Telluric corrected spectra over a continuum fit to the transparent pixels')]
     write_reports(target_paths, partial(correct_target, assignments=assignments, kinds=kinds), reports,
                   workers=args.workers, initializer=_init_worker)
