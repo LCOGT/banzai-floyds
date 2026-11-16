@@ -48,7 +48,7 @@ CALSPEC_URL = 'https://archive.stsci.edu/hlsps/reference-atlases/cdbs/current_ca
 VALIDATION_STANDARDS = [{'name': 'Hz 44', 'filename': 'hz44_stis_006.fits', 'ra': 200.89692, 'dec': 36.13319}]
 STANDARD_SEPARATION = 5.0
 SENSITIVITY_STAGE = 'banzai_floyds.flux.FluxSensitivity'
-STANDARD_STAGES = ['banzai_floyds.flux.FluxCalibrator', 'banzai_floyds.telluric.TelluricMaker']
+STANDARD_STAGES = ['banzai_floyds.flux.FluxCalibrator']
 SCIENCE_STAGES = ['banzai_floyds.flux.FluxCalibrator', 'banzai_floyds.telluric.TelluricCorrector',
                   'banzai_floyds.extract.CombinedExtractor']
 LAST_EXTRACTION_STAGE = 'banzai_floyds.trim.Trimmer'

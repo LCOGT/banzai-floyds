@@ -1,6 +1,7 @@
 import numpy as np
 from banzai_floyds.flux import FluxCalibrator, FluxSensitivity
 from banzai_floyds.utils.flux_utils import fit_sensitivity, evaluate_sensitivity
+from banzai_floyds.utils.flux_utils import scale_transmission, elevation_to_airmass_ratio
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_extracted_frame
 import mock
@@ -73,3 +74,14 @@ def test_sensitivity_bridges_masked_gap():
     sensitivity = evaluate_sensitivity(log_sensitivity, wavelength)
     # The sensitivity across the gap is interpolated from the data on either side, not pulled to ln S = 0
     np.testing.assert_allclose(sensitivity[in_gap], true_sensitivity[in_gap], rtol=0.01)
+
+
+def test_null_airmass_correction():
+    correction = scale_transmission(np.ones(1024), 1)
+    np.testing.assert_allclose(correction, np.ones_like(correction))
+
+
+def test_lower_site_has_more_air():
+    # Siding Spring is 1658 m below APO, under exp(1658 / 10400) = 1.17 times the column of air
+    np.testing.assert_allclose(elevation_to_airmass_ratio(1130.0, 2788.0), np.exp(1658.0 / 10400.0))
+    np.testing.assert_allclose(elevation_to_airmass_ratio(2788.0, 2788.0), 1.0)

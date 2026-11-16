@@ -4,6 +4,8 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
+- Telluric fitting is now done before flux calibration. We allow
+the different molecule bands to vary independently now.
 - We now adopt an outlier rejection version of the Kelson 2-D B-spline method for the background fits.
 - The 1d files now carry both an optimal and an unweighted extraction. The SPECTRUM and EXTRACTED columns are renamed
   with explicit suffixes ('flux' is now 'flux_optimal' and 'flux_unweighted', 'fluxraw' is now 'fluxraw_optimal'

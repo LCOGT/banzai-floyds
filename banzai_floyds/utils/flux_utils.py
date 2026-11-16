@@ -13,6 +13,29 @@ EXTINCTION_FILE = os.path.join(importlib.resources.files('banzai_floyds'), 'data
 REFERENCE_SAMPLING = 0.2
 
 
+def scale_transmission(transmission, airmass_scale):
+    # This was a giant pain to figure out.
+    # We assume the transmission is an exponential with airmass ala the Beer-Lambert Law
+    # T = e^(-A(λ) * X) where X is the airmass and A(λ) is the absorption for a given atmospheric composition
+    # If we consider the transmission for some airmass, X1
+    # ln(T1) = -A(λ) * X1
+    # A(λ) = -log(λ) / X1
+    # T2 = e^(log(T1) / X1 * X2)
+    # Using identities of exponents,
+    # T2 = T1^(X2 / X1)
+    return transmission ** airmass_scale
+
+
+def elevation_to_airmass_ratio(elevation1, elevation2):
+    # To estimate the delta airmass, we assume a very basic exponential model for the atmosphere
+    # rho = rho0 * exp(-h/H) where H is 10.4 km from the ideal gas law
+    # see https://en.wikipedia.org/wiki/Density_of_air#Exponential_approximation
+    # The column above a site is the integral of rho from h to infinity, rho0 * H * exp(-h/H),
+    # so the ratio of the airmass (total air column) is exp(-(h1 - h2) / H)
+    airmass_ratio = np.exp(-(elevation1 - elevation2) / 10400.0)
+    return airmass_ratio
+
+
 def airmass_extinction(wavelength, elevation, airmass):
     # We adopt the extinction curve from APO Davenport 2015,
     # https://www.apo.nmsu.edu/arc35m/Instruments/DIS/images/apoextinct.dat
@@ -23,10 +46,10 @@ def airmass_extinction(wavelength, elevation, airmass):
 
     # Convert the extinction curve from APO to our current site
     # We adopt an elevation of 2788m for APO
-    airmass_ratio = telluric_utils.elevation_to_airmass_ratio(elevation, 2788.0)
-    transmission = telluric_utils.scale_transmission(transmission, airmass_ratio)
+    airmass_ratio = elevation_to_airmass_ratio(elevation, 2788.0)
+    transmission = scale_transmission(transmission, airmass_ratio)
 
-    transmission = telluric_utils.scale_transmission(transmission, airmass)
+    transmission = scale_transmission(transmission, airmass)
 
     # Interpolate the extinction curve to the wavelength grid
     return np.interp(wavelength, extinction_curve['wavelength'], transmission)
@@ -58,8 +81,7 @@ def expected_standard_flux(data, order_id: int, flux_standard, wavelengths, elev
     expected_flux *= airmass_extinction(data['wavelength'], elevation, airmass)
     # Only correct the red order for telluric. It causes significant problems in the blue
     if order_id == 1:
-        expected_flux *= telluric_utils.estimate_telluric(data['wavelength'], airmass, elevation, lsf_sigma,
-                                                          telluric_model=telluric_model)
+        expected_flux *= telluric_utils.estimate_telluric(data['wavelength'], lsf_sigma, telluric_model=telluric_model)
     return expected_flux
 
 

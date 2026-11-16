@@ -289,9 +289,26 @@ def robust_linear_fit(design: np.ndarray | sparse.spmatrix, y: np.ndarray, uncer
     return solve(clipped_weights), good
 
 
+def _huber_loss(n_robust: int) -> Callable[[np.ndarray], np.ndarray]:
+    """`scipy.optimize.least_squares` loss that is Huber on the first `n_robust` residuals and
+    quadratic on the rest:
+
+        rho(z) = z for z <= 1, 2 sqrt(z) - 1 otherwise, with z = (r / huber_scale)^2
+    """
+    def loss(z):
+        rho = np.vstack([z, np.ones(len(z)), np.zeros(len(z))])
+        outer = np.zeros(len(z), dtype=bool)
+        outer[:n_robust] = z[:n_robust] > 1.0
+        rho[0, outer] = 2.0 * np.sqrt(z[outer]) - 1.0
+        rho[1, outer] = z[outer] ** -0.5
+        rho[2, outer] = -0.5 * z[outer] ** -1.5
+        return rho
+    return loss
+
+
 def robust_least_squares(residuals: Callable[[np.ndarray], np.ndarray], initial_guess: Sequence[float],
                          bounds: tuple, huber_scale: float = 4.0, clip_sigma: float = 4.0,
-                         maxiters: int = 5) -> tuple:
+                         maxiters: int = 5, priors: dict[int, tuple[float, float]] = None) -> tuple:
     """
     Nonlinear least squares with the outliers rejected, the counterpart of `robust_linear_fit`.
 
@@ -319,15 +336,28 @@ def robust_least_squares(residuals: Callable[[np.ndarray], np.ndarray], initial_
         Points further than this many robust standard deviations from the Huber model are rejected.
     maxiters : int
         Maximum number of clip and refit iterations.
+    priors : dict
+        (mean, sigma) of a Gaussian prior on the parameter at each index. Each is a residual
+        (p - mean) / sigma appended to the data's, which like the penalty rows of
+        `robust_linear_fit` is never down-weighted or clipped.
 
     Returns
     -------
-    (fit, used), the `OptimizeResult` and a flag for the points that survived the clip
+    (fit, used), the `OptimizeResult` and a flag for the points that survived the clip. The
+    residuals and Jacobian of the fit include the priors, so `parameter_variances` accounts for them.
     """
+    priors = priors or {}
+    prior_index = np.array(list(priors), dtype=int)
+    prior_mean = np.array([mean for mean, _ in priors.values()], dtype=float)
+    prior_sigma = np.array([sigma for _, sigma in priors.values()], dtype=float)
+
+    def fit_residuals(parameters, used):
+        return np.concatenate([used * residuals(parameters), (parameters[prior_index] - prior_mean) / prior_sigma])
+
     used = np.ones(len(residuals(np.asarray(initial_guess, dtype=float))), dtype=bool)
     for _ in range(maxiters):
-        fit = least_squares(lambda parameters: used * residuals(parameters), initial_guess,
-                            bounds=bounds, loss='huber', f_scale=huber_scale)
+        fit = least_squares(fit_residuals, initial_guess, args=(used,), bounds=bounds,
+                            loss=_huber_loss(len(used)), f_scale=huber_scale)
         deviations = np.abs(residuals(fit.x))
         # Never clip tighter than the formal uncertainties, for the reason given in robust_linear_fit
         robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)

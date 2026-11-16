@@ -24,5 +24,13 @@ to keep a baseline and score a change to the background fit against it.
 `flux_calibration_results.py` writes `sensitivity_results.pdf`, the sensitivity
 fit to every flux standard, and `flux_calibration_results.pdf`.
 
+`telluric_correction_results.py` corrects every frame with another night's
+standard and writes `telluric_smoothness.pdf` (dips and excess scatter left in
+each telluric region), `telluric_bands.pdf` (each region zoomed in for the by-eye
+check, with the fraction of the telluric structure left, α, and the offset of
+the lines, δ) and `telluric_models.pdf` (the telluric model fit to each standard
+and its parameters). Pass
+`--standards-only` to skip the science targets, which have no reference flux.
+
 Note that you will need to export your archive token
 `export ARCHIVE_AUTH_TOKEN=your_token` to get all of the most recent data.

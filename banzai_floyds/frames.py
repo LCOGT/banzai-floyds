@@ -9,6 +9,7 @@ from astropy.coordinates import Angle
 from banzai_floyds.utils.profile_utils import load_profile_fits, profile_fits_to_data, profile_sigmas
 from banzai_floyds.utils.profile_utils import profile_gamma_ratios
 from banzai_floyds.utils.profile_utils import profile_fits_to_header
+from banzai_floyds.utils.telluric_utils import TELLURIC_KEYWORDS
 from astropy.table import Table
 from banzai_floyds import dbs
 from typing import Optional
@@ -97,7 +98,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         if 'FRINGE' in self:
             self.fringe = self['FRINGE'].data
         if 'TELLURIC' in self:
-            self.telluric = self['TELLURIC'].data
+            telluric = self['TELLURIC'].data
+            telluric.meta.update({keyword: self['TELLURIC'].meta[keyword] for keyword in TELLURIC_KEYWORDS
+                                  if keyword in self['TELLURIC'].meta})
+            self.telluric = telluric
         if 'SENSITIVITY' in self:
             self.sensitivity = self['SENSITIVITY'].data
         if 'SPECTRUM' in self:
@@ -260,7 +264,9 @@ class FLOYDSObservationFrame(LCOObservationFrame):
     @telluric.setter
     def telluric(self, value):
         self._telluric = value
-        self.add_or_update(DataTable(value, name='TELLURIC', meta=fits.Header({})))
+        header = fits.Header([(keyword, value.meta[keyword], comment) for keyword, comment in TELLURIC_KEYWORDS.items()
+                              if keyword in value.meta])
+        self.add_or_update(DataTable(value, name='TELLURIC', meta=header))
 
     @property
     def sensitivity(self):

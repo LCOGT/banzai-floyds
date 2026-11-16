@@ -83,8 +83,23 @@ fraction of the profile it covers. See the data products page for the details.
 Flux Calibration and Telluric Correction
 ----------------------------------------
 Flux standards are observed periodically and are calibrated with known reference fluxes. The `README` in the 
-`banzai_floyds/data/standards` directory provides more details. The telluric features are treated as a multiplicative 
-correction and are based on the same flux standard observations. The initial sensitivity function to disentangle the 
-telluric and QE effects are estimated using the telluric spectrum from Matheson 2000, AJ, 120, 1499. We adopt the 
+`banzai_floyds/data/standards` directory provides more details. We adopt the
 coarse atmospheric attenuation curve from the Apache Point Observatory which is then corrected for elevation and airmass
 of the observation.
+
+The telluric features are treated as a multiplicative correction to the red order. The correction is a model: the
+telluric spectrum from Matheson 2000, AJ, 120, 1499, with the optical depths of O2 and H2O scaled, convolved with a
+Gaussian, and shifted in wavelength. The 9400 Angstrom water band is more saturated than the bluer water bands, so
+its depth is scaled as theirs to the 0.45 power. The width and the shift are those of the object rather than of the arc lines: a point
+source lights only its seeing disk and not the whole slit, so its lines are narrower than the arc lines and are offset
+by its position in the slit.
+
+For a flux standard, the depths, width, and shift are fit together with the instrument response to the ratio of the
+standard to its reference flux, and the sensitivity is then fit with that telluric absorption taken out. For every
+other frame the O2 depth is that of its standard scaled as the airmass to the 0.58 power (the O2 bands are saturated;
+Wade & Horne 1988, ApJ, 324, 411), and the width, shift, and water depth are fit to the flux calibrated spectrum of
+the frame itself. The water depth is fit under two continua, one stiff and one flexible enough to follow the broad
+features of a supernova. How much it differs between them is added to its uncertainty before it is combined with the
+water depth of the standard, so a spectrum whose water depth depends on how its continuum is modeled falls back to
+its standard. Frames with a median signal-to-noise per pixel below 10 redward of 6700 Angstroms take the depths and
+width of their standard, with no shift.
