@@ -378,9 +378,8 @@ def generate_fake_extracted_frame(do_telluric=False, do_sensitivity=True):
                                                        2 * np.ones_like(sensitivity_wavelengths, dtype=int)])})
 
     # Add the A and B bands
-    telluric = estimate_telluric(wavelengths, 1.0, 2198.0, wavelength_solution.lsf_sigma_angstroms(1))
-    telluric_model = estimate_telluric(sensitivity_wavelengths, 1.0, 2198.0,
-                                       wavelength_solution.lsf_sigma_angstroms(1))
+    telluric = estimate_telluric(wavelengths, wavelength_solution.lsf_sigma_angstroms(1))
+    telluric_model = estimate_telluric(sensitivity_wavelengths, wavelength_solution.lsf_sigma_angstroms(1))
 
     telluric_data = Table({'telluric': telluric_model, 'wavelength': sensitivity_wavelengths})
     flux = input_flux.copy()

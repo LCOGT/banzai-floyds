@@ -48,7 +48,7 @@ CALSPEC_URL = 'https://archive.stsci.edu/hlsps/reference-atlases/cdbs/current_ca
 VALIDATION_STANDARDS = [{'name': 'Hz 44', 'filename': 'hz44_stis_006.fits', 'ra': 200.89692, 'dec': 36.13319}]
 STANDARD_SEPARATION = 5.0
 SENSITIVITY_STAGE = 'banzai_floyds.flux.FluxSensitivity'
-STANDARD_STAGES = ['banzai_floyds.flux.FluxCalibrator', 'banzai_floyds.telluric.TelluricMaker']
+STANDARD_STAGES = ['banzai_floyds.flux.FluxCalibrator']
 SCIENCE_STAGES = ['banzai_floyds.flux.FluxCalibrator', 'banzai_floyds.telluric.TelluricCorrector',
                   'banzai_floyds.extract.CombinedExtractor']
 LAST_EXTRACTION_STAGE = 'banzai_floyds.trim.Trimmer'
@@ -151,6 +151,17 @@ def run_stages(image, stage_names: list, context):
         if not images:
             raise RuntimeError(f'{stage_name} rejected the frame')
         image = images[0]
+    return image
+
+
+def run_as_science(image, stage_names: list, context):
+    """`run_stages` with the frame typed SPECTRUM, so a standard is corrected the way a science frame is."""
+    obstype = image.obstype
+    image.obstype = 'SPECTRUM'
+    try:
+        image = run_stages(image, stage_names, context)
+    finally:
+        image.obstype = obstype
     return image
 
 
@@ -377,7 +388,7 @@ def calibrate_target(path: str, assignments: dict) -> tuple:
             return path, None, error
         image.sensitivity = Table(calibrator['sensitivity'])
         image.telluric = Table(calibrator['telluric'])
-        image = run_stages(image, SCIENCE_STAGES, _context)
+        image = run_as_science(image, SCIENCE_STAGES, _context)
         reference = reference_spectrum(image.ra, image.dec, _context)
 
         sigmas = {order_id: image.wavelengths.lsf_sigma_angstroms(order_id) for order_id in [1, 2]}

@@ -26,9 +26,9 @@ ORDERED_STAGES = [
     'banzai_floyds.extract.Extractor',
     'banzai_floyds.trim.Trimmer',
     'banzai_floyds.flux.StandardLoader',
+    'banzai_floyds.telluric.TelluricMaker',
     'banzai_floyds.flux.FluxSensitivity',
     'banzai_floyds.flux.FluxCalibrator',
-    'banzai_floyds.telluric.TelluricMaker',
     'banzai_floyds.telluric.TelluricCorrector',
     'banzai_floyds.extract.CombinedExtractor',
 ]

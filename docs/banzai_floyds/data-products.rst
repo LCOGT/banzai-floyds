@@ -44,7 +44,10 @@ in the red order, each pixel has been divided by the fringe pattern in the ***FR
 
 - ***TELLURIC*** Extension: This extension is a fits binary table that has 'wavelength' and 'telluric' columns. The
   telluric column is the fraction of the light transmitted through the telluric absorption (unitless, 1 is no
-  absorption); the spectra are divided by it.
+  absorption); the spectra are divided by it. The header holds the parameters of the telluric model that was divided
+  out of this frame: O2DEPTH and H2ODEPTH (the O2 and H2O optical depths over those of the template), TELSHIFT (the
+  offset of the telluric lines from the wavelength solution in Angstroms), TELSIGMA (the Gaussian sigma of the
+  telluric lines in Angstroms), and AIRMASS (the airmass the depths are for).
 
 Optimal and unweighted extractions
 ----------------------------------

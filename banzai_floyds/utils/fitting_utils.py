@@ -97,12 +97,13 @@ def sigma_to_fwhm(sigma):
     return sigma * (2.0 * np.sqrt(2.0 * np.log(2.0)))
 
 
-def parameter_variances(fit):
+def parameter_variances(fit, n_rejected: int = 0) -> np.ndarray:
     """
     Approximate parameter variances from a `scipy.optimize.least_squares` result.
 
     Returns the diagonal of the Gauss-Newton covariance estimate
-    cov = (J^T J)^-1 * chi^2_reduced, with chi^2_reduced = sum(residuals^2) / (N - p). This is the
+    cov = (J^T J)^-1 * chi^2_reduced, with chi^2_reduced = sum(residuals^2) / (N - p), N counting only the
+    residuals that were fit. This is the
     standard nonlinear-least-squares result (Press et al., Numerical Recipes 3rd ed., secs.
     15.5-15.6; equivalent to `scipy.optimize.curve_fit`'s `pcov` with `absolute_sigma=False`). If the
     fit used Huber loss, this is an approximation, but it's close enough for our purposes.
@@ -111,6 +112,8 @@ def parameter_variances(fit):
     ----------
     fit : OptimizeResult
         The result of a `scipy.optimize.least_squares` call.
+    n_rejected : int
+        Number of residuals held at zero in the fit, e.g. the points `robust_least_squares` clipped.
 
     Returns
     -------
@@ -119,7 +122,7 @@ def parameter_variances(fit):
         degenerate fit with some parameters unconstrained).
     """
     try:
-        degrees_of_freedom = max(fit.fun.size - fit.x.size, 1)
+        degrees_of_freedom = max(fit.fun.size - n_rejected - fit.x.size, 1)
         covariance = np.linalg.inv(fit.jac.T @ fit.jac) * 2.0 * fit.cost / degrees_of_freedom
     except np.linalg.LinAlgError:
         return np.full(fit.x.shape, np.nan)
@@ -289,9 +292,26 @@ def robust_linear_fit(design: np.ndarray | sparse.spmatrix, y: np.ndarray, uncer
     return solve(clipped_weights), good
 
 
+def _huber_loss(n_robust: int) -> Callable[[np.ndarray], np.ndarray]:
+    """`scipy.optimize.least_squares` loss that is Huber on the first `n_robust` residuals and
+    quadratic on the rest:
+
+        rho(z) = z for z <= 1, 2 sqrt(z) - 1 otherwise, with z = (r / huber_scale)^2
+    """
+    def loss(z):
+        rho = np.vstack([z, np.ones(len(z)), np.zeros(len(z))])
+        outer = np.zeros(len(z), dtype=bool)
+        outer[:n_robust] = z[:n_robust] > 1.0
+        rho[0, outer] = 2.0 * np.sqrt(z[outer]) - 1.0
+        rho[1, outer] = z[outer] ** -0.5
+        rho[2, outer] = -0.5 * z[outer] ** -1.5
+        return rho
+    return loss
+
+
 def robust_least_squares(residuals: Callable[[np.ndarray], np.ndarray], initial_guess: Sequence[float],
                          bounds: tuple, huber_scale: float = 4.0, clip_sigma: float = 4.0,
-                         maxiters: int = 5) -> tuple:
+                         maxiters: int = 5, priors: dict[int, tuple[float, float]] = None) -> tuple:
     """
     Nonlinear least squares with the outliers rejected, the counterpart of `robust_linear_fit`.
 
@@ -319,22 +339,36 @@ def robust_least_squares(residuals: Callable[[np.ndarray], np.ndarray], initial_
         Points further than this many robust standard deviations from the Huber model are rejected.
     maxiters : int
         Maximum number of clip and refit iterations.
+    priors : dict
+        (mean, sigma) of a Gaussian prior on the parameter at each index. Each is a residual
+        (p - mean) / sigma appended to the data's, which like the penalty rows of
+        `robust_linear_fit` is never down-weighted or clipped.
 
     Returns
     -------
-    (fit, used), the `OptimizeResult` and a flag for the points that survived the clip
+    (fit, used), the `OptimizeResult` and a flag for the points the fit used. The residuals and
+    Jacobian of the fit include the priors and hold the rejected points at zero, so
+    `parameter_variances(fit, n_rejected=np.sum(np.logical_not(used)))` accounts for both.
     """
+    priors = priors or {}
+    prior_index = np.array(list(priors), dtype=int)
+    prior_mean = np.array([mean for mean, _ in priors.values()], dtype=float)
+    prior_sigma = np.array([sigma for _, sigma in priors.values()], dtype=float)
+
+    def fit_residuals(parameters, used):
+        return np.concatenate([used * residuals(parameters), (parameters[prior_index] - prior_mean) / prior_sigma])
+
     used = np.ones(len(residuals(np.asarray(initial_guess, dtype=float))), dtype=bool)
-    for _ in range(maxiters):
-        fit = least_squares(lambda parameters: used * residuals(parameters), initial_guess,
-                            bounds=bounds, loss='huber', f_scale=huber_scale)
+    for iteration in range(maxiters):
+        fit = least_squares(fit_residuals, initial_guess, args=(used,), bounds=bounds,
+                            loss=_huber_loss(len(used)), f_scale=huber_scale)
+        if iteration == maxiters - 1:
+            break
         deviations = np.abs(residuals(fit.x))
         # Never clip tighter than the formal uncertainties, for the reason given in robust_linear_fit
         robust_sigma = max(MAD_TO_SIGMA * np.median(deviations), 1.0)
         good = deviations < clip_sigma * robust_sigma
-        if good.sum() <= len(fit.x):
-            return fit, np.ones(len(used), dtype=bool)
-        if np.all(good == used):
+        if good.sum() <= len(fit.x) or np.all(good == used):
             break
         used = good
     return fit, used
