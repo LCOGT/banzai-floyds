@@ -17,7 +17,7 @@ urls = { "Documentation" = "https://banzai-floyds.readthedocs.io/", "Source" = "
 
 dependencies = [
     "astropy>=6.0",
-    "lco-banzai > 1.36.2",
+    "lco-banzai >= 1.37.1",
     "astroscrappy>=1.1.0",
     "matplotlib",
     "torch",
