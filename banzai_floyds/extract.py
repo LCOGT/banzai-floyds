@@ -179,6 +179,9 @@ class Extractor(Stage):
 
 class CombinedExtractor(Stage):
     def do_stage(self, image):
+        # Nothing was extracted because no object was detected. The 2d frame is still written out.
+        if image.extracted is None:
+            return image
         # rebin the data without order using the new wavelength bins
         image.binned_data = rebin_data_combined(image.binned_data, image.wavelengths)
         telluric_model = np.interp(image.binned_data['wavelength'], image.telluric['wavelength'],

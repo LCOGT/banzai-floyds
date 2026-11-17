@@ -26,6 +26,9 @@ class FluxSensitivity(Stage):
     FRINGE_KNOT_SPACING = 600.0
 
     def do_stage(self, image):
+        # Nothing was extracted because no object was detected. The 2d frame is still written out.
+        if image.extracted is None:
+            return image
         flux_standard = get_standard(image.ra, image.dec, self.runtime_context)
         if flux_standard is None or len(flux_standard) == 0:
             return image
@@ -89,6 +92,9 @@ class StandardLoader(FLOYDSCalibrationUser):
 
 class FluxCalibrator(Stage):
     def do_stage(self, image):
+        # Nothing was extracted because no object was detected. The 2d frame is still written out.
+        if image.extracted is None:
+            return image
         for weighting in ['optimal', 'unweighted']:
             image.extracted = flux_calibrate(image.extracted, image.sensitivity, image.elevation, image.airmass,
                                              image.exptime, raw_key=f'fluxraw_{weighting}',

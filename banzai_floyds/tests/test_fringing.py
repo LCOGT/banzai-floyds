@@ -6,13 +6,14 @@ from types import SimpleNamespace
 from banzai_floyds.fringe import FringeMaker, FringeCorrector, FringeLoader
 from banzai_floyds.fringe import fringe_interpolation_coefficients, fringe_fit_region, find_fringe_offset
 from banzai_floyds.fringe import inpaint_fringe, interpolable_region, FringeExtractor, FRINGE_EDGE_PAD
+from banzai_floyds.fringe import object_mask
 from banzai_floyds.frames import MIN_FRINGE_VALUE, MAX_FRINGE_VALUE, NoUsableFringePattern
 from banzai_floyds.frames import FLOYDSObservationFrame
 from banzai.data import CCDData
 from banzai_floyds.fringe import prepare_fringe_data, make_fringe_continuum_model
 from banzai_floyds.fringe import fit_science_source_flux
 from banzai.utils.stats import robust_standard_deviation
-from banzai_floyds.dbs import create_db, save_calibration_info, get_unstacked_same_block_cals
+from banzai_floyds.dbs import create_db, save_calibration_info, get_unstacked_same_block_cals, get_cal_record
 from banzai_floyds.dbs import FLOYDSCalibrationImage
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai import context
@@ -20,6 +21,7 @@ from astropy.io import fits
 from datetime import datetime
 from numpy.polynomial.legendre import Legendre
 from scipy.interpolate import CloughTocher2DInterpolator
+from scipy.ndimage import uniform_filter1d
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.utils.binning_utils import bin_data
 from banzai_floyds.utils.fitting_utils import poisson_model_uncertainty
@@ -553,6 +555,37 @@ def test_fringe_loader_prefers_same_block_flats():
     assert np.std(stacked_pattern[usable] - single_pattern[usable]) < 0.05
 
 
+def test_fringe_loader_gets_the_narrow_slit_pattern_for_a_wide_slit_frame():
+    np.random.seed(90211)
+    master = {'instrument_id': 1, 'is_master': True, 'is_bad': False, 'dateobs': datetime(2023, 1, 1),
+              'good_after': datetime(2000, 1, 1), 'good_until': datetime(3000, 1, 1),
+              'public_date': datetime(2023, 1, 1)}
+    db_address = seed_lampflat_database([
+        {'filename': 'narrow.fits', **master},
+        {'filename': 'wide.fits', 'attributes': {'slit_width': '6.0'}, **master},
+    ])
+    image = SimpleNamespace(blockid=42, proposal='science', instrument=SimpleNamespace(id=1), slit_width=6.0,
+                            dateobs=datetime(2023, 1, 2), object_fringe=None, meta={})
+    # The usual lookup matches the frame's own slit, and the override asks for another one
+    assert get_cal_record(image, 'LAMPFLAT', ['slit_width'], db_address).filename == 'wide.fits'
+    record = get_cal_record(image, 'LAMPFLAT', ['slit_width'], db_address, overrides={'slit_width': 2.0})
+    assert record.filename == 'narrow.fits'
+
+    stage_context = context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0, 'db_address': db_address,
+                                     'CALIBRATION_SET_CRITERIA': {'LAMPFLAT': ['slit_width']},
+                                     'FRAME_FACTORY': 'banzai_floyds.tests.test_fringing.FakeFrameFactory'})
+    stage = FringeLoader(stage_context)
+    stage.load_object_fringe(image)
+    assert image.meta['L1IDFRNO'][0] == 'narrow.fits'
+    assert np.any(image.object_fringe > MIN_FRINGE_VALUE)
+
+    # A frame through the narrow slit already has the right pattern from its own flats
+    image = SimpleNamespace(slit_width=2.0, object_fringe=None, meta={})
+    stage.load_object_fringe(image)
+    assert image.object_fringe is None
+    assert 'L1IDFRNO' not in image.meta
+
+
 def test_frame_cuts_the_fringe_pattern_to_its_usable_pixels():
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True, fringe=True,
                                         include_super_fringe=True)
@@ -673,6 +706,65 @@ def test_fringe_loader_labels_the_master():
     assert frame.meta['L1IDFRNG'] == 'master.fits'
 
 
+def test_fringe_shift_is_fit_on_a_frame_with_noisy_pixels():
+    np.random.seed(552310)
+    frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True, include_trace=False,
+                                        fringe=True, fringe_offset=3.5, fringe_offset_x=1.5,
+                                        include_super_fringe=True)
+    # No pixel has much signal to noise on its own, but there are ~100,000 of them carrying the pattern
+    extra_noise = 150.0
+    frame.data[:, :] += np.random.normal(0.0, extra_noise, size=frame.data.shape)
+    frame.uncertainty[:, :] = np.sqrt(frame.uncertainty ** 2 + extra_noise ** 2)
+    output_frame = FringeCorrector(context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0})).do_stage(frame)
+    assert output_frame.meta['L1FRNGSN'] > FringeCorrector.MIN_FRINGE_SNR
+    np.testing.assert_allclose(output_frame.meta['L1FRNGOX'], frame.input_fringe_shift_x, atol=0.3)
+    np.testing.assert_allclose(output_frame.meta['L1FRNGOY'], frame.input_fringe_shift, atol=0.3)
+    # With no trace, nothing is object dominated, so the sky pattern is all that is applied
+    assert output_frame.meta['L1FROBJS'] < FringeCorrector.MIN_OBJECT_FRINGE_SNR
+
+
+def test_correct_object_fringe_through_a_wide_slit():
+    np.random.seed(77103)
+    sky = generate_fake_science_frame(include_sky=True, include_trace=False)
+    star = generate_fake_science_frame(include_sky=False, flux_normalization=20000.0)
+    pattern = generate_fake_science_frame(include_sky=False, include_trace=False, background=1000.0, fringe=True,
+                                          fringe_offset_x=4.0, include_super_fringe=True)
+    narrow = pattern.fringe
+    # The lamp fills the wide slit, which smears its fringes along the dispersion. The star does not
+    # fill it, so it has the narrow slit pattern displaced by where it sits in the slit.
+    wide = uniform_filter1d(np.where(narrow > MIN_FRINGE_VALUE, narrow, 1.0), 13, axis=1)
+    wide[narrow < MIN_FRINGE_VALUE] = 0.0
+    sky_fringe = np.where(wide > MIN_FRINGE_VALUE, wide, 1.0)
+
+    def corrected_frame(object_fringe):
+        frame = generate_fake_science_frame(include_sky=False, include_trace=False)
+        frame.data[:, :] = sky.data * sky_fringe + star.data * pattern.input_fringe
+        frame.uncertainty[:, :] = np.sqrt(sky.uncertainty ** 2 + star.uncertainty ** 2)
+        frame.fringe = wide
+        frame.object_fringe = object_fringe
+        frame.object_traces = star.input_profile_centers
+        return FringeCorrector(context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0})).do_stage(frame)
+
+    output_frame = corrected_frame(narrow)
+    assert output_frame.meta['L1FROBJS'] > FringeCorrector.MIN_OBJECT_FRINGE_SNR
+    np.testing.assert_allclose(output_frame.meta['L1FROBJX'], 4.0, atol=0.3)
+    np.testing.assert_allclose(output_frame.meta['L1FROBJA'], 1.0, atol=0.1)
+
+    x2d, y2d = np.meshgrid(np.arange(sky.data.shape[1]), np.arange(sky.data.shape[0]))
+    slit_coordinates = y2d - sky.orders.center(x2d)[0]
+    in_trace = np.abs(slit_coordinates - star.input_profile_centers[0](sky.wavelengths.data)) < 3.0
+    in_trace = np.logical_and(in_trace, sky.orders.data == 1)
+    in_trace = np.logical_and(in_trace, np.logical_and(sky.wavelengths.data > 8000.0, x2d < 1650))
+    fringe_free = sky.data + star.data
+    residual = output_frame.data[in_trace] / fringe_free[in_trace] - 1.0
+    # The star's fringes are ~20% here. A shift error of ~0.1 pixels and the interpolation of the
+    # pattern each leave about a percent behind.
+    assert np.std(residual) < 0.035
+    # The wide slit pattern cannot follow the star's fringes even with its own shift and amplitude
+    wide_only = corrected_frame(None)
+    assert np.std(wide_only.data[in_trace] / fringe_free[in_trace] - 1.0) > 1.5 * np.std(residual)
+
+
 def test_correct_fringe_low_snr():
     np.random.seed(172645)
     # A frame too noisy to constrain the fringe shift should get the master applied unshifted
@@ -680,7 +772,7 @@ def test_correct_fringe_low_snr():
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True,
                                         fringe=True, fringe_offset=3.5, fringe_offset_x=1.5,
                                         include_super_fringe=True)
-    extra_noise = 500.0
+    extra_noise = 1000.0
     frame.data[:, :] += np.random.normal(0.0, extra_noise, size=frame.data.shape)
     frame.uncertainty[:, :] = np.sqrt(frame.uncertainty ** 2 + extra_noise ** 2)
     stage_context = context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0})
@@ -835,3 +927,75 @@ def test_fit_fringe_continuum():
         np.testing.assert_allclose(actual[np.logical_not(redward)], expected[np.logical_not(redward)],
                                    rtol=0.10)
         np.testing.assert_allclose(actual[redward], expected[redward], rtol=0.15)
+
+
+def test_object_mask_covers_the_trace_in_the_red_order():
+    frame = generate_fake_science_frame(include_sky=True)
+    assert not np.any(object_mask(frame, 12.0))
+    frame.object_traces = frame.input_profile_centers
+    mask = object_mask(frame, 12.0)
+    x2d, y2d = np.meshgrid(np.arange(frame.data.shape[1]), np.arange(frame.data.shape[0]))
+    offset = y2d - frame.orders.center(x2d)[0] - frame.input_profile_centers[0](frame.wavelengths.data)
+    in_red = frame.orders.data == 1
+    np.testing.assert_array_equal(mask[in_red], np.abs(offset[in_red]) <= 12.0)
+    # Only the red order fringes
+    assert not np.any(mask[frame.orders.data == 2])
+
+
+def frame_with_object_fringes(sky, star, sky_pattern, star_pattern, traces):
+    """A frame whose sky and object have different fringe shifts, corrected with the sky pattern's master."""
+    frame = generate_fake_science_frame(include_sky=False, include_trace=False)
+    frame.data[:, :] = sky.data * sky_pattern.input_fringe + star.data * star_pattern.input_fringe
+    frame.uncertainty[:, :] = np.sqrt(sky.uncertainty ** 2 + star.uncertainty ** 2)
+    frame.fringe = sky_pattern.fringe
+    frame.object_traces = traces
+    return FringeCorrector(context.Context({'FRINGE_CUTOFF_WAVELENGTH': 6000.0})).do_stage(frame)
+
+
+def test_a_bright_object_does_not_set_the_sky_fringe_shift():
+    np.random.seed(77104)
+    # The matched filter weights each pixel by its signal to noise squared, so a bright object would set the
+    # sky's shift with its own fringes, which are displaced by where it sits in the slit. Keeping its pixels out
+    # of the sky's fit leaves its fringes to the object's own fit.
+    sky = generate_fake_science_frame(include_sky=True, include_trace=False)
+    star = generate_fake_science_frame(include_sky=False, flux_normalization=20000.0)
+    sky_pattern = generate_fake_science_frame(include_sky=False, include_trace=False, background=1000.0, fringe=True,
+                                              fringe_offset_x=1.5, fringe_offset=2.0, include_super_fringe=True)
+    star_pattern = generate_fake_science_frame(include_sky=False, include_trace=False, background=1000.0,
+                                               fringe=True, fringe_offset_x=5.5, fringe_offset=2.0,
+                                               include_super_fringe=True)
+    output_frame = frame_with_object_fringes(sky, star, sky_pattern, star_pattern, star.input_profile_centers)
+    np.testing.assert_allclose(output_frame.meta['L1FRNGOX'], 1.5, atol=0.3)
+    np.testing.assert_allclose(output_frame.meta['L1FRNGOY'], 2.0, atol=0.3)
+    # Fit against the shifted sky pattern, the object's shift is relative to the sky's
+    assert output_frame.meta['L1FROBJS'] > FringeCorrector.MIN_OBJECT_FRINGE_SNR
+    np.testing.assert_allclose(output_frame.meta['L1FROBJX'], 4.0, atol=0.3)
+    assert output_frame.meta['L1FROBJY'] == 0.0
+
+    # Without knowing where the object is, the sky's shift is pulled most of the way to the object's
+    unmasked = frame_with_object_fringes(sky, star, sky_pattern, star_pattern, None)
+    assert unmasked.meta['L1FRNGOX'] > 1.5 + 1.0
+
+
+def test_the_object_shift_is_free_in_y_when_the_sky_fringes_are_too_faint():
+    np.random.seed(77105)
+    # A bright star with no sky to speak of: the sky's shift cannot be fit, so the master is applied unshifted
+    # and the object's fit has to find the flexure in y as well as its displacement in x.
+    sky = generate_fake_science_frame(include_sky=False, include_trace=False)
+    star = generate_fake_science_frame(include_sky=False, flux_normalization=20000.0)
+    star_pattern = generate_fake_science_frame(include_sky=False, include_trace=False, background=1000.0,
+                                               fringe=True, fringe_offset_x=3.0, fringe_offset=2.0,
+                                               include_super_fringe=True)
+    output_frame = frame_with_object_fringes(sky, star, star_pattern, star_pattern, star.input_profile_centers)
+    assert output_frame.meta['L1FRNGSN'] < FringeCorrector.MIN_FRINGE_SNR
+    assert output_frame.meta['L1FROBJS'] > FringeCorrector.MIN_OBJECT_FRINGE_SNR
+    np.testing.assert_allclose(output_frame.meta['L1FROBJX'], 3.0, atol=0.3)
+    np.testing.assert_allclose(output_frame.meta['L1FROBJY'], 2.0, atol=0.4)
+
+    x2d, y2d = np.meshgrid(np.arange(star.data.shape[1]), np.arange(star.data.shape[0]))
+    slit_coordinates = y2d - star.orders.center(x2d)[0]
+    in_trace = np.abs(slit_coordinates - star.input_profile_centers[0](star.wavelengths.data)) < 3.0
+    in_trace = np.logical_and(in_trace, star.orders.data == 1)
+    in_trace = np.logical_and(in_trace, np.logical_and(star.wavelengths.data > 8000.0, x2d < 1650))
+    # The star's fringes are ~25% here
+    assert np.std(output_frame.data[in_trace] / star.data[in_trace] - 1.0) < 0.02

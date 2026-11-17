@@ -16,6 +16,9 @@ ORDERED_STAGES = [
     'banzai_floyds.wavelengths.WavelengthSolutionLoader',
     'banzai_floyds.binning.Binner',
     'banzai_floyds.fringe.FringeLoader',
+    # Find the object before the fringe correction, which needs to know which pixels are the object's.
+    # Lamp flats stop at the FringeLoader, so they never get here.
+    'banzai_floyds.profile.ObjectDetector',
     'banzai_floyds.fringe.FringeCorrector',
     'banzai_floyds.profile.ProfileFitter',
     'banzai_floyds.background.BackgroundFitter',

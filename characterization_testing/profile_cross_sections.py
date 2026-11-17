@@ -18,7 +18,7 @@ from process_lamp_flats import make_context
 from reduction_utils import reduce_to_stage, frame_metadata, clear_cosmic_ray_flags
 from report_utils import Report, raw_frame_paths, write_reports
 from banzai_floyds.matched_filter import matched_filter_signal, matched_filter_normalization
-from banzai_floyds.profile import detect_point_sources, choose_source_to_extract, ProfileFitter
+from banzai_floyds.profile import ProfileFitter
 from banzai_floyds.profile import stack_slit_profile, OrderChunk
 from banzai_floyds.profile import measure_chunk_fwhms, measure_chunk_shape_params
 from banzai_floyds.utils.fitting_utils import gauss, gauss_hermite, voigt
@@ -66,12 +66,8 @@ def profile_measurement_points(image, centers: list) -> dict:
     and one gamma_ratio. Measuring them again here is what lets the page show the scatter the two
     numbers were drawn from, against the trace points the profile stage already records.
     """
-    sources_by_order = detect_point_sources(image.binned_data, image.orders,
-                                            exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
-                                            initial_fwhm=ProfileFitter.INITIAL_FWHM,
-                                            min_snr=ProfileFitter.DETECTION_SNR)
-    point_sources = choose_source_to_extract(sources_by_order)
-    if len(point_sources) == 0:
+    point_sources = image.point_sources
+    if not point_sources:
         return {}
     _, fwhms, _ = image.profile_fits
     points = {}

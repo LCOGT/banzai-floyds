@@ -6,6 +6,7 @@
   :hidden:
 
   banzai_floyds/processing.rst
+  banzai_floyds/object-detection.rst
   banzai_floyds/ExampleReduction.ipynb
   banzai_floyds/data-products.rst
   banzai-floyds-ui/docs/ui-guide.rst

@@ -62,6 +62,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self._extracted = None
         self._spectrum = None
         self._fringe = None
+        self.object_fringe = None
+        # Where ObjectDetector found the object, for the fringe correction and the profile fit
+        self.point_sources = None
+        self.object_traces = None
         self._sensitivity = None
         self._telluric = None
         self.background_windows = None
