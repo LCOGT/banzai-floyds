@@ -46,6 +46,14 @@ RED_WATER_BAND_EXPONENT = 0.45
 AIRMASS_EXPONENTS = {'O2DEPTH': 0.58, 'H2ODEPTH': 0.6}
 
 
+def scale_to_airmass(parameters: dict, airmass: float) -> dict:
+    """Telluric model `parameters` with the depths scaled from their AIRMASS to `airmass`,
+    depth ∝ airmass^AIRMASS_EXPONENTS."""
+    scaled = {name: parameters[name] * (airmass / parameters['AIRMASS']) ** exponent
+              for name, exponent in AIRMASS_EXPONENTS.items()}
+    return {**parameters, **scaled, 'AIRMASS': airmass}
+
+
 def estimate_telluric(wavelength, lsf_sigma: float, telluric_model=None):
     """Telluric transmission at `wavelength`, from `telluric_model` or else the default model at the
     instrument resolution, `lsf_sigma` (Angstroms)."""
@@ -84,7 +92,7 @@ def telluric_transmission(wavelength: np.ndarray, parameters: dict) -> np.ndarra
         T(lambda) = [G(sigma) * exp(-a tau_O2 - w tau_H2O - w^rho tau_9400)](lambda - delta)
 
     with tau the template optical depths, a and w the depths of O2 and H2O relative to the
-    template (O2DEPTH, H2ODEPTH), rho = WATER_SATURATION, G a Gaussian of width sigma (TELSIGMA)
+    template (O2DEPTH, H2ODEPTH), rho = RED_WATER_BAND_EXPONENT, G a Gaussian of width sigma (TELSIGMA)
     and delta (TELSHIFT) the offset of the lines compared to the arc wavelength solution.
     """
     optical_depth = (parameters['O2DEPTH'] * TEMPLATE_OPTICAL_DEPTHS['O2']
@@ -161,8 +169,9 @@ def fit_telluric(wavelength: np.ndarray, log_flux: np.ndarray, log_flux_error: n
                                            clip_sigma=clip_sigma)
     lower = np.concatenate([np.full(n_continuum, -np.inf), [bounds[name][0] for name in params]])
     upper = np.concatenate([np.full(n_continuum, np.inf), [bounds[name][1] for name in params]])
-    fit, _ = robust_least_squares(model_residuals, np.concatenate([continuum_start, start]), (lower, upper),
-                                  huber_scale=6.0, clip_sigma=clip_sigma,
-                                  priors={n_continuum + params.index(name): prior for name, prior in priors.items()})
+    fit, used = robust_least_squares(model_residuals, np.concatenate([continuum_start, start]), (lower, upper),
+                                     huber_scale=6.0, clip_sigma=clip_sigma,
+                                     priors={n_continuum + params.index(name): prior for name, prior in priors.items()})
     best_fit = {**initial_guess, **{name: float(value) for name, value in zip(params, fit.x[n_continuum:])}}
-    return best_fit, dict(zip(params, np.sqrt(parameter_variances(fit)[n_continuum:])))
+    variances = parameter_variances(fit, n_rejected=np.sum(np.logical_not(used)))
+    return best_fit, dict(zip(params, np.sqrt(variances[n_continuum:])))

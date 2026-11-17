@@ -944,11 +944,11 @@ def fit_shape_params(stacked_y: np.ndarray, stacked_flux: np.ndarray, stacked_fl
     initial_guess = [peak, center, 0.1 * MAX_GAMMA_RATIO, level, 0.0, 0.0]
     lower_bounds = [0.0, center - sigma, 0.0, -np.inf, -np.inf, -np.inf]
     upper_bounds = [np.inf, center + sigma, MAX_GAMMA_RATIO, np.inf, np.inf, np.inf]
-    best_fit, _ = robust_least_squares(residuals, initial_guess, (lower_bounds, upper_bounds),
-                                       huber_scale=huber_scale, clip_sigma=clip_sigma)
+    best_fit, used = robust_least_squares(residuals, initial_guess, (lower_bounds, upper_bounds),
+                                          huber_scale=huber_scale, clip_sigma=clip_sigma)
     if not best_fit.success:
         return np.nan, np.nan
-    gamma_ratio_error = float(np.sqrt(parameter_variances(best_fit)[2]))
+    gamma_ratio_error = float(np.sqrt(parameter_variances(best_fit, n_rejected=np.sum(np.logical_not(used)))[2]))
     return float(best_fit.x[2]), gamma_ratio_error
 
 

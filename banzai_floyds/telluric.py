@@ -2,8 +2,8 @@ from banzai.stages import Stage
 from banzai_floyds.dbs import get_standard
 import numpy as np
 from banzai_floyds.flux import FluxSensitivity
-from banzai_floyds.utils.telluric_utils import fit_telluric, telluric_transmission
-from banzai_floyds.utils.telluric_utils import PARAMETERS, AIRMASS_EXPONENTS
+from banzai_floyds.utils.telluric_utils import fit_telluric, telluric_transmission, scale_to_airmass
+from banzai_floyds.utils.telluric_utils import PARAMETERS
 from banzai_floyds.utils.flux_utils import standard_at_resolution, airmass_extinction, sensitivity_knots
 from astropy.table import Table
 from scipy.interpolate import BSpline
@@ -45,9 +45,7 @@ def fit_science_telluric(wavelength: np.ndarray, flux: np.ndarray, flux_error: n
     -------
     dict of the PARAMETERS of the telluric model of this frame, and its AIRMASS
     """
-    scaled = {name: standard[name] * (airmass / standard['AIRMASS']) ** exponent
-              for name, exponent in AIRMASS_EXPONENTS.items()}
-    initial = {**standard, **scaled, 'TELSHIFT': 0.0}
+    initial = {**scale_to_airmass(standard, airmass), 'TELSHIFT': 0.0}
     priors = {'TELSHIFT': (0.0, arc_sigma), 'TELSIGMA': (standard['TELSIGMA'], width_prior * arc_sigma)}
     log_flux, log_flux_error = np.log(flux), flux_error / flux
     # A uniformly lit slit is a top hat sqrt(12) sigma wide, so this range is the whole slit
@@ -57,9 +55,11 @@ def fit_science_telluric(wavelength: np.ndarray, flux: np.ndarray, flux_error: n
     stiff, stiff_error = fit_telluric(wavelength, log_flux, log_flux_error,
                                       continuum_design(wavelength, stiff_knot_spacing), flexible, ['H2ODEPTH'])
     variance = stiff_error['H2ODEPTH'] ** 2.0 + (stiff['H2ODEPTH'] - flexible['H2ODEPTH']) ** 2.0
-    prior_variance = (water_scatter * scaled['H2ODEPTH']) ** 2.0
-    water_depth = stiff['H2ODEPTH'] / variance + scaled['H2ODEPTH'] / prior_variance
-    water_depth /= 1.0 / variance + 1.0 / prior_variance
+    prior_variance = (water_scatter * initial['H2ODEPTH']) ** 2.0
+    if np.isfinite(variance):
+        water_depth = (stiff['H2ODEPTH'] * prior_variance + initial['H2ODEPTH'] * variance) / (variance + prior_variance)
+    else:
+        water_depth = initial['H2ODEPTH']
     return {**flexible, 'H2ODEPTH': float(water_depth), 'AIRMASS': airmass}
 
 
@@ -126,9 +126,7 @@ class TelluricCorrector(Stage):
                 parameters = fit_science_telluric(np.array(data['wavelength'][to_fit]), flux, flux_error, standard,
                                                   image.airmass, image.wavelengths.lsf_sigma_angstroms(RED_ORDER))
             else:
-                scaled = {name: standard[name] * (image.airmass / standard['AIRMASS']) ** exponent
-                          for name, exponent in AIRMASS_EXPONENTS.items()}
-                parameters = {**standard, **scaled, 'TELSHIFT': 0.0, 'AIRMASS': image.airmass}
+                parameters = {**scale_to_airmass(standard, image.airmass), 'TELSHIFT': 0.0}
             telluric_model = telluric_transmission(data['wavelength'], parameters)
 
         for weighting in ['optimal', 'unweighted']:

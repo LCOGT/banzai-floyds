@@ -1,7 +1,7 @@
 import numpy as np
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_extracted_frame
-from banzai_floyds.telluric import TelluricCorrector, TelluricMaker, continuum_design
+from banzai_floyds.telluric import TelluricCorrector, TelluricMaker, continuum_design, fit_science_telluric
 from astropy.table import Table
 import mock
 
@@ -105,3 +105,14 @@ def test_faint_frame_takes_the_standard_telluric():
         np.testing.assert_allclose(applied[name], standard[name] * (1.0 / 1.3) ** exponent)
     assert applied['TELSHIFT'] == 0.0
     assert applied['TELSIGMA'] == standard['TELSIGMA']
+
+
+def test_science_fit_without_water_lines_takes_the_standard_water():
+    np.random.seed(40917)
+    standard = {'O2DEPTH': 0.9, 'H2ODEPTH': 0.5, 'TELSHIFT': 0.0, 'TELSIGMA': 5.0, 'AIRMASS': 1.2}
+    wavelength = np.arange(7550.0, 7720.0, 3.5)
+    flux_error = np.ones(len(wavelength))
+    flux = 100.0 * telluric_transmission(wavelength, standard) + np.random.normal(0.0, flux_error)
+    parameters = fit_science_telluric(wavelength, flux, flux_error, standard, 1.2, 6.0)
+    # The A band has no water lines, so the frame says nothing about water and the standard's depth stands
+    np.testing.assert_allclose(parameters['H2ODEPTH'], standard['H2ODEPTH'])

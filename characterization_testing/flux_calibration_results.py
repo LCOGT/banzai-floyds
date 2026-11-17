@@ -154,6 +154,17 @@ def run_stages(image, stage_names: list, context):
     return image
 
 
+def run_as_science(image, stage_names: list, context):
+    """`run_stages` with the frame typed SPECTRUM, so a standard is corrected the way a science frame is."""
+    obstype = image.obstype
+    image.obstype = 'SPECTRUM'
+    try:
+        image = run_stages(image, stage_names, context)
+    finally:
+        image.obstype = obstype
+    return image
+
+
 def robust_rms(values: np.ndarray) -> float:
     values = values[np.isfinite(values)]
     if len(values) == 0:
@@ -377,7 +388,7 @@ def calibrate_target(path: str, assignments: dict) -> tuple:
             return path, None, error
         image.sensitivity = Table(calibrator['sensitivity'])
         image.telluric = Table(calibrator['telluric'])
-        image = run_stages(image, SCIENCE_STAGES, _context)
+        image = run_as_science(image, SCIENCE_STAGES, _context)
         reference = reference_spectrum(image.ra, image.dec, _context)
 
         sigmas = {order_id: image.wavelengths.lsf_sigma_angstroms(order_id) for order_id in [1, 2]}

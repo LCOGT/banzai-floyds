@@ -26,7 +26,7 @@ from astropy.table import Table
 from scipy.ndimage import uniform_filter1d
 
 import flux_calibration_results
-from flux_calibration_results import ensure_standards_ingested, download_calspec, select_frames, run_stages
+from flux_calibration_results import ensure_standards_ingested, download_calspec, select_frames, run_as_science
 from flux_calibration_results import robust_rms, measure_standard, assign_calibrators, reference_spectrum
 from flux_calibration_results import LAST_EXTRACTION_STAGE
 from reduction_utils import reduce_to_stage, frame_metadata
@@ -118,6 +118,16 @@ def red_order_spectrum(image, reference: Table | None) -> dict:
             'good': good, 'in_region': in_region, 'smoothing': max(int(round(resolution)), 1)}
 
 
+def masked_boxcar(values: np.ndarray, good: np.ndarray, width: int) -> np.ndarray:
+    """Boxcar mean over `width` pixels of the grid `good` is on, of `values` at the `good` pixels, so a mean never
+    reaches past `width` pixels across a masked run."""
+    filled = np.zeros(len(good))
+    filled[good] = values
+    total = uniform_filter1d(filled, width, mode='nearest')
+    weight = uniform_filter1d(good.astype(float), width, mode='nearest')
+    return total[good] / weight[good]
+
+
 def measure_region(spectrum: dict, region: dict) -> dict | None:
     """Smoothness in one telluric region, or None if the order does not cover it with continuum both sides.
 
@@ -128,9 +138,9 @@ def measure_region(spectrum: dict, region: dict) -> dict | None:
     in-region selection, and the metrics written to the CSV (dip, peak, rms_in and noise in percent).
     """
     wavelength = spectrum['wavelength']
-    in_window = np.logical_and(wavelength >= region['wavelength_min'] - MARGIN,
-                               wavelength <= region['wavelength_max'] + MARGIN)
-    in_window = np.logical_and(in_window, spectrum['good'])
+    window = np.logical_and(wavelength >= region['wavelength_min'] - MARGIN,
+                            wavelength <= region['wavelength_max'] + MARGIN)
+    in_window = np.logical_and(window, spectrum['good'])
     x = wavelength[in_window]
     inside = np.logical_and(x >= region['wavelength_min'], x <= region['wavelength_max'])
     anchor = spectrum['template'][in_window] > CONTINUUM_TRANSMISSION
@@ -145,7 +155,7 @@ def measure_region(spectrum: dict, region: dict) -> dict | None:
     domain = [float(x.min()), float(x.max())]
     continuum = robust_legendre_fit(x[anchor], y[anchor], sigma[anchor], CONTINUUM_DEGREE, domain)(x)
     residual = np.exp(y - continuum) - 1.0
-    smoothed = uniform_filter1d(residual, spectrum['smoothing'], mode='nearest')
+    smoothed = masked_boxcar(residual, spectrum['good'][window], spectrum['smoothing'])
     pulls = (y - continuum) / sigma
     outside = np.logical_not(spectrum['in_region'][in_window])
     metrics = {'dip': 100.0 * float(np.min(smoothed[inside])), 'peak': 100.0 * float(np.max(smoothed[inside])),
@@ -171,7 +181,7 @@ def correct_target(path: str, assignments: dict, kinds: dict) -> tuple:
             return path, None, 'nothing was extracted'
         image.sensitivity = Table(calibrator['sensitivity'])
         image.telluric = Table(calibrator['telluric'])
-        image = run_stages(image, TELLURIC_STAGES, _context)
+        image = run_as_science(image, TELLURIC_STAGES, _context)
         spectrum = red_order_spectrum(image, reference_spectrum(image.ra, image.dec, _context))
         regions = [measure_region(spectrum, region) for region in TELLURIC_REGIONS]
         regions = [region for region in regions if region is not None]
