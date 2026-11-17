@@ -27,7 +27,7 @@ spec:
 
       containers:
         - name: banzai-floyds-e2e-redis
-          image: redis:5.0.3
+          image: redis:8.1
           imagePullPolicy: IfNotPresent
           resources:
             requests:
