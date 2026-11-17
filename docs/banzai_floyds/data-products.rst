@@ -184,6 +184,8 @@ The 2-D files also carry these header keywords from the reduction:
 
   - L1OBJDET: Whether an object was detected in the slit. L1PNPEAK is the most sources found in either order and
     L1PROFSN the matched filter signal-to-noise of the detected object.
+  - L1DETBRW, L1TRCBRW: The orders (comma separated, empty if none) where the object could not be detected or
+    traced, and whose position in the slit was borrowed from the other order instead.
   - L1FWHSRC, L1SHPSRC: Where the profile width (fit, star, line, or guess) and shape (fit, star, or gaussian) of each
     order came from. L1ISOSTR is whether the target is an isolated star in Gaia. L1PROFDG is the effective number of
     free parameters in the trace center fit.
@@ -191,10 +193,17 @@ The 2-D files also carry these header keywords from the reduction:
   - L1BKDG<order>, L1BKNK<order>, L1BKMW<order>: The degree of the sky polynomial across the slit, the number of knots
     of the sky spline in wavelength, and the half width (in profile sigma) of the region around the object left out of
     the sky fit.
-  - L1STATFR: 1 if the fringe correction was applied. L1FRNGSN is the per-pixel signal-to-noise of the fringe pattern
-    on this frame; below 2 the pattern is applied unshifted. L1FRNGOX and L1FRNGOY are the x and y shifts of the
-    pattern in pixels.
+  - L1STATFR: 1 if the fringe correction was applied. L1FRNGSN is the matched filter signal-to-noise of the fringe
+    pattern on this frame, measured away from the object; below 10 the pattern is applied unshifted. L1FRNGOX and
+    L1FRNGOY are the x and y shifts of the pattern in pixels.
+  - L1FROBJS, L1FROBJX, L1FROBJY, L1FROBJA: The matched filter signal-to-noise, x and y shifts in pixels, and amplitude
+    of the fringe pattern of the object, fit on the pixels where the object is brighter than the sky. The object's
+    pattern is used, in proportion to the object's share of the flux in each pixel, if L1FROBJS is at least 20.
+    Without L1IDFRNO, the shifts are relative to the shifted sky pattern and L1FROBJY is 0, unless the sky's shift
+    could not be fit (L1FRNGSN below 10), in which case they are relative to the unshifted pattern. See
+    :doc:`object-detection`.
   - L1IDFRNG (and L1IDFR02, ...): The fringe frame, or the lamp flats from the same block, used for the correction.
+  - L1IDFRNO: The stacked 2" slit fringe frame used for the object's pattern in frames taken through a wider slit.
   - L1IDARC, L1ORDRID, L1STNDRD: The arc, order (sky flat), and standard star frames used.
   - L1ID1D: The matching 1d file. The 1d file has L1ID2D pointing back to this one.
 

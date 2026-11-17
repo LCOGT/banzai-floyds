@@ -10,6 +10,11 @@ from astropy.table import Table
 from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, gauss
 from banzai_floyds.utils.flux_utils import airmass_extinction
 from numpy.polynomial.legendre import Legendre
+from types import SimpleNamespace
+import pytest
+from banzai_floyds.trim import Trimmer
+from banzai_floyds.flux import FluxSensitivity, FluxCalibrator
+from banzai_floyds.telluric import TelluricMaker, TelluricCorrector
 
 READ_NOISE = 6.5
 
@@ -182,3 +187,12 @@ def test_read_noise_limited_errors_match_the_scatter():
         pulls = (extracted[f'fluxraw_{weighting}'] - flux) / extracted[f'fluxrawerr_{weighting}']
         # Errors from each pixel's own |d| come out ~4% too large here, where many pixels read negative
         assert 0.97 < np.std(pulls) < 1.03
+
+
+@pytest.mark.parametrize('stage_class', [Trimmer, FluxSensitivity, FluxCalibrator, TelluricMaker, TelluricCorrector,
+                                         CombinedExtractor])
+def test_stages_after_the_extraction_pass_on_a_frame_with_nothing_extracted(stage_class):
+    # With no object in the slit there is no extraction, and the frame still has to reach the end of the
+    # pipeline so its 2d file gets written rather than being dropped on a None
+    image = SimpleNamespace(extracted=None)
+    assert stage_class(context.Context({})).do_stage(image) is image

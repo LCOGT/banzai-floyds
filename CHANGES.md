@@ -4,6 +4,25 @@ Versions
 1.1.0 (2026-06-03)
 ------------------
 
+- The object is now found by a new ObjectDetector stage that runs before the fringe correction,
+  instead of inside ProfileFitter. ProfileFitter traces the same detections again on the defringed
+  data. See the "Finding the Object and Correcting Its Fringes" docs page.
+- Each order is searched for the object over its own wavelength window (5700-6200 Angstroms in the
+  red, blueward of the fringing, and 4600-5400 in the blue), instead of 5500-5700 in both. The blue
+  order ends near 5600, so it used to miss objects that were clear in the red order.
+- The detection combines the columns with a median, so a cosmic ray in the window, which has not been
+  flagged yet, cannot be taken for the object.
+- The object is chosen in the order with the best detection and matched in the other, so both orders
+  extract the same object. An order where it cannot be detected or traced borrows its slit position
+  from the other order (L1DETBRW, L1TRCBRW), instead of the frame being dropped.
+- The sky's fringe shift is fit only on pixels away from the object's trace. A bright object used to
+  set the sky's shift with its own fringes. The object's share of the flux is zeroed outside that
+  region, so cosmic rays and other sources do not pull in the object's pattern.
+- When the sky's fringes are too faint to fit, the object's fringe shift is now fit in y as well as x.
+- Frames with no object detected now reach the end of the pipeline and are written as a 2d file.
+  Trimmer, FluxSensitivity, FluxCalibrator, TelluricMaker, TelluricCorrector, and CombinedExtractor
+  skip a frame with nothing extracted instead of raising on it.
+
 - Telluric fitting is now done before flux calibration. We allow
 the different molecule bands to vary independently now.
 - We now adopt an outlier rejection version of the Kelson 2-D B-spline method for the background fits.
@@ -21,6 +40,11 @@ the different molecule bands to vary independently now.
   SCI extension holds the fitted lamp continuum (SCI x FRINGE returns the flat) and the CONTINUUM
   extension is gone. FringeContinuumFitter is replaced by the FringeExtractor stage.
 - Widened the fringe shift search window to +-8 pixels in x (matching y).
+- The fringe shift is now fit whenever the matched filter detects the pattern with a S/N of at least 10
+- Objects get their own fringe pattern: a second shift and an amplitude fit on the pixels where the
+  object is brighter than the sky. Frames taken through a slit wider than 2" fit the stacked
+  2" slit pattern (L1IDFRNO) for the object, because a wide slit smears the lamp's fringes but not a
+  compact object's.
 - Removed matched-filter 2D fit step from locating the order positions due to instabilities
 - Significant updates to the wavelength solution, removing the 2-d match filter approach to
   increase the robustness of the fit.

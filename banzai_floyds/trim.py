@@ -4,6 +4,9 @@ import numpy as np
 
 class Trimmer(Stage):
     def do_stage(self, image):
+        # Nothing was extracted because no object was detected. The 2d frame is still written out.
+        if image.extracted is None:
+            return image
         # We need to trim ~10 pixels off each order to avoid artifacts with the background
         # The tilt of the arc lines is abou 8 degrees, so this corresponds to about just cutting wavelengths
         # The don't fully fall on the chip

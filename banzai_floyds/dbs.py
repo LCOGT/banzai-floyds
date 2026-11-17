@@ -384,7 +384,8 @@ def get_order_height(instrument, dateobs, slit_width, db_address):
         return order_height.height
 
 
-def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selection_criteria: list, db_address: str):
+def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selection_criteria: list, db_address: str,
+                   overrides: dict = None):
     """Search for the best calibration frame to use
 
     image: FLOYDSObservationFrame
@@ -395,6 +396,8 @@ def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selecti
         The list of attributes to match against the calibration frame
     db_address: str
         The address of the database to use (SQLAlchemy format)
+    overrides: dict
+        Values to match for any of the selection criteria in place of the image's own, e.g. another slit width
 
     Notes
     -----
@@ -407,11 +410,13 @@ def get_cal_record(image: FLOYDSCalibrationImage, calibration_type: str, selecti
     calibration_criteria &= FLOYDSCalibrationImage.is_master.is_(True)
     calibration_criteria &= FLOYDSCalibrationImage.is_bad.is_(False)
 
+    if overrides is None:
+        overrides = {}
     for criterion in selection_criteria:
         # We have to cast to strings according to the sqlalchemy docs for version 1.3:
         # https://docs.sqlalchemy.org/en/latest/core/type_basics.html?highlight=json#sqlalchemy.types.JSON
         calibration_criteria &= FLOYDSCalibrationImage.attributes[criterion].as_string() ==\
-                                str(getattr(image, criterion))
+                                str(overrides.get(criterion, getattr(image, criterion)))
 
     calibration_criteria &= FLOYDSCalibrationImage.good_after <= image.dateobs
     calibration_criteria &= FLOYDSCalibrationImage.good_until >= image.dateobs

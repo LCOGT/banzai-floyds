@@ -5,7 +5,6 @@ import banzai_floyds.dbs
 from banzai.stages import Stage
 from banzai.utils import import_utils
 from banzai.utils.file_utils import make_calibration_filename_function
-from banzai.utils.stats import absolute_deviation, robust_standard_deviation
 from banzai_floyds.utils.order_utils import get_order_2d_region
 from banzai_floyds.frames import MIN_FRINGE_VALUE, FRINGE_NO_PATTERN
 from banzai_floyds.frames import NoUsableFringePattern, valid_fringe_pixels
@@ -16,7 +15,7 @@ from scipy.ndimage import median as labeled_median
 from scipy.signal import savgol_filter
 from skimage.restoration import inpaint_biharmonic
 from banzai_floyds.matched_filter import optimize_match_filter, matched_filter_metric
-from banzai_floyds.matched_filter import matched_filter_normalization
+from banzai_floyds.matched_filter import matched_filter_normalization, matched_filter_signal
 from banzai.logs import get_logger, format_exception
 import numpy as np
 from banzai.data import ArrayData
@@ -34,6 +33,9 @@ logger = get_logger()
 # fit metric unimodal.
 MAX_FRINGE_OFFSET_X = 8
 MAX_FRINGE_OFFSET_Y = 8
+# An object can sit anywhere across a wide slit, which displaces its fringes along the dispersion
+# by more than flexure moves the sky's.
+MAX_OBJECT_FRINGE_OFFSET_X = 12
 
 # The brute force offset search steps by this many pixels before refining onto the unit pixel grid.
 FRINGE_OFFSET_GRID_STEP = 2
@@ -242,7 +244,7 @@ def find_fringe_offset(data: np.ndarray, uncertainty: np.ndarray, to_fit: np.nda
         np.arange(max(coarse_y - FRINGE_OFFSET_GRID_STEP + 1, -y_max_offset),
                   min(coarse_y + FRINGE_OFFSET_GRID_STEP, y_max_offset + 1)), metric
     )
-    if abs(best_x) == x_max_offset or abs(best_y) == y_max_offset:
+    if abs(best_x) == x_max_offset or (y_max_offset > 0 and abs(best_y) == y_max_offset):
         logger.warning('Fringe offset grid search peaked at the edge of the search window. '
                        'The fitted offset is probably not reliable.', image=image)
     best_fit = optimize_match_filter([best_x, best_y], normalized_data, errors, fringe_weights, (x, y),
@@ -386,6 +388,50 @@ def fit_lamp_continuum(image, cutoff: float, wavelet: str = 'sym8', level: int =
     return continuum_data
 
 
+def estimate_sky(image, data: np.ndarray, cutoff: float) -> np.ndarray:
+    """
+    Median of each (tilted) wavelength bin over the fringe region of the red order.
+
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame with orders and wavelengths set
+    data: 2d array to take the medians of
+    cutoff: float minimum wavelength in angstroms of the region with fringing
+
+    Returns
+    -------
+    2d array of the sky, zero outside the fringe region
+    """
+    in_region = np.logical_and(image.orders.data == 1, image.wavelengths.data >= cutoff)
+    bin_number = np.digitize(image.wavelengths.data[in_region], image.wavelengths.bin_edges[0])
+    bins, bin_index = np.unique(bin_number, return_inverse=True)
+    sky = np.zeros_like(data)
+    sky[in_region] = labeled_median(data[in_region], labels=bin_number, index=bins)[bin_index]
+    return sky
+
+
+def object_flux_fraction(image, source_flux: np.ndarray, data: np.ndarray, cutoff: float) -> np.ndarray:
+    """
+    Fraction of the smooth signal in each pixel that is object rather than sky.
+
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame with orders and wavelengths set
+    source_flux: 2d array of the smooth sky + object signal from fit_science_source_flux
+    data: 2d array source_flux was fit to
+    cutoff: float minimum wavelength in angstroms of the region with fringing
+
+    Returns
+    -------
+    2d array between 0 and 1, zero outside the fringe region
+    """
+    in_region = np.logical_and(image.orders.data == 1, image.wavelengths.data >= cutoff)
+    has_flux = np.logical_and(in_region, source_flux > 0)
+    fraction = np.zeros_like(source_flux)
+    fraction[has_flux] = 1.0 - estimate_sky(image, data, cutoff)[has_flux] / source_flux[has_flux]
+    return np.clip(fraction, 0.0, 1.0)
+
+
 def fit_science_source_flux(image, cutoff: float, smoothing_window: int = 101,
                             smoothing_order: int = 3, data: np.ndarray = None) -> np.ndarray:
     """
@@ -416,12 +462,7 @@ def fit_science_source_flux(image, cutoff: float, smoothing_window: int = 101,
     if data is None:
         data = image.data
     in_region = np.logical_and(image.orders.data == 1, image.wavelengths.data >= cutoff)
-    # Use the same wavelength bins as the binning stage so the sky estimate matches what the
-    # extraction will eventually see
-    bin_number = np.digitize(image.wavelengths.data[in_region], image.wavelengths.bin_edges[0])
-    bins, bin_index = np.unique(bin_number, return_inverse=True)
-    sky = np.zeros_like(data)
-    sky[in_region] = labeled_median(data[in_region], labels=bin_number, index=bins)[bin_index]
+    sky = estimate_sky(image, data, cutoff)
 
     residual = data - sky
     continuum = data.copy()
@@ -610,7 +651,9 @@ class FringeMaker(CalibrationMaker):
 
 
 def fit_fringe_shift(image, source_flux: np.ndarray, fringe_coefficients: np.ndarray,
-                     fringe_valid: np.ndarray, cutoff: float) -> tuple:
+                     fringe_valid: np.ndarray, cutoff: float, pixels: np.ndarray = None,
+                     x_max_offset: int = MAX_FRINGE_OFFSET_X, y_max_offset: int = MAX_FRINGE_OFFSET_Y,
+                     data: np.ndarray = None) -> tuple:
     """
     Fit the (x, y) shift of the stacked fringe pattern in a frame, given a sky + source model.
     The source could be astrophysical or a lamp.
@@ -622,18 +665,30 @@ def fit_fringe_shift(image, source_flux: np.ndarray, fringe_coefficients: np.nda
     fringe_coefficients: 2d array from fringe_interpolation_coefficients of the fringe pattern
     fringe_valid: 2d bool array marking valid pixels of the fringe pattern
     cutoff: float minimum wavelength in angstroms of the region with fringing
+    pixels: optional 2d bool array to limit the fit to, e.g. the pixels the object dominates
+    x_max_offset, y_max_offset: int half-widths of the offset search window in pixels
+    data: optional 2d array to fit instead of image.data, e.g. the frame with the sky taken out
 
     Returns
     -------
     x_offset, y_offset: floats, position of the frame's pattern relative to the input fringe pattern
+    snr: float matched filter S/N of the pattern at that shift, S / sqrt(N) with S = Σ d w / σ² and
+        N = Σ w² / σ² (Zackay et al. 2017)
+    amplitude: float fringe amplitude in the frame relative to the input pattern, S / N
+
+    Notes
+    -----
+    With no pixels to fit, the shift is zero with a S/N of zero.
     """
+    if data is None:
+        data = image.data
     normalized_data = np.ones_like(image.data)
     normalized_uncertainty = np.ones_like(image.data)
     good_data = np.logical_and(image.orders.data == 1, source_flux > 0)
-    normalized_data[good_data] = image.data[good_data] / source_flux[good_data]
+    normalized_data[good_data] = data[good_data] / source_flux[good_data]
 
     normalized_uncertainty[good_data] = image.uncertainty[good_data] / source_flux[good_data]
-    to_fit = fringe_fit_region(image, fringe_valid, cutoff)
+    to_fit = fringe_fit_region(image, fringe_valid, cutoff, x_max_offset=x_max_offset, y_max_offset=y_max_offset)
     to_fit = np.logical_and(to_fit, good_data)
     # Our source model is often a smoothed version of the image and cannot follow sharp features
     # (sky line and emission line residuals), and real fringe amplitudes are usually below 50%
@@ -645,10 +700,81 @@ def fit_fringe_shift(image, source_flux: np.ndarray, fringe_coefficients: np.nda
     for row in np.unique(slit_rows[to_fit]):
         in_row = np.logical_and(to_fit, slit_rows == row)
         normalized_data[in_row] /= np.median(normalized_data[in_row])
+    if pixels is not None:
+        to_fit = np.logical_and(to_fit, pixels)
+    if not np.any(to_fit):
+        return 0.0, 0.0, 0.0, 1.0
     # Now we can run the simple fringe matched filter to find the shift now that we have removed the object
     # and sky flux.
-    return find_fringe_offset(normalized_data, normalized_uncertainty, to_fit, fringe_coefficients,
-                              image=image)
+    x_offset, y_offset = find_fringe_offset(normalized_data, normalized_uncertainty, to_fit, fringe_coefficients,
+                                            x_max_offset=x_max_offset, y_max_offset=y_max_offset, image=image)
+    weights = fringe_weights((x_offset, y_offset), (x2d[to_fit], y2d[to_fit]), fringe_coefficients)
+    signal = matched_filter_signal(normalized_data[to_fit] - 1.0, normalized_uncertainty[to_fit], weights)
+    normalization = matched_filter_normalization(None, normalized_uncertainty[to_fit], weights)
+    return x_offset, y_offset, signal / normalization, signal / normalization ** 2
+
+
+def fit_object_fringe(image, source_flux: np.ndarray, object_fraction: np.ndarray, sky_pattern: np.ndarray,
+                      cutoff: float, sky_shift_measured: bool = True) -> tuple:
+    """
+    Fit the fringe pattern of the object on the pixels it dominates.
+
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame with orders, wavelengths, and mask set
+    source_flux: 2d array of the smooth fringe-free sky + object signal
+    object_fraction: 2d array of the fraction of the flux in each pixel that is from the object
+    sky_pattern: 2d array of the fringe pattern of the sky in this frame, zero where it has no valid data
+    cutoff: float minimum wavelength in angstroms of the region with fringing
+    sky_shift_measured: bool, whether sky_pattern was shifted by a fitted offset rather than applied unshifted
+
+    Returns
+    -------
+    object_pattern: 2d array of the object's fringe pattern, zero where it has no valid data
+    x_offset, y_offset: floats, position of the object's pattern relative to the pattern it was fit with
+    snr: float matched filter S/N of the object's pattern, zero if the fit ran to the edge of the search window
+    amplitude: float fringe amplitude of the object relative to the pattern it was fit with
+    """
+    y_max_offset = 0 if sky_shift_measured else MAX_FRINGE_OFFSET_Y
+    object_fringe, x_max_offset = sky_pattern, MAX_FRINGE_OFFSET_X
+    if image.object_fringe is not None:
+        object_fringe, x_max_offset, y_max_offset = image.object_fringe, MAX_OBJECT_FRINGE_OFFSET_X, MAX_FRINGE_OFFSET_Y
+    coefficients, valid = fringe_interpolation_coefficients(object_fringe, object_fringe > MIN_FRINGE_VALUE)
+    object_flux = object_fraction * source_flux
+    fringed_sky = (source_flux - object_flux) * np.where(sky_pattern > MIN_FRINGE_VALUE, sky_pattern, 1.0)
+    x_offset, y_offset, snr, amplitude = fit_fringe_shift(image, object_flux, coefficients, valid, cutoff,
+                                                          pixels=object_fraction > 0.5,
+                                                          x_max_offset=x_max_offset, y_max_offset=y_max_offset,
+                                                          data=image.data - fringed_sky)
+    if image.object_fringe is None:
+        amplitude = max(amplitude, 1.0)
+    if abs(x_offset) > x_max_offset - 0.5:
+        snr = 0.0
+    object_pattern = shift_fringe_pattern(image, coefficients, valid, x_offset, y_offset, cutoff)
+    return object_pattern, x_offset, y_offset, snr, amplitude
+
+
+def mix_object_fringe(sky_pattern: np.ndarray, object_pattern: np.ndarray, object_fraction: np.ndarray,
+                      amplitude: float) -> np.ndarray:
+    """
+    Fringe pattern of pixels that hold both sky and object flux, F = (1 - f) F_sky + f (1 + A (F_object - 1)).
+
+    Parameters
+    ----------
+    sky_pattern: 2d array of the fringe pattern of the sky, zero where it has no valid data
+    object_pattern: 2d array of the fringe pattern of the object, zero where it has no valid data
+    object_fraction: 2d array of the fraction f of the flux in each pixel that is from the object
+    amplitude: float fringe amplitude A of the object relative to object_pattern
+
+    Returns
+    -------
+    2d array of the mixed pattern, the sky pattern wherever the object pattern has no valid data
+    """
+    mixed = sky_pattern.copy()
+    both = np.logical_and(sky_pattern > MIN_FRINGE_VALUE, object_pattern > MIN_FRINGE_VALUE)
+    mixed[both] = (1.0 - object_fraction[both]) * sky_pattern[both]
+    mixed[both] += object_fraction[both] * (1.0 + amplitude * (object_pattern[both] - 1.0))
+    return mixed
 
 
 def shift_fringe_pattern(image, fringe_coefficients: np.ndarray, fringe_valid: np.ndarray,
@@ -717,17 +843,60 @@ def divide_binned_data(image, correction: np.ndarray, to_correct: np.ndarray) ->
     image.binned_data['uncertainty'][corrected] /= correction[y, x][corrected]
 
 
+def object_mask(image, half_width: float) -> np.ndarray:
+    """
+    Pixels of the red order within half_width of the object's trace.
+
+    Parameters
+    ----------
+    image: FLOYDSObservationFrame with orders and wavelengths set. image.object_traces is the object's center in
+        the slit as a function of wavelength in each order, from ObjectDetector, or None if no object was found.
+    half_width: float half-width of the mask across the slit, in pixels
+
+    Returns
+    -------
+    2d bool array, all False if there is no object
+    """
+    mask = np.zeros(image.shape, dtype=bool)
+    if image.object_traces is None:
+        return mask
+    in_order = image.orders.data == 1
+    x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))
+    slit_position = y2d[in_order] - image.orders.center(x2d[in_order])[0]
+    trace_center = image.object_traces[0](image.wavelengths.data[in_order])
+    mask[in_order] = np.abs(slit_position - trace_center) <= half_width
+    return mask
+
+
 class FringeCorrector(Stage):
     """
     Stage that divides out the fringe pattern measured from the flat, shifted to match this frame
 
     Note that we save the shifted fringe pattern here so the transform can be undone
     by downstream users.
+
+    Notes
+    -----
+    The sky fully illuminates the slit like the lamp does, so its fringes are the flat's, shifted by flexure. 
+    An object narrower than the slit puts a smaller range of wavelengths on each pixel, so its fringes are stronger
+    than a wide slit flat's and are displaced by where the object sits in the slit. We fit a second shift
+    and an amplitude on the pixels the object dominates, against a narrow slit pattern if the loader found
+    one. If the object's fringes are detected (L1FROBJS of at least MIN_OBJECT_FRINGE_SNR), each pixel is
+    corrected with the two patterns in proportion to its object and sky flux.
+    
+    The object's share (vs. sky) of the flux in each pixel is measured from the data rather than from a
+    fitted profile, which is not available until after this stage. It is set to zero outside the mask, so that
+    a cosmic ray or a second source cannot pull in the object's pattern. With no object detected, the mask is
+    empty and the sky pattern is fit on, and applied to, every pixel.
     """
 
-    # Minimum signal-to-noise per pixel of the fringe estimate from this frame
+    # Minimum matched filter S/N (Zackay et al. 2017) of the fringe pattern in this frame.
     # Below this threshold, we are just shifting to noise
-    MIN_FRINGE_SNR = 2.0
+    MIN_FRINGE_SNR = 10.0
+    MIN_OBJECT_FRINGE_SNR = 20.0
+    # Half-width across the slit, in pixels, of the region around the object's trace that is kept out of the
+    # sky's fit. About 2 FWHM of 2" seeing, so it covers the wings without taking much of the slit.
+    OBJECT_MASK_HALF_WIDTH = 12.0
 
     def do_stage(self, image):
         cutoff = self.runtime_context.FRINGE_CUTOFF_WAVELENGTH
@@ -735,35 +904,18 @@ class FringeCorrector(Stage):
         fringe_coefficients, fringe_samplable = fringe_interpolation_coefficients(image.fringe, fringe_valid)
         logger.info('Fitting fringe offset', image=image)
 
+        on_object = object_mask(image, self.OBJECT_MASK_HALF_WIDTH)
+        sky_pixels = np.logical_not(on_object)
         source_flux = fit_science_source_flux(image, cutoff)
-        # The matched filter normalization is the total significance for the pattern in this frame,
-        # Dividing by sqrt(N) puts it back on a per-pixel scale.
-        region = np.logical_and(image.orders.data == 1, image.wavelengths.data >= cutoff)
-        region = np.logical_and(region, np.logical_and(fringe_samplable, source_flux > 0))
-        fringe_amplitude = image.fringe[region] - 1.0
-        fringe_noise = image.uncertainty[region] / source_flux[region]
-
-        deviation = absolute_deviation(fringe_amplitude)
-        # Flag bad pixels
-        good = deviation < 5.0 * robust_standard_deviation(fringe_amplitude, abs_deviation=deviation)
-        if np.any(good):
-            # We can pass None here because data array is unused in the normalization unless norm_data is true
-            fringe_snr = matched_filter_normalization(None, fringe_noise[good],
-                                                      fringe_amplitude[good]) / np.sqrt(good.sum())
-        else:
-            # Nothing left to measure the pattern with, so take the unshifted branch below rather
-            # than dividing by zero and comparing a nan to the threshold
-            fringe_snr = 0.0
+        # Do an iterative fit on the fringe shift
+        # First pass: subtract the sky and then fits the shift
+        x_offset, y_offset, fringe_snr, _ = fit_fringe_shift(image, source_flux, fringe_coefficients,
+                                                             fringe_samplable, cutoff, pixels=sky_pixels)
         if fringe_snr < self.MIN_FRINGE_SNR:
-            logger.warning(f'Per-pixel fringe S/N of {fringe_snr:.1f} is too low to constrain the '
+            logger.warning(f'Fringe S/N of {fringe_snr:.1f} is too low to constrain the '
                            'pattern shift. Applying the master fringe unshifted.', image=image)
             x_offset, y_offset = 0.0, 0.0
-        else:
-            # Do an iterative fit on the fringe shift
-            # First pass: subtract the sky and then fits the shift
-            x_offset, y_offset = fit_fringe_shift(image, source_flux, fringe_coefficients,
-                                                  fringe_samplable, cutoff)
-        # Refit the source model on the frame with the current pattern divided out so that it is not
+        # Refit (iterate) the source model on the frame with the current pattern divided out so that it is not
         # partly following the fringes. This is the model we measure the pattern against below, so we
         # do it whether or not we are fitting the shift.
         first_pass = shift_fringe_pattern(image, fringe_coefficients, fringe_samplable,
@@ -774,17 +926,30 @@ class FringeCorrector(Stage):
         source_flux = fit_science_source_flux(image, cutoff, data=defringed)
         if fringe_snr >= self.MIN_FRINGE_SNR:
             # Then use the defringed data as the model for the sky in the second pass to fit the final shift
-            x_offset, y_offset = fit_fringe_shift(image, source_flux, fringe_coefficients,
-                                                  fringe_samplable, cutoff)
+            x_offset, y_offset, _, _ = fit_fringe_shift(image, source_flux, fringe_coefficients,
+                                                        fringe_samplable, cutoff, pixels=sky_pixels)
         fringe_correction = shift_fringe_pattern(image, fringe_coefficients, fringe_samplable,
                                                  x_offset, y_offset, cutoff)
+
+        object_fraction = object_flux_fraction(image, source_flux, defringed, cutoff)
+        object_fraction[sky_pixels] = 0.0
+        object_pattern, object_x, object_y, object_snr, amplitude = fit_object_fringe(
+            image, source_flux, object_fraction, fringe_correction, cutoff,
+            sky_shift_measured=fringe_snr >= self.MIN_FRINGE_SNR
+        )
+        if object_snr >= self.MIN_OBJECT_FRINGE_SNR:
+            fringe_correction = mix_object_fringe(fringe_correction, object_pattern, object_fraction, amplitude)
         to_correct = fringe_correction > MIN_FRINGE_VALUE
         image.data[to_correct] /= fringe_correction[to_correct]
         image.uncertainty[to_correct] /= fringe_correction[to_correct]
         divide_binned_data(image, fringe_correction, to_correct)
-        image.meta['L1FRNGSN'] = (fringe_snr, 'Per-pixel S/N of the fringe pattern')
+        image.meta['L1FRNGSN'] = (fringe_snr, 'Matched filter S/N of the fringe pattern')
         image.meta['L1FRNGOX'] = (x_offset, 'Fringe pattern x offset (pixels)')
         image.meta['L1FRNGOY'] = (y_offset, 'Fringe pattern y offset (pixels)')
+        image.meta['L1FROBJS'] = (object_snr, 'Matched filter S/N of the object fringes')
+        image.meta['L1FROBJX'] = (object_x, 'Object fringe x offset (pixels)')
+        image.meta['L1FROBJY'] = (object_y, 'Object fringe y offset (pixels)')
+        image.meta['L1FROBJA'] = (amplitude, 'Object fringe amplitude')
         image.meta['L1STATFR'] = (1, 'Status flag for fringe frame correction')
 
         image.fringe = fringe_correction
@@ -807,7 +972,13 @@ class FringeLoader(FLOYDSCalibrationUser):
        then the same proposal, then public
 
     For lamp flats, we always use a stacked superflat so that we can align as we go.
+
+    Science frames taken through a slit wider than OBJECT_FRINGE_SLIT_WIDTH also get the stacked pattern
+    of that narrower slit, which is the one a compact object's fringes follow.
     """
+    # Slit width in arcseconds, comparable to the seeing
+    OBJECT_FRINGE_SLIT_WIDTH = 2.0
+
     def on_missing_master_calibration(self, image):
         if image.obstype == 'LAMPFLAT':
             return image
@@ -820,6 +991,7 @@ class FringeLoader(FLOYDSCalibrationUser):
 
     def do_stage(self, image):
         if image.obstype != 'LAMPFLAT':
+            self.load_object_fringe(image)
             flats = self.open_same_block_flats(image)
             if flats:
                 try:
@@ -836,6 +1008,22 @@ class FringeLoader(FLOYDSCalibrationUser):
                     return image
         # Fallback to the normal stacked loader
         return super(FringeLoader, self).do_stage(image)
+
+    def load_object_fringe(self, image) -> None:
+        """Load the stacked pattern of a narrow slit for the object in a frame taken through a wider one."""
+        if image.slit_width <= self.OBJECT_FRINGE_SLIT_WIDTH:
+            return
+        record = banzai_floyds.dbs.get_cal_record(image, self.calibration_type, self.master_selection_criteria,
+                                                  self.runtime_context.db_address,
+                                                  overrides={'slit_width': self.OBJECT_FRINGE_SLIT_WIDTH})
+        if record is None:
+            logger.warning(f'No {self.OBJECT_FRINGE_SLIT_WIDTH}" slit fringe frame for the object. '
+                           'Using the pattern of this slit.', image=image)
+            return
+        frame_factory = import_utils.import_attribute(self.runtime_context.FRAME_FACTORY)()
+        narrow_frame = frame_factory.open(banzai.dbs.cal_record_to_file_info(record), self.runtime_context)
+        image.object_fringe = narrow_frame.fringe
+        image.meta['L1IDFRNO'] = (narrow_frame.filename, 'ID of object fringe frame')
 
     def open_same_block_flats(self, image) -> list:
         """Open the processed lamp flats from this frame's own observing block, oldest first."""

@@ -2,7 +2,7 @@ from banzai_floyds.profile import stack_slit_profile, find_peaks, detect_point_s
 from banzai_floyds.profile import choose_source_to_extract
 from banzai_floyds.profile import remove_coarse_local_background, remove_smooth_background
 from banzai_floyds.profile import trace_object, half_maximum_width, fit_profile_fwhm
-from banzai_floyds.profile import ProfileFitter, fit_shape_params
+from banzai_floyds.profile import ProfileFitter, ObjectDetector, fit_shape_params, borrow_missing_traces
 from banzai_floyds.dbs import create_db, add_profile_shape, get_star_profile_shape
 from banzai_floyds.utils import gaia_utils
 from banzai_floyds.tests.utils import generate_fake_science_frame, fake_gaia_field, fake_gaia_source
@@ -23,11 +23,18 @@ OBJECT_FWHM = 10.0
 DETECTION_AT_5600 = {1: {'detection_wavelength': 5600.0}, 2: {'detection_wavelength': 5600.0}}
 
 
+DETECTION_WINDOWS = ObjectDetector.DETECTION_WINDOWS
+
+
+def window_center(order_id):
+    return float(np.mean(DETECTION_WINDOWS[order_id]))
+
+
 def detect_in_fake_frame(frame, initial_fwhm=OBJECT_FWHM, **kwargs):
     """Bin a fake frame the way the stage does and run the detection over it."""
     binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
-    return detect_point_sources(binned_data, frame.orders, exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
-                                initial_fwhm=initial_fwhm, **kwargs)
+    return detect_point_sources(binned_data, frame.orders, DETECTION_WINDOWS,
+                                exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, initial_fwhm=initial_fwhm, **kwargs)
 
 
 def stack_fake_frame(frame, **kwargs):
@@ -37,8 +44,8 @@ def stack_fake_frame(frame, **kwargs):
                                            **kwargs)
 
 
-def input_center(frame, wavelength=5600.0):
-    return float(frame.input_profile_centers[0](wavelength))
+def input_center(frame, wavelength=5600.0, order_id=1):
+    return float(frame.input_profile_centers[order_id - 1](wavelength))
 
 
 def test_stack_slit_profile_recovers_the_object_and_the_sky():
@@ -83,11 +90,12 @@ def test_detect_point_sources_finds_the_object():
     sources = detect_in_fake_frame(frame, min_snr=10.0)
 
     assert sorted(sources) == [1, 2]
-    for order_sources in sources.values():
+    for order_id, order_sources in sources.items():
         source, = order_sources
-        assert source['center'] == pytest.approx(input_center(frame), abs=0.5)
+        # Each order is searched over its own window, so the detection is wherever the object is in that window
+        assert source['center'] == pytest.approx(input_center(frame, window_center(order_id), order_id), abs=0.5)
         assert source['snr'] > 100.0
-        assert source['detection_wavelength'] == 5600.0
+        assert source['detection_wavelength'] == window_center(order_id)
         assert source['max_flux'] > 0.0
 
 
@@ -100,15 +108,18 @@ def test_blank_sky_has_no_sources():
 def test_two_objects_are_both_found_brightest_first():
     np.random.seed(20802345)
     frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
-                                        second_trace_offset=30.0, second_trace_fraction=0.4)
+                                        second_trace_offset=25.0, second_trace_fraction=0.4)
     sources = detect_in_fake_frame(frame, min_snr=10.0)
 
-    for order_sources in sources.values():
+    for order_id, order_sources in sources.items():
         assert len(order_sources) == 2
         assert order_sources[0]['snr'] > order_sources[1]['snr']
         centers = sorted(source['center'] for source in order_sources)
-        assert centers[0] == pytest.approx(input_center(frame), abs=1.0)
-        assert centers[1] == pytest.approx(input_center(frame) + 30.0, abs=1.0)
+        expected = input_center(frame, window_center(order_id), order_id)
+        # 2.5 FWHM apart, each source's wing lands in the other's running median background, which pushes the
+        # two detections about a pixel apart. The trace refines the centers afterwards.
+        assert centers[0] == pytest.approx(expected, abs=1.5)
+        assert centers[1] == pytest.approx(expected + 25.0, abs=1.5)
 
 
 def test_a_cosmic_ray_is_not_a_source():
@@ -127,9 +138,10 @@ def test_a_source_against_the_end_of_the_slit_is_rejected():
     sources = detect_in_fake_frame(frame, min_snr=10.0)
 
     # The running median has only one side of the slit to work with that close to the end
-    for order_sources in sources.values():
+    for order_id, order_sources in sources.items():
         assert len(order_sources) == 1
-        assert order_sources[0]['center'] == pytest.approx(input_center(frame), abs=0.5)
+        assert order_sources[0]['center'] == pytest.approx(input_center(frame, window_center(order_id), order_id),
+                                                           abs=0.5)
 
 
 def trace_fake_frame(fake_frame, point_sources=None, snr_threshold=ProfileFitter.CHUNK_SNR, **kwargs):
@@ -137,11 +149,11 @@ def trace_fake_frame(fake_frame, point_sources=None, snr_threshold=ProfileFitter
     binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
                            fake_frame.orders)
     fwhm = sigma_to_fwhm(fake_frame.input_profile_sigma)
-    sources_by_order = detect_point_sources(binned_data, fake_frame.orders,
+    sources_by_order = detect_point_sources(binned_data, fake_frame.orders, DETECTION_WINDOWS,
                                             exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
-                                            initial_fwhm=fwhm, min_snr=ProfileFitter.DETECTION_SNR)
+                                            initial_fwhm=fwhm, min_snr=ObjectDetector.DETECTION_SNR)
     if point_sources is None:
-        point_sources = choose_source_to_extract(sources_by_order)
+        point_sources, _ = choose_source_to_extract(sources_by_order, DETECTION_WINDOWS, max_separation=fwhm)
     trace_polynomials, trace_points = trace_object(point_sources, binned_data, fake_frame.orders, fwhm,
                                                    ProfileFitter.STEP_SIZE, snr_threshold,
                                                    fake_frame.wavelengths.wavelength_domains,
@@ -427,6 +439,9 @@ def run_profile_stage(fake_frame, runtime_context=None):
                                       fake_frame.orders)
     fake_frame.instrument = SimpleNamespace(id=1, site='ogg', camera='en02')
     fake_frame.ra, fake_frame.dec = TARGET_RA, TARGET_DEC
+    detector = ObjectDetector(runtime_context)
+    detector.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
+    fake_frame = detector.do_stage(fake_frame)
     stage = ProfileFitter(runtime_context)
     stage.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
     return stage, stage.do_stage(fake_frame)
@@ -446,7 +461,7 @@ def test_profile_stage_records_qc_headers(gaia_field):
     # The trace is a penalized spline, so what is recorded is how many parameters the chunks paid
     # for, somewhere between a straight line and the size of the basis
     assert 2.0 <= fake_frame.meta['L1PROFDG'] <= settings.PROFILE_TRACE_POLYNOMIAL_DEGREE + 1
-    assert fake_frame.meta['L1PROFSN'] > stage.DETECTION_SNR
+    assert fake_frame.meta['L1PROFSN'] > ObjectDetector.DETECTION_SNR
     assert fake_frame.meta['L1PNPEAK'] >= 1
     assert fake_frame.meta['L1ISOSTR']
     assert fake_frame.meta['L1FWHSRC'] == 'fit,fit'
@@ -519,3 +534,126 @@ def test_the_profile_round_trips_through_the_header():
             wavelengths = np.linspace(fitted.domain[0], fitted.domain[1], 1000)
             np.testing.assert_allclose(loaded(wavelengths), fitted(wavelengths))
             np.testing.assert_allclose(loaded.domain, fitted.domain)
+
+
+def detection_window_column(frame, order_id=1):
+    """A detector column in the middle of an order's detection window."""
+    in_window = np.logical_and(frame.orders.data == order_id,
+                               np.abs(frame.wavelengths.data - window_center(order_id)) < 20.0)
+    return int(np.median(np.where(in_window)[1]))
+
+
+def test_a_cosmic_ray_in_the_detection_window_is_not_the_object():
+    np.random.seed(671234)
+    # The detection runs before the cosmic ray rejection. A cosmic ray in a few columns of the window is far
+    # brighter than the object in any one column, but it is not in the median of the window's columns.
+    frame = generate_fake_science_frame(flux_normalization=10000.0)
+    x = detection_window_column(frame)
+    y = int(frame.orders.center(np.array([x]))[0][0] - 16)
+    frame.data[y - 1:y + 2, x - 1:x + 2] += 5e5
+    sources = detect_in_fake_frame(frame, min_snr=10.0)
+    source, = sources[1]
+    assert source['center'] == pytest.approx(input_center(frame, window_center(1), 1), abs=0.5)
+
+
+def test_the_same_object_is_extracted_in_both_orders():
+    # The brightest source differs between the orders. The object is chosen in the order with the best detection
+    # and the other order takes the source closest to it, rather than each order picking its own.
+    sources = {1: [{'center': 0.0, 'snr': 50.0}, {'center': 20.0, 'snr': 10.0}],
+               2: [{'center': 20.0, 'snr': 30.0}, {'center': 1.5, 'snr': 20.0}]}
+    point_sources, borrowed = choose_source_to_extract(sources, DETECTION_WINDOWS, max_separation=6.0)
+    assert point_sources[1]['center'] == 0.0
+    assert point_sources[2]['center'] == 1.5
+    assert borrowed == []
+
+
+def test_an_order_with_no_detection_near_the_object_borrows_its_position():
+    sources = {1: [{'center': 3.0, 'snr': 40.0}], 2: [{'center': 25.0, 'snr': 12.0}]}
+    point_sources, borrowed = choose_source_to_extract(sources, DETECTION_WINDOWS, max_separation=6.0)
+    assert borrowed == [2]
+    assert point_sources[2] == {'center': 3.0, 'snr': 0.0, 'max_flux': 0.0,
+                                'detection_wavelength': window_center(2)}
+
+
+def test_the_object_can_be_found_in_either_order():
+    # A blue object, with nothing in the red order's window
+    sources = {1: [], 2: [{'center': -4.0, 'snr': 15.0}]}
+    point_sources, borrowed = choose_source_to_extract(sources, DETECTION_WINDOWS, max_separation=6.0)
+    assert borrowed == [1]
+    assert point_sources[1]['center'] == -4.0
+    assert point_sources[2]['snr'] == 15.0
+    assert choose_source_to_extract({1: [], 2: []}, DETECTION_WINDOWS, max_separation=6.0) == ({}, [])
+
+
+def test_an_untraced_order_borrows_the_nearest_end_of_the_other_order():
+    red_domain, blue_domain = (4750.0, 10100.0), (3300.0, 5600.0)
+    red = Legendre([2.0, 1.0], domain=red_domain)
+    blue = Legendre([-1.0, 0.5], domain=blue_domain)
+    traces, borrowed = borrow_missing_traces([red, None], [red_domain, blue_domain])
+    assert borrowed == [2]
+    assert traces[0] is red
+    # The blue order sits blueward of the red one, so it takes the red trace at the red order's blue end
+    np.testing.assert_allclose(traces[1](np.linspace(*blue_domain, 10)), red(red_domain[0]))
+    np.testing.assert_allclose(traces[1].domain, blue_domain)
+    assert traces[1].effective_dof == 1.0
+
+    traces, borrowed = borrow_missing_traces([None, blue], [red_domain, blue_domain])
+    assert borrowed == [1]
+    np.testing.assert_allclose(traces[0](np.linspace(*red_domain, 10)), blue(blue_domain[1]))
+
+    assert borrow_missing_traces([None, None], [red_domain, blue_domain]) == ([None, None], [])
+    assert borrow_missing_traces([red, blue], [red_domain, blue_domain]) == ([red, blue], [])
+
+
+def run_object_detector(fake_frame, runtime_context=None):
+    if runtime_context is None:
+        runtime_context = profile_context()
+    fake_frame.binned_data = bin_data(fake_frame.data, fake_frame.uncertainty, fake_frame.wavelengths,
+                                      fake_frame.orders)
+    detector = ObjectDetector(runtime_context)
+    detector.INITIAL_FWHM = sigma_to_fwhm(fake_frame.input_profile_sigma)
+    return detector.do_stage(fake_frame)
+
+
+def test_object_detector_finds_and_traces_the_object():
+    np.random.seed(80125)
+    fake_frame = run_object_detector(generate_fake_science_frame(include_sky=True, flux_normalization=10000.0))
+    assert sorted(fake_frame.point_sources) == [1, 2]
+    assert fake_frame.meta['L1DETBRW'] == ''
+    assert fake_frame.meta['L1PNPEAK'] == 1
+    for trace, input_trace in zip(fake_frame.object_traces, fake_frame.input_profile_centers):
+        wavelengths = np.linspace(trace.domain[0], trace.domain[1], 1000)
+        np.testing.assert_allclose(trace(wavelengths), input_trace(wavelengths), atol=1.0)
+
+
+def test_object_detector_with_nothing_in_the_slit():
+    np.random.seed(80125)
+    fake_frame = run_object_detector(generate_fake_science_frame(include_sky=True, include_trace=False))
+    assert not fake_frame.meta['L1OBJDET']
+    assert fake_frame.point_sources == {}
+    assert fake_frame.object_traces is None
+
+
+def test_the_red_detection_window_is_blueward_of_the_fringing():
+    # The fringe correction uses the detection, so the detection cannot depend on the fringe correction
+    assert ObjectDetector.DETECTION_WINDOWS[1][1] <= settings.FRINGE_CUTOFF_WAVELENGTH
+
+
+def test_an_object_only_in_the_red_order_is_still_extracted():
+    np.random.seed(80127)
+    # A red target with nothing in the blue order, the way frames used to be dropped: the object has to be found
+    # in the red order and the blue order extracted at the same place in the slit.
+    fake_frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
+                                             trace_wavelength_range=(5900.0, 10200.0))
+    _, fake_frame = run_profile_stage(fake_frame)
+    assert fake_frame.meta['L1OBJDET']
+    assert fake_frame.meta['L1DETBRW'] == '2'
+    assert fake_frame.meta['L1TRCBRW'] == '2'
+    centers, fwhms, _ = fake_frame.profile_fits
+    red_domain = fake_frame.wavelengths.wavelength_domains[0]
+    np.testing.assert_allclose(over_domain(centers[1]), centers[0](red_domain[0]))
+    # A constant at the red order's blue end, against an object drifting by refraction
+    blue_wavelengths = np.linspace(*fake_frame.wavelengths.wavelength_domains[1], 100)
+    np.testing.assert_allclose(centers[1](blue_wavelengths), fake_frame.input_profile_centers[1](blue_wavelengths),
+                               atol=3.0)
+    assert all(fwhm is not None for fwhm in fwhms)

@@ -51,16 +51,39 @@ For flat field frames, we use a higher `sigclip` value to avoid flagging the fri
 Since flats are generally short, there are likely few cosmic ray hits anyway.
 For this same reason, we do not apply cosmic ray rejection to the arcs.
 
+Object Detection
+----------------
+The object is found before the fringe correction, because the fringe correction needs to know which pixels are the
+object's. Each order is searched over its own wavelength window where it has throughput, and the red order's window is
+blueward of the fringing. The columns in each window are combined with a median, so a cosmic ray, which has not been
+flagged yet, is not mistaken for the object. The object is chosen in the order with the best detection and matched in
+the other order. If it cannot be found or traced in one order, that order borrows its position in the slit from the
+other order, rather than the frame being dropped. See :doc:`object-detection` for the details.
+
 Fringe Correction
 -----------------
 We have found that the fringe pattern shifts on the chip likely due to flexure. Oddly though, the fringe pattern
 movement is not correlated with the position of the orders on the chip. We stack all lampflat frames taken in the 
 past three days, shifting them to achieve more coverage of the fringe pattern than any single frame alone. We then
 use a match filter to find the best fringe pattern removal of the science frame, dividing out the stacked frame.
+The shift is only fit if the match filter detects the pattern with a signal-to-noise of at least 10. Otherwise the
+pattern is applied unshifted.
+
+The sky fills the slit like the lamp does, but an object narrower than the slit puts a smaller range of wavelengths
+on each pixel. Its fringes are stronger than the flat's and are displaced along the dispersion by where it sits in the
+slit, so we fit a second shift and an amplitude on the pixels where the object is brighter than the sky. For slits
+wider than 2", where the lamp's fringes are smeared out, the object is fit with the stacked 2" slit fringe frame
+instead. Each pixel is then corrected with the two patterns in proportion to its object and sky flux.
+
+Pixels near the object's trace are left out of the fit for the sky's shift. Otherwise a bright object would set the
+sky's shift with its own, displaced fringes. The object's share of the flux in each pixel is measured from the data:
+the median of the slit at each wavelength is the sky, and the rest, smoothed along each slit row, is the object. See
+:doc:`object-detection` for how the two patterns are fit and combined.
 
 Profile Fitting
 ---------------
-To estimate the center of the profile that we want to extract, we perform a match filter with a Gaussian, fixing Gaussian's
+The profile fit starts from the object detected before the fringe correction and traces it again on the defringed
+data. To estimate the center of the profile that we want to extract, we perform a match filter with a Gaussian, fixing Gaussian's
 width. We fit in bins of 25 columns to increase the signal to noise over a single column but to maintain small enough steps
 to fully characterize any spatial variation. We perform a standard least squares fit to estimate width of the profile
 again taking 25 column steps to handle low signal to noise spectra.

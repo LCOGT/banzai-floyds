@@ -68,6 +68,9 @@ class TelluricMaker(Stage):
     Fit the telluric model (`telluric_utils.telluric_transmission`) to a flux standard.
     """
     def do_stage(self, image):
+        # Nothing was extracted because no object was detected. The 2d frame is still written out.
+        if image.extracted is None:
+            return image
         flux_standard = get_standard(image.ra, image.dec, self.runtime_context)
         if flux_standard is None or len(flux_standard) == 0:
             return image
@@ -107,6 +110,9 @@ class TelluricCorrector(Stage):
     MIN_SNR = 10.0
 
     def do_stage(self, image):
+        # Nothing was extracted because no object was detected. The 2d frame is still written out.
+        if image.extracted is None:
+            return image
         in_order = image.extracted['order'] == RED_ORDER
         data = image.extracted[in_order]
         standard = image.telluric.meta
