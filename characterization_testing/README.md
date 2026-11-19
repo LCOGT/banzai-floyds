@@ -30,5 +30,14 @@ each telluric region) and `telluric_models.csv` (the telluric model parameters f
 to each standard). Pass `--standards-only` to skip the science targets, which have
 no reference flux.
 
+`order_stitching.py` reduces every frame through the combined spectrum (calibrated with the nearest standard at its
+site, as `flux_calibration_results.py` does) and measures how the blue order lines up with the red in their overlap:
+the median-ratio and chi^2 scales, whether a constant is enough, and each order's signal-to-noise. Pass `--cache`,
+`--csv` and `--pdf` to keep a baseline. `--analyze-only` remeasures a cache without reducing again.
+
+`red_detection.py` injects sources at empty slit positions to compare the detection completeness of the usual
+windows with windows redward of the fringe cutoff, and lists every source each window finds. `--defringed` runs
+the same on the fringe corrected data.
+
 Note that you will need to export your archive token
 `export ARCHIVE_AUTH_TOKEN=your_token` to get all of the most recent data.

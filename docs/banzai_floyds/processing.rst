@@ -57,8 +57,8 @@ The object is found before the fringe correction, because the fringe correction 
 object's. Each order is searched over its own wavelength window where it has throughput, and the red order's window is
 blueward of the fringing. The columns in each window are combined with a median, so a cosmic ray, which has not been
 flagged yet, is not mistaken for the object. The object is chosen in the order with the best detection and matched in
-the other order. If it cannot be found or traced in one order, that order borrows its position in the slit from the
-other order, rather than the frame being dropped. See :doc:`object-detection` for the details.
+the other order. An order the object is not both detected and traced in is not extracted; it is never given the
+other order's position in the slit. See :doc:`object-detection` for the details.
 
 Fringe Correction
 -----------------

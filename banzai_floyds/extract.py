@@ -2,9 +2,10 @@ from banzai.stages import Stage
 import numpy as np
 from astropy.table import Table
 from banzai.logs import get_logger
-from banzai_floyds.utils.binning_utils import rebin_data_combined
+from banzai_floyds.utils.binning_utils import rebin_data_combined, rebin_inverse_variance
 from banzai_floyds.utils.flux_utils import sensitivity_correction
 from banzai_floyds.utils.fitting_utils import poisson_model_uncertainty
+from banzai_floyds.utils.fitting_utils import robust_least_squares, parameter_variances
 
 
 logger = get_logger()
@@ -19,7 +20,10 @@ def set_extraction_region(image, default_window):
         in_order = image.binned_data['order'] == order_id
         data = image.binned_data[in_order]
         extraction_region = image.extraction_windows[order_id - 1]
-        this_extract_window = data['y_profile'] >= extraction_region[0] * data['profile_sigma']
+        # An order with no profile has a profile_sigma of zero and nothing to extract
+        this_extract_window = data['profile_sigma'] > 0.0
+        this_extract_window = np.logical_and(data['y_profile'] >= extraction_region[0] * data['profile_sigma'],
+                                             this_extract_window)
         this_extract_window = np.logical_and(
             data['y_profile'] <= extraction_region[1] * data['profile_sigma'], this_extract_window
         )
@@ -173,11 +177,79 @@ class Extractor(Stage):
         fringe_correction = image.fringe_correction[image.binned_data['y'], image.binned_data['x']]
         image.binned_data['uncertainty'] = horne_uncertainty(image.binned_data, image.primary_hdu.read_noise,
                                                              fringe_correction)
-        image.extracted = extract(image.binned_data)
+        to_extract = image.binned_data
+        if image.object_orders is not None:
+            to_extract = to_extract[np.isin(to_extract['order'], image.object_orders)]
+            to_extract = to_extract.group_by(('order', 'order_wavelength_bin'))
+        image.extracted = extract(to_extract)
         return image
 
 
+def order_scale(extracted: Table, overlap: tuple[float, float], reference_order: int = 1, scaled_order: int = 2,
+                flux_key: str = 'flux_optimal', error_key: str = 'fluxerror_optimal',
+                min_bins: int = 10) -> tuple[float, float] | None:
+    """
+    Find the scale factor to match the flux in each order in the overlapping wavelength region.
+
+    Parameters
+    ----------
+    extracted : Table
+        The per order extraction, with 'wavelength', 'binwidth', 'order' and 'mask' columns.
+    overlap : tuple[float, float]
+        The wavelength range both orders cover.
+    reference_order : int
+        The order to scale onto.
+    scaled_order : int
+        The order to be scaled.
+    flux_key : str
+        The column name for the flux.
+    error_key : str
+        The column name for the flux uncertainty.
+    min_bins : int
+        Minimum number of reference bins in the overlap required to compute the scale.
+
+    Returns
+    -------
+    (s, σ_s), or None if fewer than `min_bins` reference bins in the overlap have both orders.
+
+    """
+    good = np.logical_and(extracted['mask'] == 0, np.isfinite(extracted[flux_key]))
+    good = np.logical_and(good, extracted[error_key] > 0.0)
+    good = np.logical_and(good, extracted['wavelength'] > overlap[0])
+    good = np.logical_and(good, extracted['wavelength'] < overlap[1])
+    reference = extracted[np.logical_and(good, extracted['order'] == reference_order)]
+    scaled = extracted[np.logical_and(good, extracted['order'] == scaled_order)]
+    if len(reference) < min_bins:
+        return None
+    reference = reference[np.argsort(reference['wavelength'])]
+    edges = np.hstack([reference['wavelength'] - reference['binwidth'] / 2.0,
+                       reference['wavelength'][-1] + reference['binwidth'][-1] / 2.0])
+    flux, flux_error, covered = rebin_inverse_variance(scaled['wavelength'], scaled[flux_key], scaled[error_key],
+                                                       edges)
+    if covered.sum() < min_bins:
+        return None
+    flux, flux_error = flux[covered], flux_error[covered]
+    reference_flux = np.asarray(reference[flux_key][covered], dtype=float)
+    reference_error = np.asarray(reference[error_key][covered], dtype=float)
+
+    def residuals(parameters):
+        scale = parameters[0]
+        return (reference_flux - scale * flux) / np.sqrt(reference_error ** 2.0 + scale ** 2.0 * flux_error ** 2.0)
+
+    reference_weights = reference_error ** -2.0
+    initial_guess = np.sum(reference_flux * flux * reference_weights) / np.sum(flux ** 2.0 * reference_weights)
+    fit, used = robust_least_squares(residuals, [max(initial_guess, 1e-3)], bounds=([0.0], [np.inf]))
+    variance, = parameter_variances(fit, n_rejected=np.sum(np.logical_not(used)))
+    return float(fit.x[0]), float(np.sqrt(variance))
+
+
 class CombinedExtractor(Stage):
+    """
+    Combine the orders into one spectrum, after scaling the blue order onto the red where they overlap.
+
+    The orders' sensitivities are not expected to agree closely, so whatever scale matches the calibrated fluxes in
+    the overlap is applied to the blue order's counts.
+    """
     def do_stage(self, image):
         # Nothing was extracted because no object was detected. The 2d frame is still written out.
         if image.extracted is None:
@@ -191,27 +263,22 @@ class CombinedExtractor(Stage):
         calibration /= telluric_model
         for raw_key, flux_key in [('data', 'flux'), ('uncertainty', 'fluxerror'), ('background', 'flux_background')]:
             image.binned_data[flux_key] = image.binned_data[raw_key] * calibration
-        overlap_region = [max([domain[0] for domain in image.wavelengths.wavelength_domains]),
-                          min([domain[1] for domain in image.wavelengths.wavelength_domains])]
-        # Scale order 2 onto order 1 where the orders overlap
-        extracted_order1 = image.extracted['order'] == 1
-        extracted_order2 = image.extracted['order'] == 2
-        in_extracted_overlap = np.logical_and(image.extracted['wavelength'] > overlap_region[0],
-                                              image.extracted['wavelength'] < overlap_region[1])
-        to_interp_1 = np.logical_and(extracted_order1, in_extracted_overlap)
-        to_interp_1 = np.logical_and(to_interp_1, image.extracted['mask'] == 0)
-        waves_to_interp = image.extracted['wavelength'][to_interp_1]
-        overlap_order2 = np.logical_and(extracted_order2, in_extracted_overlap)
-        to_interp_2 = np.logical_and(overlap_order2, image.extracted['mask'] == 0)
-        flux2_for_ratio = np.interp(waves_to_interp, image.extracted['wavelength'][to_interp_2],
-                                    image.extracted['flux_optimal'][to_interp_2])
-        order_ratio = image.extracted['flux_optimal'][to_interp_1]
-        order_ratio /= flux2_for_ratio
-        normalization = np.median(order_ratio)
+
+        extracted_orders = np.unique(image.extracted['order'])
+        scale = 1.0
+        if len(extracted_orders) == 2:
+            overlap = (max(domain[0] for domain in image.wavelengths.wavelength_domains),
+                       min(domain[1] for domain in image.wavelengths.wavelength_domains))
+            measured = order_scale(image.extracted, overlap)
+            if measured is not None:
+                scale, scale_error = measured
+                image.meta['L1ORDSCE'] = (round(scale_error, 4), 'Uncertainty of the order scale')
+        image.meta['L1ORDSCL'] = (round(scale, 4), 'Scale applied to the blue order to match the red')
         order_2 = image.binned_data['order'] == 2
         for key in ['flux', 'fluxerror', 'flux_background']:
-            image.binned_data[key][order_2] *= normalization
-        image.spectrum = extract(image.binned_data, bin_key='wavelength_bin', data_keyword='flux',
+            image.binned_data[key][order_2] *= scale
+        to_combine = image.binned_data[np.isin(image.binned_data['order'], extracted_orders)]
+        image.spectrum = extract(to_combine.group_by('wavelength_bin'), bin_key='wavelength_bin', data_keyword='flux',
                                  background_key='flux_background', uncertainty_key='fluxerror',
                                  flux_keyword='flux', flux_error_key='fluxerror', include_order=False)
         return image
