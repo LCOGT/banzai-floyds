@@ -855,10 +855,10 @@ def object_mask(image, half_width: float) -> np.ndarray:
 
     Returns
     -------
-    2d bool array, all False if there is no object
+    2d bool array, all False if there is no object in the red order
     """
     mask = np.zeros(image.shape, dtype=bool)
-    if image.object_traces is None:
+    if image.object_traces is None or image.object_traces[0] is None:
         return mask
     in_order = image.orders.data == 1
     x2d, y2d = np.meshgrid(np.arange(image.shape[1]), np.arange(image.shape[0]))

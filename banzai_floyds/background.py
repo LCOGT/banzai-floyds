@@ -156,8 +156,11 @@ def fit_order_background(data: Table, uncertainty: np.ndarray, to_fit: np.ndarra
     domain = [np.min(data['y_order'][interior]), np.max(data['y_order'][interior])]
     sigma = float(np.median(data['profile_sigma'][to_fit]))
     n_points = int(np.ptp(domain)) + 1
-    degree = min(background_degree(n_points, sigma, spatial_background_order),
-                 gap_degree(n_points, 2.0 * mask_width * sigma, spatial_background_order))
+    degree = spatial_background_order
+    # An order the object was not found in has no profile for the sky polynomial to stay clear of
+    if sigma > 0.0:
+        degree = min(background_degree(n_points, sigma, spatial_background_order),
+                     gap_degree(n_points, 2.0 * mask_width * sigma, spatial_background_order))
 
     fit_data = data[to_fit]
     coefficients, _ = robust_linear_fit(sky_design(fit_data, knots, wavelength_spline_degree, degree, domain),
@@ -227,9 +230,12 @@ def fit_background(data: Table, read_noise: float, spatial_background_order: int
         to_fit = np.logical_and(usable, np.logical_not(order_data[window_key]))
         if not np.any(to_fit):
             continue
-        mask_width = object_mask_width(order_data, usable,
-                                       object_mask_window, min_background_fraction)
-        to_fit = np.logical_and(to_fit, np.abs(order_data['y_profile']) > mask_width * order_data['profile_sigma'])
+        mask_width = 0.0
+        if np.any(order_data['profile_sigma'] > 0.0):
+            mask_width = object_mask_width(order_data, usable,
+                                           object_mask_window, min_background_fraction)
+            to_fit = np.logical_and(to_fit,
+                                    np.abs(order_data['y_profile']) > mask_width * order_data['profile_sigma'])
         wavelength = np.asarray(order_data['wavelength'][binned])
         dispersion = float(np.median(order_data['order_wavelength_bin_width'][binned]))
         first_pass_knots = uniform_knots(wavelength, line_knot_spacing * dispersion, wavelength_spline_degree)

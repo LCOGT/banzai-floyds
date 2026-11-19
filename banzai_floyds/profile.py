@@ -325,17 +325,49 @@ def detect_point_sources(binned_data: Table, orders, detection_windows: dict[int
     return sources_by_order
 
 
-def choose_source_to_extract(sources_by_order: dict[int, list[dict]],
-                             detection_windows: dict[int, tuple[float, float]], max_separation: float,
+def detect_over_windows(binned_data: Table, orders, windows: dict[int, list[tuple[float, float]]], *,
+                        exclude_edge: int, initial_fwhm: float, min_snr: float) -> dict[int, list[dict]]:
+    """Detect sources over several wavelength windows of each order, each source kept once.
+
+    A source found in more than one window (within one `initial_fwhm`) keeps its highest signal-to-noise detection,
+    including the wavelength it was detected at, so its trace starts where it is brightest.
+
+    Returns
+    -------
+    dict[int, list[dict]]
+        The sources found in each order in `windows`, keyed by order id, brightest first.
+    """
+    heights = dict(zip(orders.order_ids, orders.order_heights))
+    sources_by_order = {}
+    for order_id, order_windows in windows.items():
+        order_data = binned_data[binned_data['order'] == order_id]
+        peaks = []
+        for wavelow, wavehigh in order_windows:
+            chunk = OrderChunk(int(heights[order_id]), order_data, wavelow, wavehigh)
+            peaks += detect_point_sources_in_order(chunk, initial_fwhm, min_snr, exclude_edge=exclude_edge)
+        sources_by_order[order_id] = []
+        for peak in sorted(peaks, key=lambda peak: -peak['snr']):
+            if all(abs(peak['center'] - kept['center']) > initial_fwhm for kept in sources_by_order[order_id]):
+                sources_by_order[order_id].append(peak)
+    return sources_by_order
+
+
+def nearest_source(sources: list[dict], center: float, max_separation: float) -> dict | None:
+    """The source closest to `center`, if any is within `max_separation` pixels of it."""
+    nearby = [source for source in sources if abs(source['center'] - center) <= max_separation]
+    if not nearby:
+        return None
+    return min(nearby, key=lambda source: abs(source['center'] - center))
+
+
+def choose_source_to_extract(sources_by_order: dict[int, list[dict]], max_separation: float,
                              snr_ratio: float = 0.8) -> tuple[dict[int, dict], list[int]]:
-    """Pick the object to extract, and find it in every order.
+    """Pick the object to extract, and find it in every order it was detected in.
 
     Parameters
     ----------
     sources_by_order : dict[int, list[dict]]
         The sources detected in each order, keyed by order id, each with at least 'center' and 'snr'.
-    detection_windows : dict[int, tuple[float, float]]
-        The wavelength range each order was searched over, keyed by order id.
     max_separation : float
         How far, in pixels, a source in another order can be from the chosen one and still be the same object.
     snr_ratio : float
@@ -344,9 +376,10 @@ def choose_source_to_extract(sources_by_order: dict[int, list[dict]],
     Returns
     -------
     point_sources : dict[int, dict]
-        The source to extract in each order, keyed by order id. Empty if nothing was detected in any order.
-    borrowed : list[int]
-        The orders whose source was not detected in that order and was copied from the reference order.
+        The object in each order it was detected in, keyed by order id. Empty if nothing was detected in any order.
+    missing : list[int]
+        The orders with no detection of the object. They are not given a position from another order: the orders
+        image the slit at different scales and offsets, so a borrowed position is only a guess.
     """
     candidates = {}
     for order_id, sources in sources_by_order.items():
@@ -363,18 +396,16 @@ def choose_source_to_extract(sources_by_order: dict[int, list[dict]],
     reference_order = max(candidates, key=lambda order_id: candidates[order_id]['snr'])
     reference = candidates[reference_order]
     point_sources = {reference_order: reference}
-    borrowed = []
+    missing = []
     for order_id, sources in sources_by_order.items():
         if order_id == reference_order:
             continue
-        nearby = [source for source in sources if abs(source['center'] - reference['center']) <= max_separation]
-        if nearby:
-            point_sources[order_id] = min(nearby, key=lambda source: abs(source['center'] - reference['center']))
+        match = nearest_source(sources, reference['center'], max_separation)
+        if match is None:
+            missing.append(order_id)
         else:
-            point_sources[order_id] = {'center': reference['center'], 'snr': 0.0, 'max_flux': 0.0,
-                                       'detection_wavelength': float(np.mean(detection_windows[order_id]))}
-            borrowed.append(order_id)
-    return point_sources, sorted(borrowed)
+            point_sources[order_id] = match
+    return point_sources, sorted(missing)
 
 
 def chunks_from_detection(binned_data: Table, orders, point_sources: dict[int, dict],
@@ -546,44 +577,6 @@ def trace_object(point_sources: dict[int, dict], binned_data: Table, orders, fwh
         trace_points['used'][in_order[fittable][fit_used]] = True
 
     return traces, trace_points
-
-
-def borrow_missing_traces(traces: list, wavelength_domains) -> tuple[list, list[int]]:
-    """Fill in the trace of an order the object could not be traced in from the order it was traced in.
-
-    Parameters
-    ----------
-    traces : list
-        The center of the object as a function of wavelength for each order (in order id order), or None
-        where it was not traced.
-    wavelength_domains : list
-        The wavelength range of each order.
-
-    Returns
-    -------
-    traces : list
-        The same traces, with each None replaced by a constant at the slit position the traced order reaches
-        at the end of its range nearest the untraced order. Unchanged if no order was traced.
-    borrowed : list[int]
-        The order ids (1 for the first entry, 2 for the second) whose trace was borrowed.
-    """
-    traced = [index for index, trace in enumerate(traces) if trace is not None]
-    if not traced or len(traced) == len(traces):
-        return traces, []
-    filled = list(traces)
-    borrowed = []
-    for index, trace in enumerate(traces):
-        if trace is not None:
-            continue
-        domain = wavelength_domains[index]
-        source = min(traced, key=lambda i: abs(np.mean(wavelength_domains[i]) - np.mean(domain)))
-        source_domain = wavelength_domains[source]
-        nearest_wavelength = np.clip(np.mean(domain), source_domain[0], source_domain[1])
-        filled[index] = Legendre([float(traces[source](nearest_wavelength))], domain=list(domain))
-        # A constant has one free parameter, which is what the L1PROFDG header counts
-        filled[index].effective_dof = 1.0
-        borrowed.append(index + 1)
-    return filled, borrowed
 
 
 def remove_coarse_local_background(stacked_y: np.ndarray, stacked_flux: np.ndarray, center: float,
@@ -1253,8 +1246,7 @@ class ProfileFitter(Stage):
 
     The object was found by ObjectDetector before the fringe correction. Here it is traced again on the
     defringed data, starting from the same detections, so the profile follows the frame we extract from.
-    If the object can only be traced in one order, the other order borrows its slit position
-    (see `borrow_missing_traces`) rather than the frame being dropped.
+    Only the orders the object was both detected and traced in get a profile and are extracted.
     """
     STEP_SIZE = 25
     INITIAL_FWHM = 6.0
@@ -1303,16 +1295,19 @@ class ProfileFitter(Stage):
             return no_object(image, 'No object was detected in the slit, so no profile was fit.')
 
         wavelength_domains = image.wavelengths.wavelength_domains
-        profile_center, trace_points, borrowed = trace_detected_object(
+        profile_center, trace_points = trace_detected_object(
             image, point_sources, self.INITIAL_FWHM, self.runtime_context.PROFILE_TRACE_POLYNOMIAL_DEGREE
         )
-        if any(trace is None for trace in profile_center):
+        image.object_orders = [order_id for order_id, trace in zip(image.orders.order_ids, profile_center)
+                               if trace is not None]
+        image.meta['L1XTRORD'] = (','.join(str(order_id) for order_id in image.object_orders),
+                                  'Orders the object was detected and traced in, which are extracted')
+        if not image.object_orders:
             return no_object(image, 'The object was not traced in any order, so no profile was fit.')
-        if borrowed:
-            logger.warning(f'The object could not be traced in order(s) {borrowed}. Using the slit position '
-                           'from the other order.', image=image)
-        image.meta['L1TRCBRW'] = (','.join(str(order_id) for order_id in borrowed),
-                                  'Orders whose trace was borrowed from the other order')
+        untraced = [order_id for order_id in point_sources if order_id not in image.object_orders]
+        if untraced:
+            logger.warning(f'The object was detected but could not be traced in order(s) {untraced}, so they are '
+                           'not extracted.', image=image)
 
         star_records = get_star_profile_shape(image.dateobs, image.instrument, image.slit_width,
                                               self.runtime_context.db_address)
@@ -1345,13 +1340,17 @@ class ProfileFitter(Stage):
             wing_sigma=self.SHAPE_SIGMA, wing_snr=self.SHAPE_SNR,
             degree=self.runtime_context.PROFILE_SHAPE_POLYNOMIAL_DEGREE
         )
+        profile_fwhm, width_sources = only_object_orders(profile_fwhm, width_sources, image.orders.order_ids,
+                                                         image.object_orders)
+        profile_shape, shape_sources = only_object_orders(profile_shape, shape_sources, image.orders.order_ids,
+                                                          image.object_orders)
         if isolated_star and all(source == 'fit' for source in width_sources + shape_sources):
             record_star_profile(image, profile_fwhm, profile_shape, self.runtime_context.db_address)
 
         image.meta['L1ISOSTR'] = (isolated_star, 'Is the target an isolated star in Gaia?')
-        image.meta['L1FWHSRC'] = (','.join(width_sources), 'Width source per order: fit/star/line/guess')
-        image.meta['L1SHPSRC'] = (','.join(shape_sources), 'Shape source per order: fit/star/gaussian')
-        image.meta['L1PROFDG'] = (round(max(trace.effective_dof for trace in profile_center), 2),
+        image.meta['L1FWHSRC'] = (','.join(width_sources), 'Width source per order: fit/star/line/guess/none')
+        image.meta['L1SHPSRC'] = (','.join(shape_sources), 'Shape source per order: fit/star/gaussian/none')
+        image.meta['L1PROFDG'] = (round(max(trace.effective_dof for trace in profile_center if trace is not None), 2),
                                   'Effective free parameters in the trace center fit')
         image.meta['L1PROFSN'] = (max(point_source['snr'] for point_source in point_sources.values()),
                                   'Matched filter s/n of the object detected')
@@ -1360,14 +1359,21 @@ class ProfileFitter(Stage):
         return image
 
 
+def only_object_orders(models: list, sources: list[str], order_ids, object_orders: list[int]) -> tuple[list, list]:
+    """Drop the models of the orders the object is not extracted in, which then have no profile at all."""
+    kept = [order_id in object_orders for order_id in order_ids]
+    return ([model if keep else None for model, keep in zip(models, kept)],
+            [source if keep else 'none' for source, keep in zip(sources, kept)])
+
+
 def trace_detected_object(image, point_sources: dict[int, dict], fwhm: float, degree: int) -> tuple:
-    """Trace the detected object in every order of a frame, borrowing the trace for any order it fails in.
+    """Trace the detected object in every order of a frame it was detected in.
 
     Parameters
     ----------
     image : FLOYDSObservationFrame with binned data, orders, and wavelengths set
     point_sources : dict[int, dict]
-        The object in each order, from `choose_source_to_extract`.
+        The object in each order it was detected in, from `choose_source_to_extract`.
     fwhm : float
         The expected FWHM of the profile in pixels.
     degree : int
@@ -1376,22 +1382,17 @@ def trace_detected_object(image, point_sources: dict[int, dict], fwhm: float, de
     Returns
     -------
     traces : list
-        The center of the object as a function of wavelength for each order. All None if it could not be
-        traced in any order.
+        The center of the object as a function of wavelength for each order, None where it was not detected or
+        could not be traced.
     trace_points : astropy.table.Table
         Every chunk measurement, from `trace_object`.
-    borrowed : list[int]
-        The orders whose trace was borrowed from the other order.
     """
-    wavelength_domains = image.wavelengths.wavelength_domains
-    traces, trace_points = trace_object(
+    return trace_object(
         point_sources, image.binned_data, image.orders, fwhm, ProfileFitter.STEP_SIZE, ProfileFitter.CHUNK_SNR,
-        wavelength_domains, exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
+        image.wavelengths.wavelength_domains, exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
         max_center_error=ProfileFitter.MAX_CENTER_ERROR, clip_sigma=ProfileFitter.N_SIGMA_CLIP,
         max_chunk_shift=ProfileFitter.MAX_CHUNK_SHIFT, error_floor=ProfileFitter.CENTER_ERROR_FLOOR, degree=degree
     )
-    traces, borrowed = borrow_missing_traces(traces, wavelength_domains)
-    return traces, trace_points, borrowed
 
 
 class ObjectDetector(Stage):
@@ -1403,10 +1404,14 @@ class ObjectDetector(Stage):
     Past the detection, the trace walks into the fringed part of the red order. The fringes vary slowly across
     the slit compared to the width of the profile, so they scale the flux in a chunk rather than move its
     centroid, and the 25 column chunks span about one fringe period along the dispersion.
+
+    An object with no light in either window (a very red star, a heavily extinguished transient) is searched for
+    over RED_ONLY_WINDOWS.
     """
     # Wavelength range (in Angstroms) to detect over in each order. The red order's has to stay blueward of
     # FRINGE_CUTOFF_WAVELENGTH. The blue order ends near 5600 Angstroms.
     DETECTION_WINDOWS = {1: (5700.0, 6200.0), 2: (4600.0, 5400.0)}
+    RED_ONLY_WINDOWS = {1: [(6500.0, 7500.0), (7500.0, 9000.0)]}
     # Matched filter s/n to detect the object in a stack of a few hundred columns
     DETECTION_SNR = 10.0
     INITIAL_FWHM = ProfileFitter.INITIAL_FWHM
@@ -1416,25 +1421,46 @@ class ObjectDetector(Stage):
         sources_by_order = detect_point_sources(image.binned_data, image.orders, self.DETECTION_WINDOWS,
                                                 exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
                                                 initial_fwhm=self.INITIAL_FWHM, min_snr=self.DETECTION_SNR)
+        red_only = not any(sources_by_order.values())
+        if red_only:
+            sources_by_order.update(detect_over_windows(image.binned_data, image.orders, self.RED_ONLY_WINDOWS,
+                                                        exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
+                                                        initial_fwhm=self.INITIAL_FWHM, min_snr=self.DETECTION_SNR))
+        image.meta['L1DETRED'] = (red_only and any(sources_by_order.values()),
+                                  'Object only detected redward of the detection windows')
         image.meta['L1PNPEAK'] = (max(len(sources) for sources in sources_by_order.values()),
                                   'Number of sources detected in the slit in order')
         # The orders image the slit at slightly different scales, a pixel or two apart, so one FWHM is
         # enough to say two detections are the same object
-        image.point_sources, borrowed = choose_source_to_extract(sources_by_order, self.DETECTION_WINDOWS,
-                                                                 max_separation=self.INITIAL_FWHM)
-        image.meta['L1DETBRW'] = (','.join(str(order_id) for order_id in borrowed),
-                                  'Orders whose detection was borrowed from the other order')
+        image.point_sources, missing = choose_source_to_extract(sources_by_order, max_separation=self.INITIAL_FWHM)
         if not image.point_sources:
+            image.meta['L1DETORD'] = ('', 'Orders the object was detected in')
             image.object_traces = None
             return no_object(image, 'No object was detected in the slit.')
-        if borrowed:
-            logger.warning(f'The object was not detected in order(s) {borrowed}. Using its slit position '
-                           'from the other order.', image=image)
-        traces, _, _ = trace_detected_object(image, image.point_sources, self.INITIAL_FWHM,
-                                             self.runtime_context.PROFILE_TRACE_POLYNOMIAL_DEGREE)
-        if all(trace is None for trace in traces):
-            # Detected, but too faint to trace before the fringe correction: hold it where it was detected
-            traces = [Legendre([image.point_sources[order_id]['center']], domain=list(domain))
-                      for order_id, domain in zip(image.orders.order_ids, image.wavelengths.wavelength_domains)]
+        # An order with nothing at the object's position in its usual window may still have it redward of it.
+        # Only a match to the object already chosen counts, so this never changes which object that is.
+        to_search = {order_id: windows for order_id, windows in self.RED_ONLY_WINDOWS.items() if order_id in missing}
+        if to_search:
+            reference = max(image.point_sources.values(), key=lambda source: source['snr'])
+            red_sources = detect_over_windows(image.binned_data, image.orders, to_search,
+                                              exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
+                                              initial_fwhm=self.INITIAL_FWHM, min_snr=self.DETECTION_SNR)
+            for order_id, sources in red_sources.items():
+                match = nearest_source(sources, reference['center'], self.INITIAL_FWHM)
+                if match is not None:
+                    image.point_sources[order_id] = match
+                    missing.remove(order_id)
+        image.meta['L1DETORD'] = (','.join(str(order_id) for order_id in sorted(image.point_sources)),
+                                  'Orders the object was detected in')
+        if missing:
+            logger.warning(f'The object was not detected in order(s) {missing}, so they are not extracted.',
+                           image=image)
+        traces, _ = trace_detected_object(image, image.point_sources, self.INITIAL_FWHM,
+                                          self.runtime_context.PROFILE_TRACE_POLYNOMIAL_DEGREE)
+        # An order detected but too faint to trace before the fringe correction is held where it was detected
+        traces = [Legendre([image.point_sources[order_id]['center']], domain=list(domain))
+                  if trace is None and order_id in image.point_sources else trace
+                  for trace, order_id, domain in zip(traces, image.orders.order_ids,
+                                                     image.wavelengths.wavelength_domains)]
         image.object_traces = traces
         return image

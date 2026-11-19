@@ -3,7 +3,7 @@ import numpy as np
 from banzai import context
 from banzai_floyds.tests.utils import generate_fake_science_frame
 from banzai_floyds.extract import Extractor, extract, set_extraction_region, CombinedExtractor
-from banzai_floyds.extract import horne_uncertainty
+from banzai_floyds.extract import horne_uncertainty, order_scale
 from banzai_floyds.utils.binning_utils import bin_data
 from collections import namedtuple
 from astropy.table import Table
@@ -106,9 +106,9 @@ def test_full_extraction_stage():
         assert (np.abs(residuals) < 3).sum() > 0.99 * len(frame['EXTRACTED'].data)
 
 
-def test_combined_extraction():
-    np.random.seed(125325)
-    input_context = context.Context({})
+def make_combined_frame(seed: int):
+    """A fake frame extracted and calibrated up to the CombinedExtractor, with both orders in electrons."""
+    np.random.seed(seed)
     frame = generate_fake_science_frame(flat_spectrum=False, include_sky=True)
     frame.binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
     set_up_profile(frame)
@@ -128,14 +128,70 @@ def test_combined_extraction():
     flux = np.ones(len(extracted_waves) * 2)
     orders = np.hstack([np.ones(len(extracted_waves)), np.ones(len(extracted_waves)) * 2])
     frame.extracted = Table({'wavelength': np.hstack([extracted_waves, extracted_waves]), 'flux_optimal': flux,
+                             'fluxerror_optimal': 0.01 * flux, 'binwidth': np.ones(len(flux)),
                              'order': orders, 'mask': np.zeros(len(flux), dtype=int)})
-    stage = CombinedExtractor(input_context)
+    return frame
+
+
+def test_combined_extraction():
+    frame = make_combined_frame(125325)
+    stage = CombinedExtractor(context.Context({}))
     frame = stage.do_stage(frame)
+    assert frame.meta['L1ORDSCL'] == pytest.approx(1.0)
     expected = np.interp(frame['SPECTRUM'].data['wavelength'], frame.input_spectrum_wavelengths, frame.input_spectrum)
     for weighting in ['optimal', 'unweighted']:
         residuals = frame['SPECTRUM'].data[f'flux_{weighting}'] - expected
         residuals /= frame['SPECTRUM'].data[f'fluxerror_{weighting}']
         assert (np.abs(residuals) < 3).sum() > 0.99 * len(frame['SPECTRUM'].data)
+
+
+def test_an_order_that_was_not_extracted_is_left_out_of_the_combined_spectrum():
+    frame = make_combined_frame(125326)
+    frame.extracted = frame.extracted[frame.extracted['order'] == 1]
+    frame = CombinedExtractor(context.Context({})).do_stage(frame)
+    # With one order there is nothing to scale against
+    assert frame.meta['L1ORDSCL'] == 1.0
+    assert 'L1ORDSCE' not in frame.meta
+    red_domain = frame.wavelengths.wavelength_domains[0]
+    assert np.min(frame['SPECTRUM'].data['wavelength']) >= red_domain[0] - 10.0
+
+
+def overlapping_orders(scale: float, seed: int, snr: float = 50.0) -> tuple[Table, tuple[float, float]]:
+    """A smooth spectrum extracted in a red order (4700 - 10000 A, 3.5 A bins) and a blue one (3300 - 5700 A,
+    1.7 A bins) whose calibration is off from the red by a factor of 1 / scale."""
+    rng = np.random.default_rng(seed)
+    tables = []
+    for order_id, low, high, binwidth, gray in [(1, 4700.0, 10000.0, 3.5, 1.0), (2, 3300.0, 5700.0, 1.7, scale)]:
+        wavelength = np.arange(low, high, binwidth)
+        flux = 1.0 + 0.3 * np.sin(wavelength / 300.0)
+        error = flux / snr
+        tables.append(Table({'wavelength': wavelength, 'binwidth': np.full(len(wavelength), binwidth),
+                             'order': np.full(len(wavelength), order_id),
+                             'flux_optimal': (flux + rng.normal(0.0, error)) / gray, 'fluxerror_optimal': error / gray,
+                             'mask': np.zeros(len(wavelength), dtype=int)}))
+    return Table(np.hstack([table.as_array() for table in tables])), (4700.0, 5700.0)
+
+
+def test_the_order_scale_recovers_a_gray_offset():
+    extracted, overlap = overlapping_orders(0.8, seed=4401)
+    # A cosmic ray left in the blue order
+    in_overlap = np.where(np.logical_and(extracted['order'] == 2, extracted['wavelength'] > 5000.0))[0]
+    extracted['flux_optimal'][in_overlap[0]] *= 30.0
+    scale, scale_error = order_scale(extracted, overlap)
+    assert scale == pytest.approx(0.8, abs=3.0 * scale_error)
+    # 290 red bins at S/N 50 against a blue order binned to ~70 per bin
+    assert 0.001 < scale_error < 0.005
+
+
+def test_the_order_scale_is_unbiased_at_low_signal_to_noise():
+    # The median of the ratio, which this replaced, reads 0.58 here
+    scales = np.array([order_scale(*overlapping_orders(0.8, seed=seed, snr=1.0))[0] for seed in range(40)])
+    assert np.mean(scales) == pytest.approx(0.8, abs=0.03)
+
+
+def test_the_order_scale_needs_both_orders_in_the_overlap():
+    extracted, overlap = overlapping_orders(0.8, seed=4402)
+    assert order_scale(extracted[extracted['order'] == 1], overlap) is None
 
 
 def test_faint_extraction_is_unbiased():
@@ -187,6 +243,19 @@ def test_read_noise_limited_errors_match_the_scatter():
         pulls = (extracted[f'fluxraw_{weighting}'] - flux) / extracted[f'fluxrawerr_{weighting}']
         # Errors from each pixel's own |d| come out ~4% too large here, where many pixels read negative
         assert 0.97 < np.std(pulls) < 1.03
+
+
+def test_the_trimmer_handles_a_frame_with_one_order_extracted():
+    wavelength = np.arange(5000.0, 9000.0, 3.5)
+    extracted = Table({'wavelength': wavelength, 'order': np.ones(len(wavelength), dtype=int)})
+    binned_data = Table({'wavelength': np.hstack([wavelength, wavelength - 2000.0]),
+                         'order': np.repeat([1, 2], len(wavelength)), 'mask': np.zeros(2 * len(wavelength), dtype=int)})
+    image = SimpleNamespace(extracted=extracted, binned_data=binned_data)
+    image = Trimmer(context.Context({})).do_stage(image)
+    # The red order loses only its ends, and the blue order, which was not extracted, is left alone
+    assert wavelength[9] < np.min(image.extracted['wavelength']) < wavelength[12]
+    assert wavelength[-12] < np.max(image.extracted['wavelength']) < wavelength[-9]
+    assert np.all(image.binned_data['mask'][image.binned_data['order'] == 2] == 0)
 
 
 @pytest.mark.parametrize('stage_class', [Trimmer, FluxSensitivity, FluxCalibrator, TelluricMaker, TelluricCorrector,

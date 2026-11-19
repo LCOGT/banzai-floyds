@@ -61,6 +61,8 @@ def profile_fits_to_data(data_shape, profile_centers, fwhms, gamma_ratios, order
     order_iter = zip(orders.order_ids, profile_centers, fwhms, gamma_ratios, orders.center(x2d),
                      orders.order_heights)
     for order_id, profile_center, fwhm, gamma_ratio, order_center, order_height in order_iter:
+        if profile_center is None:
+            continue
         in_order = orders.data == order_id
         wavelengths = wavelengths_data[in_order]
         widths = profile_sigmas(wavelengths, fwhm, max_sigma=order_height / 2.0)
@@ -90,12 +92,15 @@ def profile_fits_to_header(centers, fwhms, gamma_ratios):
     """
     header = fits.Header()
     # Quoted at the reference wavelength so the header still carries one number a human can read
-    header['PROFFWHM'] = (float(fwhms[0](SEEING_REFERENCE_WAVELENGTH)),
+    first = next(index for index, center in enumerate(centers) if center is not None)
+    header['PROFFWHM'] = (float(fwhms[first](SEEING_REFERENCE_WAVELENGTH)),
                           f'FWHM of the profile in pixels at {SEEING_REFERENCE_WAVELENGTH:.0f} Angstroms')
-    header['PROFGAM'] = (float(gamma_ratios[0](SEEING_REFERENCE_WAVELENGTH)),
+    header['PROFGAM'] = (float(gamma_ratios[first](SEEING_REFERENCE_WAVELENGTH)),
                          'Ratio of the Lorentzian to the Gaussian width of the profile')
     for (prefix, name), polynomials in zip(PROFILE_POLYNOMIALS, [centers, fwhms, gamma_ratios]):
         for order, polynomial in zip([1, 2], polynomials):
+            if polynomial is None:
+                continue
             for i, coef in enumerate(polynomial.coef):
                 header[f'O{order}{prefix}{i:02}'] = (coef, f'P_{i:02} coefficient for {name} for order {order}')
             header[f'O{order}{prefix}O'] = (polynomial.degree(),
@@ -108,7 +113,9 @@ def profile_fits_to_header(centers, fwhms, gamma_ratios):
 
 
 def load_model_from_header(meta, prefix, order):
-    """Read back one per order profile model written by `profile_fits_to_header`."""
+    """Read back one per order profile model written by `profile_fits_to_header`, None if the order has none."""
+    if f'O{order}{prefix}O' not in meta:
+        return None
     degree = meta[f'O{order}{prefix}O']
     coefficients = [meta[f'O{order}{prefix}{i:02}'] for i in range(degree + 1)]
     domain = [meta[f'O{order}{prefix}DM0'], meta[f'O{order}{prefix}DM1']]

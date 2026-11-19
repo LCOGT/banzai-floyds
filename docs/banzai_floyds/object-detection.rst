@@ -49,6 +49,21 @@ Order      Window (Angstroms)     Why
 2 (blue)   4600 -- 5400           Inside the blue order, which ends near 5600 Angstroms
 =========  =====================  ============================================================================
 
+**Objects with no light in either window.** If nothing is detected in either order, the red order is searched again
+over ``ObjectDetector.RED_ONLY_WINDOWS`` (6500 -- 7500 and 7500 -- 9000 Angstroms), for very red stars, heavily
+extinguished transients, and the like. A source found in both keeps its higher signal-to-noise detection, and its
+trace starts from there. Only the red order is then extracted. ``L1DETRED`` is True when the object was found this
+way. The same windows are also searched when the object was found in the blue order but not at that position in the
+red order's usual window (see below). Neither changes which object a frame extracts.
+
+This search runs on data that has not been fringe corrected yet, which costs nothing measurable. Gaussian sources
+injected at empty slit positions of 143 archival frames were recovered as completely, against their expected
+signal-to-noise, in 6500 -- 7500, 7500 -- 9000 and 8000 -- 9500 Angstroms as at 5700 -- 6200 Angstroms. Running it
+after the fringe correction instead did not reduce the number of extra sources found. Of the 8 archival frames with
+no detection, it finds an object in 3, each at a position consistent between windows. SN 2022exi and AT 2026obf are
+now extracted in the red order; IC 4329A, a galaxy through the 6" slit, is found but cannot be traced, so it still has
+no 1d spectrum. It finds nothing at all in the 5 empty exposures of HD 153458.
+
 Before this change, both orders were searched over the same 5500 -- 5700 Angstrom window. The blue order ends near
 5600 Angstroms, so it had almost no data there and often failed to detect objects that were clear in the red order.
 Since the profile fit needed a trace in every order, those frames were dropped.
@@ -66,7 +81,7 @@ position is known, and the trace rejects outlying chunks.
 
 Choosing the same object in both orders
 ---------------------------------------
-``choose_source_to_extract`` picks one object and finds it in every order:
+``choose_source_to_extract`` picks one object and finds it in every order it was detected in:
 
 #. In each order, the candidate is the brightest detection. If the runner up is within 80% of its signal-to-noise,
    the candidate is whichever of the two is closer to the center of the slit, because acquisition puts the requested
@@ -75,9 +90,14 @@ Choosing the same object in both orders
 #. Every other order takes its detection closest to the reference order's center, as long as it is within
    ``max_separation`` (one ``INITIAL_FWHM``). The two orders image the slit at slightly different scales, so the same
    object lands a pixel or two apart in them.
-#. If no detection in an order is close enough, that order **borrows** the reference order's slit position. A
-   borrowed source has a signal-to-noise of zero and starts its trace from the middle of that order's detection
-   window. The ``L1DETBRW`` header lists the orders that borrowed.
+#. If no detection in the red order is close enough, the red order is searched again over ``RED_ONLY_WINDOWS``, and
+   its detection there closest to the reference, within the same ``max_separation``, is taken. This finds a red order
+   whose light is mostly redward of 6200 Angstroms. In the archival set it recovers the red order of SN 2025ajmj,
+   18 sigma at 6500 -- 7500 Angstroms and 1.6 pixels from the blue detection.
+#. An order with no detection close enough is **not given a position**. The orders image the slit at different
+   scales and offsets (up to 3 pixels apart), so a position from the other order is only a guess, and extracting
+   there picks up noise, a host, or a sky residual. That order is not extracted. ``L1DETORD`` lists the orders the
+   object was detected in.
 
 Choosing in one order and matching in the other means both orders always extract the same object, even if a
 different source is brighter in one of them. Before this change, each order chose independently.
@@ -85,27 +105,23 @@ different source is brighter in one of them. Before this change, each order chos
 If nothing is detected in any order, ``L1OBJDET`` is set to False. The fringe correction then treats every pixel as
 sky, and the frame is written without a 1d spectrum (see below).
 
-Tracing, and borrowing a trace
-------------------------------
+Tracing
+-------
 ``trace_detected_object`` traces the object in each order. It starts from the detection and walks outward in chunks
 of 25 wavelength bins. A chunk's center is kept if its signal-to-noise is at least ``CHUNK_SNR`` (4) and it has moved
 no more than 1 sigma from the previous chunk. A penalized Legendre polynomial is then fit through the centers. An order
 needs at least 7 good chunks to be traced.
 
-If one order cannot be traced (for example, a very red target in the blue order), ``borrow_missing_traces`` gives it
-a constant trace: the slit position the traced order reaches at the end of its wavelength range nearest the untraced
-order. The object sits at one place in the slit. Its slow drift with wavelength comes from differential atmospheric
-refraction, so the traced order's nearest end is the best available guess. The trace is held constant rather than
-extrapolated outside the range it was fit over. Because the orders image the slit at slightly different scales, a
-borrowed trace can be off by a pixel or two. That is small next to the extraction window, but it does slightly weaken
-the optimal extraction of that order. The ``L1TRCBRW`` header lists the orders whose trace was borrowed.
+An order that was detected but cannot be traced is not extracted either. Only the orders the object was both detected
+and traced in are, and ``L1XTRORD`` lists them. The 1d spectrum is then the extracted order alone.
 
 ``ObjectDetector`` stores its results on the frame:
 
 - ``image.point_sources``: the detection used in each order, keyed by order id.
 - ``image.object_traces``: the object's center as a function of wavelength in each order, measured before the fringe
-  correction. If the object was detected but cannot be traced in any order, each trace is held at the slit position
-  it was detected at. This is ``None`` only when nothing was detected.
+  correction. An order the object was detected in but cannot be traced in yet is held at the slit position it was
+  detected at in that order, which is only used for the fringe correction's object mask. An order the object was not
+  detected in has ``None``, as does the whole list when nothing was detected.
 
 Correcting the fringes of the sky and the object
 ------------------------------------------------
@@ -176,9 +192,11 @@ that was divided out is saved in the ``FRINGE`` extension, so the correction can
 Fitting the profile
 -------------------
 ``ProfileFitter`` does not detect the object again. It takes ``image.point_sources`` from ``ObjectDetector`` and
-traces them on the defringed data, borrowing a trace for any order that fails in the same way as above. If neither
-order can be traced, ``L1OBJDET`` is set to False. The widths and shapes already fall back order by order, so an
-order with a borrowed trace still gets a usable profile. An order without enough width measurements of its own takes
+traces them on the defringed data. If no order can be traced, ``L1OBJDET`` is set to False. An order the object was
+not both detected and traced in gets no profile at all: no trace, width, or shape (``none`` in ``L1FWHSRC`` and
+``L1SHPSRC``), no weights in the ``PROFILE`` extension, and no keywords in the ``PROFILEFITS`` header. Its sky is
+fit across the whole slit, with no object mask. An order with the object but without enough width measurements of
+its own takes
 the width of the last isolated star observed through the same slit, scaled to this frame. Failing that, it takes a
 line fit to the widths measured in the frame, and failing that, the initial guess. The shape falls back to the
 star's or to a Gaussian. ``L1FWHSRC`` and ``L1SHPSRC`` record which was used.
@@ -198,8 +216,9 @@ Keyword           Meaning
 ================  =====================================================================================================
 L1OBJDET          Whether an object was detected and traced in the slit
 L1PNPEAK          The most sources detected in either order's detection window
-L1DETBRW          Orders whose detection was borrowed from the other order (empty if none)
-L1TRCBRW          Orders whose trace was borrowed from the other order (empty if none)
+L1DETORD          The orders the object was detected in
+L1DETRED          Whether the object was only found redward of the detection windows (``RED_ONLY_WINDOWS``)
+L1XTRORD          The orders that were extracted: those the object was both detected and traced in
 L1PROFSN          The matched filter signal-to-noise of the object in its reference order
 L1FRNGSN          The matched filter signal-to-noise of the sky's fringes, measured outside the object mask
 L1FRNGOX/OY       The sky's fringe shift in pixels (0 if L1FRNGSN is below 10)
@@ -217,9 +236,13 @@ Known limitations
 - **Two objects close together.** If two sources are within about 2.5 FWHM of each other, the running median
   background used for detection pushes their detected centers about a pixel apart. The trace refines the center
   afterwards.
-- **Borrowed traces** are constant and can be off by a pixel or two, because the orders image the slit at slightly
-  different scales.
+- **One-order frames.** An object too faint to detect at 10 sigma, or to trace, in one order loses that order
+  entirely, even if a binned spectrum of it would have been useful.
 - **Faint objects** below the detection threshold get no mask. Their fringes barely change the correction, so they
   are corrected with the sky's pattern alone.
 - **Detection windows.** The windows were chosen from where each order has throughput. They have not yet been tuned
-  on a large set of frames, and the red window's sensitivity relative to redder windows has not been measured.
+  on a large set of frames.
+- **Other red sources.** Redward of 7500 Angstroms the search finds a source the usual windows do not in about 1
+  frame in 10 that already has an object, mostly 25 -- 35 pixels from the slit center. These are likely real red
+  sources (host nuclei, field stars), but they are one reason the red-only search runs only when nothing else was
+  found.

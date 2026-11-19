@@ -11,7 +11,7 @@ class Trimmer(Stage):
         # The tilt of the arc lines is abou 8 degrees, so this corresponds to about just cutting wavelengths
         # The don't fully fall on the chip
         cuts = {}
-        for order in [1, 2]:
+        for order in np.unique(image.extracted['order']):
             order_wavelengths = image.extracted['wavelength'][image.extracted['order'] == order]
             order_wavelengths = order_wavelengths[np.argsort(order_wavelengths)]
             cuts[order] = order_wavelengths[10], order_wavelengths[-10]

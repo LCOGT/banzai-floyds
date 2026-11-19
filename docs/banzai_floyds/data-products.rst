@@ -25,7 +25,8 @@ in the red order, each pixel has been divided by the fringe pattern in the ***FR
   - 'mask': 1 if the bin had no unmasked pixels to extract (the fluxes are then NaN), 0 otherwise.
 
   The flux, error, and background columns are flux and telluric corrected and have units of ergs/s/cm^2/Angstrom.
-  The blue order is scaled to match the red order where the two overlap before they are combined. The errors are
+  The blue order is scaled to match the red order where the two overlap before they are combined (see
+  `Combining the orders`_). If the object was found in only one order, the spectrum is that order alone. The errors are
   propagated from the uncertainty of the model of each pixel, the extracted flux times the profile plus the
   background, with the read noise and photon noise of that model rather than of each pixel's own counts (see
   `Optimal and unweighted extractions`_).
@@ -35,7 +36,8 @@ in the red order, each pixel has been divided by the fringe pattern in the ***FR
   blue order. This extension also includes 'fluxraw_optimal', 'fluxrawerr_optimal', 'fluxraw_unweighted', and
   'fluxrawerr_unweighted' that have the extracted values in electrons and have not been flux or telluric corrected.
   The 'background_optimal' and 'background_unweighted' columns in this extension are in electrons. The telluric
-  correction is only applied to the red order.
+  correction is only applied to the red order. The blue order is not scaled onto the red here, so the orders can
+  differ by the L1ORDSCL factor in their overlap. An order the object was not both detected and traced in (see L1XTRORD) is left out.
 
 - ***SENSITIVITY*** Extension: This extension is a fits binary table that has 'wavelength', 'sensitivity', and 'order' columns.
   The 'sensitivity' column converts a count rate to the flux that reaches the telescope, in units of
@@ -74,6 +76,21 @@ unweighted extraction, which does not depend on the variances.
 Dividing by :math:`\sum a P` puts both extractions on the same scale where masked pixels (e.g. cosmic rays) leave
 holes in the window, where the tilted wavelength bins catch zero or two pixels of a row, and where the two orders
 overlap. For a well-modeled point source the two agree within their errors.
+
+Combining the orders
+--------------------
+At a given wavelength both orders see the same light through the same slit, but after flux calibration their ratio
+where they overlap (about 4700 -- 5600 Angstroms) still changes from frame to frame. Over 164 archival frames, each
+calibrated with another night's standard, the red order over the blue ranges from 0.81 to 1.13 (16th to 84th
+percentile). Once scaled, the ratio is flat across the overlap to 0.5% in the median of the 128 brightest frames
+(1.5% frame to frame), right up to the end of the blue order. So for every frame a single scale s is fit to the
+optimal extractions in the overlap, :math:`f_{red} = s f_{blue}`, with the errors of both orders
+(:math:`\sigma^2 = \sigma_{red}^2 + s^2 \sigma_{blue}^2`) and outliers rejected. The blue order's counts are
+multiplied by s before the orders are combined, whatever s is: the sensitivities of the two orders are not expected
+to agree closely. s and its uncertainty are in the L1ORDSCL and L1ORDSCE header keywords.
+
+An order the object was not both detected and traced in (e.g. the blue order of a very red target) is not
+extracted, and the combined spectrum is the other order alone. L1XTRORD lists the orders extracted.
 
 Opening spectra in IRAF
 -----------------------
@@ -184,8 +201,14 @@ The 2-D files also carry these header keywords from the reduction:
 
   - L1OBJDET: Whether an object was detected in the slit. L1PNPEAK is the most sources found in either order and
     L1PROFSN the matched filter signal-to-noise of the detected object.
-  - L1DETBRW, L1TRCBRW: The orders (comma separated, empty if none) where the object could not be detected or
-    traced, and whose position in the slit was borrowed from the other order instead.
+  - L1DETRED: Whether the object was only found redward of the usual detection windows, i.e. it has no detectable
+    light at 5700 -- 6200 Angstroms in the red order or at 4600 -- 5400 Angstroms in the blue.
+  - L1DETORD: The orders the object was detected in. An order with no detection matched to the object is never given
+    the other order's position in the slit.
+  - L1XTRORD: The orders that were extracted, those the object was both detected and traced in. The other order has
+    no profile, no PROFILE weights, and no PROFILEFITS keywords, and L1FWHSRC and L1SHPSRC say 'none' for it.
+  - L1ORDSCL: The scale applied to the blue order to match the red in the combined spectrum (1 if only one order was
+    extracted). L1ORDSCE is its uncertainty, when both orders were extracted.
   - L1FWHSRC, L1SHPSRC: Where the profile width (fit, star, line, or guess) and shape (fit, star, or gaussian) of each
     order came from. L1ISOSTR is whether the target is an isolated star in Gaia. L1PROFDG is the effective number of
     free parameters in the trace center fit.

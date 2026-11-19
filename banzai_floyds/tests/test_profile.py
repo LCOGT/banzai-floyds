@@ -1,8 +1,8 @@
 from banzai_floyds.profile import stack_slit_profile, find_peaks, detect_point_sources, OrderChunk
-from banzai_floyds.profile import choose_source_to_extract
+from banzai_floyds.profile import choose_source_to_extract, only_object_orders, detect_over_windows
 from banzai_floyds.profile import remove_coarse_local_background, remove_smooth_background
 from banzai_floyds.profile import trace_object, half_maximum_width, fit_profile_fwhm
-from banzai_floyds.profile import ProfileFitter, ObjectDetector, fit_shape_params, borrow_missing_traces
+from banzai_floyds.profile import ProfileFitter, ObjectDetector, fit_shape_params
 from banzai_floyds.dbs import create_db, add_profile_shape, get_star_profile_shape
 from banzai_floyds.utils import gaia_utils
 from banzai_floyds.tests.utils import generate_fake_science_frame, fake_gaia_field, fake_gaia_source
@@ -17,6 +17,8 @@ from numpy.polynomial.legendre import Legendre
 from banzai_floyds.utils.fitting_utils import sigma_to_fwhm, fwhm_to_sigma
 from banzai_floyds.utils.fitting_utils import voigt, MAX_GAMMA_RATIO
 from banzai_floyds import settings
+from banzai_floyds.background import BackgroundFitter
+from banzai_floyds.extract import Extractor
 
 
 OBJECT_FWHM = 10.0
@@ -153,7 +155,7 @@ def trace_fake_frame(fake_frame, point_sources=None, snr_threshold=ProfileFitter
                                             exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN,
                                             initial_fwhm=fwhm, min_snr=ObjectDetector.DETECTION_SNR)
     if point_sources is None:
-        point_sources, _ = choose_source_to_extract(sources_by_order, DETECTION_WINDOWS, max_separation=fwhm)
+        point_sources, _ = choose_source_to_extract(sources_by_order, max_separation=fwhm)
     trace_polynomials, trace_points = trace_object(point_sources, binned_data, fake_frame.orders, fwhm,
                                                    ProfileFitter.STEP_SIZE, snr_threshold,
                                                    fake_frame.wavelengths.wavelength_domains,
@@ -561,48 +563,34 @@ def test_the_same_object_is_extracted_in_both_orders():
     # and the other order takes the source closest to it, rather than each order picking its own.
     sources = {1: [{'center': 0.0, 'snr': 50.0}, {'center': 20.0, 'snr': 10.0}],
                2: [{'center': 20.0, 'snr': 30.0}, {'center': 1.5, 'snr': 20.0}]}
-    point_sources, borrowed = choose_source_to_extract(sources, DETECTION_WINDOWS, max_separation=6.0)
+    point_sources, missing = choose_source_to_extract(sources, max_separation=6.0)
     assert point_sources[1]['center'] == 0.0
     assert point_sources[2]['center'] == 1.5
-    assert borrowed == []
+    assert missing == []
 
 
-def test_an_order_with_no_detection_near_the_object_borrows_its_position():
+def test_an_order_with_no_detection_near_the_object_is_left_out():
+    # The blue source is a different object, and the red order's position is not lent to the blue
     sources = {1: [{'center': 3.0, 'snr': 40.0}], 2: [{'center': 25.0, 'snr': 12.0}]}
-    point_sources, borrowed = choose_source_to_extract(sources, DETECTION_WINDOWS, max_separation=6.0)
-    assert borrowed == [2]
-    assert point_sources[2] == {'center': 3.0, 'snr': 0.0, 'max_flux': 0.0,
-                                'detection_wavelength': window_center(2)}
+    point_sources, missing = choose_source_to_extract(sources, max_separation=6.0)
+    assert missing == [2]
+    assert sorted(point_sources) == [1]
 
 
 def test_the_object_can_be_found_in_either_order():
     # A blue object, with nothing in the red order's window
     sources = {1: [], 2: [{'center': -4.0, 'snr': 15.0}]}
-    point_sources, borrowed = choose_source_to_extract(sources, DETECTION_WINDOWS, max_separation=6.0)
-    assert borrowed == [1]
-    assert point_sources[1]['center'] == -4.0
+    point_sources, missing = choose_source_to_extract(sources, max_separation=6.0)
+    assert missing == [1]
+    assert sorted(point_sources) == [2]
     assert point_sources[2]['snr'] == 15.0
-    assert choose_source_to_extract({1: [], 2: []}, DETECTION_WINDOWS, max_separation=6.0) == ({}, [])
+    assert choose_source_to_extract({1: [], 2: []}, max_separation=6.0) == ({}, [])
 
 
-def test_an_untraced_order_borrows_the_nearest_end_of_the_other_order():
-    red_domain, blue_domain = (4750.0, 10100.0), (3300.0, 5600.0)
-    red = Legendre([2.0, 1.0], domain=red_domain)
-    blue = Legendre([-1.0, 0.5], domain=blue_domain)
-    traces, borrowed = borrow_missing_traces([red, None], [red_domain, blue_domain])
-    assert borrowed == [2]
-    assert traces[0] is red
-    # The blue order sits blueward of the red one, so it takes the red trace at the red order's blue end
-    np.testing.assert_allclose(traces[1](np.linspace(*blue_domain, 10)), red(red_domain[0]))
-    np.testing.assert_allclose(traces[1].domain, blue_domain)
-    assert traces[1].effective_dof == 1.0
-
-    traces, borrowed = borrow_missing_traces([None, blue], [red_domain, blue_domain])
-    assert borrowed == [1]
-    np.testing.assert_allclose(traces[0](np.linspace(*red_domain, 10)), blue(blue_domain[1]))
-
-    assert borrow_missing_traces([None, None], [red_domain, blue_domain]) == ([None, None], [])
-    assert borrow_missing_traces([red, blue], [red_domain, blue_domain]) == ([red, blue], [])
+def test_an_order_without_the_object_has_no_profile_models():
+    red, blue = Legendre([6.0], domain=[4750.0, 10100.0]), Legendre([6.5], domain=[3300.0, 5600.0])
+    assert only_object_orders([red, blue], ['fit', 'star'], [1, 2], [1]) == ([red, None], ['fit', 'none'])
+    assert only_object_orders([red, blue], ['fit', 'star'], [1, 2], [1, 2]) == ([red, blue], ['fit', 'star'])
 
 
 def run_object_detector(fake_frame, runtime_context=None):
@@ -619,8 +607,9 @@ def test_object_detector_finds_and_traces_the_object():
     np.random.seed(80125)
     fake_frame = run_object_detector(generate_fake_science_frame(include_sky=True, flux_normalization=10000.0))
     assert sorted(fake_frame.point_sources) == [1, 2]
-    assert fake_frame.meta['L1DETBRW'] == ''
+    assert fake_frame.meta['L1DETORD'] == '1,2'
     assert fake_frame.meta['L1PNPEAK'] == 1
+    assert not fake_frame.meta['L1DETRED']
     for trace, input_trace in zip(fake_frame.object_traces, fake_frame.input_profile_centers):
         wavelengths = np.linspace(trace.domain[0], trace.domain[1], 1000)
         np.testing.assert_allclose(trace(wavelengths), input_trace(wavelengths), atol=1.0)
@@ -630,6 +619,7 @@ def test_object_detector_with_nothing_in_the_slit():
     np.random.seed(80125)
     fake_frame = run_object_detector(generate_fake_science_frame(include_sky=True, include_trace=False))
     assert not fake_frame.meta['L1OBJDET']
+    assert not fake_frame.meta['L1DETRED']
     assert fake_frame.point_sources == {}
     assert fake_frame.object_traces is None
 
@@ -639,21 +629,79 @@ def test_the_red_detection_window_is_blueward_of_the_fringing():
     assert ObjectDetector.DETECTION_WINDOWS[1][1] <= settings.FRINGE_CUTOFF_WAVELENGTH
 
 
-def test_an_object_only_in_the_red_order_is_still_extracted():
+def test_an_object_only_in_the_red_order_is_extracted_in_the_red_order_alone():
     np.random.seed(80127)
-    # A red target with nothing in the blue order, the way frames used to be dropped: the object has to be found
-    # in the red order and the blue order extracted at the same place in the slit.
+    # A red target with nothing in the blue order. The blue order is not given the red order's position: it gets
+    # no profile and is not extracted.
     fake_frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
                                              trace_wavelength_range=(5900.0, 10200.0))
     _, fake_frame = run_profile_stage(fake_frame)
     assert fake_frame.meta['L1OBJDET']
-    assert fake_frame.meta['L1DETBRW'] == '2'
-    assert fake_frame.meta['L1TRCBRW'] == '2'
-    centers, fwhms, _ = fake_frame.profile_fits
-    red_domain = fake_frame.wavelengths.wavelength_domains[0]
-    np.testing.assert_allclose(over_domain(centers[1]), centers[0](red_domain[0]))
-    # A constant at the red order's blue end, against an object drifting by refraction
-    blue_wavelengths = np.linspace(*fake_frame.wavelengths.wavelength_domains[1], 100)
-    np.testing.assert_allclose(centers[1](blue_wavelengths), fake_frame.input_profile_centers[1](blue_wavelengths),
-                               atol=3.0)
-    assert all(fwhm is not None for fwhm in fwhms)
+    assert fake_frame.meta['L1DETORD'] == '1'
+    assert fake_frame.meta['L1XTRORD'] == '1'
+    assert fake_frame.object_orders == [1]
+    centers, fwhms, gamma_ratios = fake_frame.profile_fits
+    assert centers[1] is None and fwhms[1] is None and gamma_ratios[1] is None
+    assert fake_frame.meta['L1FWHSRC'].endswith(',none')
+    assert np.all(fake_frame['PROFILE'].data[fake_frame.orders.data == 2] == 0.0)
+    # The header holds the red order alone and reads back that way
+    loaded_centers, _, _, _ = load_profile_fits(fake_frame['PROFILEFITS'])
+    assert loaded_centers[1] is None
+    np.testing.assert_allclose(over_domain(loaded_centers[0]), over_domain(centers[0]))
+
+
+def test_a_frame_with_one_order_is_fit_for_sky_and_extracted():
+    np.random.seed(80135)
+    fake_frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
+                                             trace_wavelength_range=(5900.0, 10200.0))
+    _, fake_frame = run_profile_stage(fake_frame)
+    fake_frame = BackgroundFitter(profile_context()).do_stage(fake_frame)
+    # With no object in the blue order, its sky is fit across the whole slit at the full degree
+    assert fake_frame.meta['L1BKMW2'] == 0.0
+    assert fake_frame.meta['L1BKDG2'] == BackgroundFitter.SPATIAL_BACKGROUND_ORDER
+    in_blue = fake_frame.binned_data['order'] == 2
+    assert not np.any(fake_frame.binned_data['extraction_window'][in_blue])
+    fake_frame = Extractor(profile_context()).do_stage(fake_frame)
+    np.testing.assert_array_equal(np.unique(fake_frame.extracted['order']), [1])
+
+
+def test_a_red_order_missed_in_its_usual_window_is_matched_redward_of_it():
+    np.random.seed(80133)
+    fake_frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0)
+    # Take the object out of the red order across its usual detection window, leaving the sky and the noise
+    in_window = np.logical_and.reduce([fake_frame.orders.data == 1, fake_frame.wavelengths.data > 5500.0,
+                                       fake_frame.wavelengths.data < 6400.0])
+    fake_frame.data[in_window] = (fake_frame.input_sky[in_window]
+                                  + np.random.normal(0.0, fake_frame.uncertainty[in_window]))
+    fake_frame = run_object_detector(fake_frame)
+    assert fake_frame.meta['L1DETORD'] == '1,2'
+    assert not fake_frame.meta['L1DETRED']
+    assert fake_frame.point_sources[1]['detection_wavelength'] > ObjectDetector.DETECTION_WINDOWS[1][1]
+    red_source = fake_frame.point_sources[1]
+    assert red_source['center'] == pytest.approx(input_center(fake_frame, red_source['detection_wavelength'], 1),
+                                                 abs=1.0)
+
+
+def test_an_object_only_redward_of_the_detection_windows_is_found_and_only_its_red_order_extracted():
+    np.random.seed(80129)
+    # No light at all blueward of 7600 Angstroms, so nothing in either of the usual detection windows
+    fake_frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0,
+                                             trace_wavelength_range=(7600.0, 10200.0))
+    _, fake_frame = run_profile_stage(fake_frame)
+    assert fake_frame.meta['L1DETRED']
+    assert fake_frame.meta['L1OBJDET']
+    assert fake_frame.meta['L1DETORD'] == '1'
+    assert fake_frame.point_sources[1]['detection_wavelength'] > ObjectDetector.DETECTION_WINDOWS[1][1]
+    assert fake_frame.point_sources[1]['center'] == pytest.approx(input_center(fake_frame, 8250.0, 1), abs=1.0)
+    assert fake_frame.object_orders == [1]
+
+
+def test_sources_found_in_several_windows_are_kept_once_at_their_best_detection():
+    np.random.seed(80131)
+    frame = generate_fake_science_frame(include_sky=True, flux_normalization=10000.0)
+    binned_data = bin_data(frame.data, frame.uncertainty, frame.wavelengths, frame.orders)
+    sources = detect_over_windows(binned_data, frame.orders, ObjectDetector.RED_ONLY_WINDOWS,
+                                  exclude_edge=ProfileFitter.SLIT_EDGE_MARGIN, initial_fwhm=OBJECT_FWHM,
+                                  min_snr=ObjectDetector.DETECTION_SNR)
+    source, = sources[1]
+    assert source['center'] == pytest.approx(input_center(frame, source['detection_wavelength'], 1), abs=0.5)

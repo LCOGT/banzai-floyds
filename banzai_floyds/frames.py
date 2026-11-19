@@ -66,6 +66,8 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         # Where ObjectDetector found the object, for the fringe correction and the profile fit
         self.point_sources = None
         self.object_traces = None
+        # The orders the object was detected or traced in, which are the ones extracted
+        self.object_orders = None
         self._sensitivity = None
         self._telluric = None
         self.background_windows = None
@@ -190,7 +192,10 @@ class FLOYDSObservationFrame(LCOObservationFrame):
         self.binned_data['profile_sigma'] = 0.0
         # The background stage fits the object alongside the sky, so it needs the wings too
         self.binned_data['profile_gamma_ratio'] = 0.0
+        # An order the object was not found in has no profile, and keeps a profile_sigma of zero
         for order in [1, 2]:
+            if centers[order - 1] is None:
+                continue
             in_order = self.binned_data['order'] == order
             wavelengths = self.binned_data['wavelength'][in_order]
             center = centers[order - 1](wavelengths)
